@@ -1,6 +1,6 @@
 # Cruise
 
-Cruise is an independent Codex plugin for choosing the smallest workflow that fits repository work, preserving the original request, and closing against explicit evidence. It has exactly six public skills, seven launcher-managed worker levels, and an optional terminal client for the full native Goal workflow.
+Cruise offers a concise set of six Codex skills that covers all your coding needs - it ensures tightly-scoped modifications by preserving the original request, decomposing it into subtasks, enforcing long-running iterative improvement on the repo in alignment with your intention. With the release of GPT-5.6, it now has seven launcher-managed worker levels, an optional terminal client for the full native Goal workflow. Note: This plugin is only codex-compatible.
 
 ## Choose a skill
 
