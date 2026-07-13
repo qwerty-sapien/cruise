@@ -1,0 +1,15 @@
+.DS_Store
+**/.DS_Store
+__pycache__/
+**/__pycache__/
+*.pyc
+.cruise/
+codex-history/
+evals/results/*/
+exemplar.md
+coverage/
+.nyc_output/
+*.log
+*.tgz
+.env
+.env.*

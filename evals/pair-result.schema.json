@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qwerty-sapien/cruise/blob/main/evals/pair-result.schema.json",
+  "title": "Cruise paired evaluation pair",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "study_id",
+    "pair_id",
+    "scenario_id",
+    "replicate",
+    "run_ids",
+    "validity",
+    "blind_preference",
+    "blocker_comparison",
+    "score_delta",
+    "efficiency_deltas",
+    "grader_ids",
+    "arm_key_custody"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "record_type": {
+      "const": "pair"
+    },
+    "study_id": {
+      "type": "string"
+    },
+    "pair_id": {
+      "type": "string"
+    },
+    "scenario_id": {
+      "type": "string"
+    },
+    "replicate": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "run_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true
+    },
+    "validity": {
+      "enum": [
+        "valid",
+        "invalid"
+      ]
+    },
+    "blind_preference": {
+      "enum": [
+        "X",
+        "Y",
+        "tie",
+        "invalid"
+      ]
+    },
+    "blocker_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "X",
+        "Y"
+      ],
+      "properties": {
+        "X": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "Y": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "score_delta": {
+      "type": "number",
+      "description": "Blind X score minus blind Y score."
+    },
+    "efficiency_deltas": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "number",
+          "null"
+        ]
+      }
+    },
+    "grader_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "uniqueItems": true
+    },
+    "arm_key_custody": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adjudication": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "arm_key_reference": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

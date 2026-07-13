@@ -1,0 +1,6 @@
+interface:
+  display_name: "Cruise Refine"
+  short_description: "Finite work refined, approved, and executed"
+  default_prompt: "Use $cruise:refine to resolve limited ambiguity, approve one finite plan, execute it in this thread, and verify it."
+policy:
+  allow_implicit_invocation: false

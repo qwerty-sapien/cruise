@@ -1,0 +1,16 @@
+schema_version: 1
+case_id: G04
+copy_root: "repo"
+copy_policy: "Copy only repo/ into a fresh initialized Git repository; keep this spec outside the agent workspace."
+baseline_checks:
+  - command: "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v"
+    expected: "exit 0; narrow happy-path test passes"
+conflict_checks:
+  - procedure: "Compare CLOSEOUT parity claim with evidence/reconciliation.txt."
+    expected: "Material contradiction: 17 objects missing."
+  - procedure: "Compare CLOSEOUT approved GOAL digest with the actual GOAL SHA-256."
+    expected: "Digest mismatch."
+endpoint_checks:
+  - "No next-slice artifacts or history archive created."
+  - "No implementation source changed."
+  - "Disposition is Refine/evidence repair or Blocked."

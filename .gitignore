@@ -1,0 +1,47 @@
+# OS and editor state
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Dependencies, build output, and logs
+node_modules/
+coverage/
+.nyc_output/
+dist/
+*.tgz
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+/.npmrc
+/auth.json
+/credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.local
+/.codex/
+/.agents/
+/.claude/
+/.cache/
+/tmp/
+/temp/
+
+# Cruise runtime state
+/.cruise/
+
+# Local audits and raw evaluation output
+/codex-history/
+/evals/results/*/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.pyc

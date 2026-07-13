@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qwerty-sapien/cruise/blob/main/evals/study-result.schema.json",
+  "title": "Cruise paired evaluation study",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "study_id",
+    "pair_id",
+    "rubric_version",
+    "environment_digest",
+    "preregistered_promotion_rule",
+    "pair_records",
+    "valid_pair_count",
+    "blocker_free_paired_rate",
+    "correct_endpoint_rate",
+    "win_tie_loss",
+    "median_score_delta",
+    "subgroup_deltas",
+    "promotion_decision",
+    "limitations",
+    "grader_ids",
+    "arm_key_custody"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "record_type": {
+      "const": "study"
+    },
+    "study_id": {
+      "type": "string"
+    },
+    "pair_id": {
+      "type": "string"
+    },
+    "rubric_version": {
+      "type": "string"
+    },
+    "environment_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "preregistered_promotion_rule": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pair_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "valid_pair_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "blocker_free_paired_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "correct_endpoint_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "win_tie_loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "treatment_wins",
+        "ties",
+        "control_wins"
+      ],
+      "properties": {
+        "treatment_wins": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ties": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "control_wins": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "median_score_delta": {
+      "type": "number",
+      "description": "Treatment score minus native-control score; positive favors Cruise."
+    },
+    "subgroup_deltas": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "promotion_decision": {
+      "enum": [
+        "promote",
+        "do_not_promote",
+        "inconclusive"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "grader_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "uniqueItems": true
+    },
+    "arm_key_custody": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

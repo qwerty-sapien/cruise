@@ -1,0 +1,46 @@
+type: object
+additionalProperties: false
+required: ["schema_version", "kind", "recommended_level", "attempt_number", "soft_escalation_reason", "coordinator", "worker", "degraded", "degradation_reasons"]
+properties:
+  schema_version: {"const": 1}
+  kind: {"const": "cruise_root_managed_worker_policy"}
+  recommended_level: {"type": "integer", "minimum": 1, "maximum": 7}
+  attempt_number: {"type": "integer", "minimum": 1, "maximum": 2}
+  soft_escalation_reason: {"type": ["string", "null"], "minLength": 1}
+  coordinator:
+    type: object
+    additionalProperties: false
+    required: ["role", "model_mutation_allowed", "substantive_work_allowed", "spawns_worker"]
+    properties:
+      role: {"const": "root_coordinator"}
+      model_mutation_allowed: {"const": false}
+      substantive_work_allowed: {"const": false}
+      spawns_worker: {"const": true}
+  worker:
+    type: object
+    additionalProperties: false
+    required: ["agent_type", "alias", "requested", "resolved", "resolution_source"]
+    properties:
+      agent_type: {"type": "string", "enum": ["cruise_l1", "cruise_l2", "cruise_l3", "cruise_l4", "cruise_l5", "cruise_l6", "cruise_l7"]}
+      alias: {"type": "string", "minLength": 1}
+      requested:
+        type: object
+        additionalProperties: false
+        required: ["tier", "model_id", "reasoning_effort"]
+        properties:
+          tier: {"type": "string", "enum": ["luna", "terra", "sol"]}
+          model_id: {"type": "string", "enum": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]}
+          reasoning_effort: {"type": "string", "enum": ["medium", "high", "xhigh", "ultra"]}
+      resolved:
+        type: object
+        additionalProperties: false
+        required: ["model_id", "model", "reasoning_effort"]
+        properties:
+          model_id: {"type": ["string", "null"]}
+          model: {"type": ["string", "null"]}
+          reasoning_effort: {"type": ["string", "null"]}
+      resolution_source: {"type": "string", "minLength": 1}
+  degraded: {"type": "boolean"}
+  degradation_reasons:
+    type: array
+    items: {"type": "string", "minLength": 1}

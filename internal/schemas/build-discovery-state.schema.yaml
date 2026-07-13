@@ -1,0 +1,449 @@
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - kind
+  - run_id
+  - origin_yaml
+  - origin_sha256
+  - repository_baseline_sha256
+  - initial_snapshot
+  - history
+  - snapshot
+  - created_at
+  - updated_at
+properties:
+  schema_version:
+    const: 1
+    type: integer
+  kind:
+    const: cruise_build_discovery_state
+    type: string
+  run_id:
+    type: string
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  origin_yaml:
+    type: string
+    minLength: 1
+  origin_sha256:
+    type: string
+    format: sha256
+  repository_baseline_sha256:
+    type: string
+    format: sha256
+  initial_snapshot:
+    type: object
+    additionalProperties: false
+    required:
+      - mode_candidate
+      - project_id
+      - milestone_id
+      - consequence
+      - status
+      - cursor
+      - concepts
+      - readiness
+      - viability
+      - evidence
+      - questions
+      - decisions_markdown
+      - discovery_markdown
+      - research_items
+      - draft_manifest
+    properties:
+      mode_candidate:
+        type: string
+        enum:
+          - bootstrap
+          - milestone
+      project_id:
+        type: string
+        pattern: "^PRJ-[0-9]{2,}$"
+      milestone_id:
+        type:
+          - string
+          - "null"
+        pattern: "^M-[0-9]{2,}$"
+      consequence:
+        type: string
+        enum:
+          - low
+          - medium
+          - high
+      status:
+        type: string
+        enum:
+          - waiting_user_decision
+          - question_resolved
+          - research_required
+          - waiting_research_approval
+          - research_in_progress
+          - ready_for_build
+          - draft_ready_for_review
+          - not_currently_viable
+          - deferred
+      cursor:
+        type: object
+        additionalProperties: false
+        required:
+          - stage
+          - pending_question_id
+          - research_item_id
+          - resume_stage
+          - interrupted
+          - interruption_reason
+          - interrupted_at
+          - resume_count
+        properties:
+          stage:
+            type: string
+            minLength: 1
+          pending_question_id:
+            type:
+              - string
+              - "null"
+            pattern: "^Q-[0-9]{2,}$"
+          research_item_id:
+            type:
+              - string
+              - "null"
+            pattern: "^DR-[0-9]{2,}$"
+          resume_stage:
+            type:
+              - string
+              - "null"
+            minLength: 1
+          interrupted:
+            type: boolean
+          interruption_reason:
+            type:
+              - string
+              - "null"
+            minLength: 1
+          interrupted_at:
+            type:
+              - string
+              - "null"
+            format: date-time
+          resume_count:
+            type: integer
+            minimum: 0
+      concepts:
+        type: object
+        additionalProperties: false
+        required:
+          - schema_version
+          - kind
+          - run_id
+          - origin_sha256
+          - selected_concept_id
+          - concepts
+        properties:
+          schema_version:
+            const: 1
+          kind:
+            const: cruise_build_discovery_concepts
+          run_id:
+            type: string
+          origin_sha256:
+            type: string
+            format: sha256
+          selected_concept_id:
+            type:
+              - string
+              - "null"
+          concepts:
+            type: array
+            minItems: 1
+            items:
+              type: object
+      readiness:
+        type: object
+      viability:
+        type: object
+      evidence:
+        type: object
+        additionalProperties: false
+        required:
+          - schema_version
+          - kind
+          - run_id
+          - origin_sha256
+          - evidence
+        properties:
+          schema_version:
+            const: 1
+          kind:
+            const: cruise_build_discovery_evidence
+          run_id:
+            type: string
+          origin_sha256:
+            type: string
+            format: sha256
+          evidence:
+            type: array
+            items:
+              type: object
+      questions:
+        type: object
+        additionalProperties: false
+        required:
+          - schema_version
+          - kind
+          - run_id
+          - origin_sha256
+          - questions
+        properties:
+          schema_version:
+            const: 1
+          kind:
+            const: cruise_build_discovery_questions
+          run_id:
+            type: string
+          origin_sha256:
+            type: string
+            format: sha256
+          questions:
+            type: array
+            items:
+              type: object
+      decisions_markdown:
+        type: string
+        minLength: 1
+      discovery_markdown:
+        type: string
+        minLength: 1
+      research_items:
+        type: array
+        items:
+          type: object
+      draft_manifest:
+        type:
+          - object
+          - "null"
+  history:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - sequence
+        - type
+        - at
+        - prior_snapshot_sha256
+        - payload
+        - result_snapshot_sha256
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        type:
+          type: string
+          minLength: 1
+        at:
+          type: string
+          format: date-time
+        prior_snapshot_sha256:
+          type: string
+          format: sha256
+        payload:
+          type: object
+        result_snapshot_sha256:
+          type: string
+          format: sha256
+  snapshot:
+    type: object
+    additionalProperties: false
+    required:
+      - mode_candidate
+      - project_id
+      - milestone_id
+      - consequence
+      - status
+      - cursor
+      - concepts
+      - readiness
+      - viability
+      - evidence
+      - questions
+      - decisions_markdown
+      - discovery_markdown
+      - research_items
+      - draft_manifest
+    properties:
+      mode_candidate:
+        type: string
+        enum:
+          - bootstrap
+          - milestone
+      project_id:
+        type: string
+        pattern: "^PRJ-[0-9]{2,}$"
+      milestone_id:
+        type:
+          - string
+          - "null"
+        pattern: "^M-[0-9]{2,}$"
+      consequence:
+        type: string
+        enum:
+          - low
+          - medium
+          - high
+      status:
+        type: string
+        enum:
+          - waiting_user_decision
+          - question_resolved
+          - research_required
+          - waiting_research_approval
+          - research_in_progress
+          - ready_for_build
+          - draft_ready_for_review
+          - not_currently_viable
+          - deferred
+      cursor:
+        type: object
+        additionalProperties: false
+        required:
+          - stage
+          - pending_question_id
+          - research_item_id
+          - resume_stage
+          - interrupted
+          - interruption_reason
+          - interrupted_at
+          - resume_count
+        properties:
+          stage:
+            type: string
+            minLength: 1
+          pending_question_id:
+            type:
+              - string
+              - "null"
+            pattern: "^Q-[0-9]{2,}$"
+          research_item_id:
+            type:
+              - string
+              - "null"
+            pattern: "^DR-[0-9]{2,}$"
+          resume_stage:
+            type:
+              - string
+              - "null"
+            minLength: 1
+          interrupted:
+            type: boolean
+          interruption_reason:
+            type:
+              - string
+              - "null"
+            minLength: 1
+          interrupted_at:
+            type:
+              - string
+              - "null"
+            format: date-time
+          resume_count:
+            type: integer
+            minimum: 0
+      concepts:
+        type: object
+        additionalProperties: false
+        required:
+          - schema_version
+          - kind
+          - run_id
+          - origin_sha256
+          - selected_concept_id
+          - concepts
+        properties:
+          schema_version:
+            const: 1
+          kind:
+            const: cruise_build_discovery_concepts
+          run_id:
+            type: string
+          origin_sha256:
+            type: string
+            format: sha256
+          selected_concept_id:
+            type:
+              - string
+              - "null"
+          concepts:
+            type: array
+            minItems: 1
+            items:
+              type: object
+      readiness:
+        type: object
+      viability:
+        type: object
+      evidence:
+        type: object
+        additionalProperties: false
+        required:
+          - schema_version
+          - kind
+          - run_id
+          - origin_sha256
+          - evidence
+        properties:
+          schema_version:
+            const: 1
+          kind:
+            const: cruise_build_discovery_evidence
+          run_id:
+            type: string
+          origin_sha256:
+            type: string
+            format: sha256
+          evidence:
+            type: array
+            items:
+              type: object
+      questions:
+        type: object
+        additionalProperties: false
+        required:
+          - schema_version
+          - kind
+          - run_id
+          - origin_sha256
+          - questions
+        properties:
+          schema_version:
+            const: 1
+          kind:
+            const: cruise_build_discovery_questions
+          run_id:
+            type: string
+          origin_sha256:
+            type: string
+            format: sha256
+          questions:
+            type: array
+            items:
+              type: object
+      decisions_markdown:
+        type: string
+        minLength: 1
+      discovery_markdown:
+        type: string
+        minLength: 1
+      research_items:
+        type: array
+        items:
+          type: object
+      draft_manifest:
+        type:
+          - object
+          - "null"
+  created_at:
+    type: string
+    format: date-time
+  updated_at:
+    type: string
+    format: date-time

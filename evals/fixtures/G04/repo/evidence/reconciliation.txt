@@ -1,0 +1,6 @@
+snapshot: fixture-2026-07-01
+legacy_objects: 1200
+new_objects: 1183
+missing_objects: 17
+mismatched_objects: 0
+status: FAIL

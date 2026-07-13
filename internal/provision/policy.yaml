@@ -1,0 +1,1408 @@
+schema_version: 1
+kind: cruise_provision_policy
+visibility: private_internal_workflow
+
+public_surface:
+  exposed: false
+  public_skills_allowed_to_request:
+    - build
+    - quick
+    - refine
+    - goal
+    - debug
+    - research
+  recursive_public_skill_invocation: forbidden
+  public_skill_registration_forbidden:
+    - SKILL.md
+    - agent_manifest
+    - cli_command
+    - chooser_entry
+    - autocomplete_entry
+    - route
+    - default_prompt
+
+authority_order:
+  - system_developer_sandbox_host
+  - immutable_origin_record
+  - selected_public_skill_contract
+  - approved_goal_scope_permissions_requirements_acceptance
+  - repository_instructions
+  - user_approved_decisions
+  - assigned_specialist_role
+
+authority_handles:
+  origin:
+    opaque_process_local: true
+    immutable_digest_bound: true
+  capability_request:
+    opaque_process_local: true
+    origin_bound: true
+    request_digest_bound: true
+    authority_digest_canonical_input:
+      - exact_capability_request_record
+      - immutable_origin_digest
+      - normalized_absolute_repository_root
+      - granted_permission_decisions
+    authority_digest_persisted_on_provision_run: true
+    authority_digest_is_not_a_replacement_for_live_opaque_request: true
+  need_assessment:
+    opaque_process_local: true
+    capability_request_bound: true
+  effect_authorization:
+    opaque_process_local: true
+    origin_request_permission_and_exact_effect_bound: true
+  native_review_broker:
+    opaque_process_local: true
+    exact_capability_request_bound: true
+  external_selection:
+    opaque_process_local: true
+    exact_capability_request_inventory_need_and_candidates_bound: true
+  acquisition_handle:
+    opaque_process_local: true
+    exact_selection_effect_exclusion_and_blob_bytes_bound: true
+  install_execution_broker:
+    opaque_process_local: true
+    exact_capability_request_and_repository_root_bound: true
+  smoke_verification_broker:
+    opaque_process_local: true
+    exact_capability_request_and_repository_root_bound: true
+  authentication_verification_broker:
+    opaque_process_local: true
+    exact_capability_request_and_repository_root_bound: true
+  successful_authentication_attestation:
+    opaque_process_local: true
+    exact_effect_job_run_node_candidate_state_and_evidence_bound: true
+  provision_run_contract_authority:
+    opaque_process_local: true
+    exact_capability_request_run_and_expected_digest_bound: true
+    persisted_contract_self_digest_is_authority: false
+  approval_tokens:
+    opaque_process_local: true
+    goal_fallback_and_reconciliation_use_synchronous_current_digest_readers: true
+  serialized_shape_alone_is_authority: false
+  constructor_trust_root_current_runtime:
+    exported_factory_issuer_check: exact_string
+    same_process_importer_isolation: false
+    security_boundary_assumption: only_trusted_host_coordinator_imports_factories_and_supplies_adapters
+    malicious_co_resident_module_resistance: not_provided
+
+default_decision:
+  action: no_provisioning
+  reason: current_capabilities_sufficient
+
+invocation_gate:
+  required:
+    - concrete_missing_capability
+    - material_expected_benefit
+    - benefit_exceeds_enforced_numeric_cost
+  total_cost_components_enforced_by_current_runtime:
+    - search
+    - evaluation
+    - context
+    - installation
+    - authentication
+    - maintenance
+    - permission
+    - operational_risk
+  no_provisioning_reasons:
+    - current_capabilities_sufficient
+    - existing_tool_sufficient
+    - generic_advice_only
+    - task_too_small
+    - context_cost_exceeds_benefit
+    - no_implementation_or_verification_gain
+    - no_meaningful_delta_over_baseline
+    - acquisition_or_maintenance_cost_exceeds_benefit
+  default_minimum_improvement: 0.10
+  quick_external_discovery: categorically_requires_promotion
+  quick_effect_authorization: denied
+  capability_request_validation:
+    closed_top_level_and_nested_objects: true
+    minimum_improvement_required_floor: 0.10
+    latency_priority_values:
+      - low
+      - normal
+      - high
+    serialized_permissions_are_envelope_names: true
+    granted_permission_decisions_stored_process_locally: true
+    immutable_origin_digest_stored_process_locally: true
+    normalized_absolute_repository_root_stored_process_locally: true
+    repository_root_must_be_absolute_and_equal_its_normalized_resolution: true
+    exact_repository_root_included_in_authority_digest: true
+    request_authority_sha256_persisted_on_provision_run: true
+    scheduler_requires_exact_live_request_and_matching_authority_digest: true
+
+native_inventory:
+  order:
+    - bundled_skills
+    - installed_plugins
+    - repository_local_skills
+    - user_local_skills
+    - administrative_skills
+    - mcp_servers
+    - connectors
+    - subagent_definitions
+    - installed_clis_and_analyzers
+    - repository_scripts_and_tests
+    - cruise_adaptations
+  progressive_disclosure:
+    metadata_fields:
+      - name
+      - description
+      - kind
+      - source_path
+      - version
+      - revision
+      - declared_dependencies
+      - enabled
+      - provenance
+      - authentication_required
+    relevance_filters:
+      - exact_competency
+      - language
+      - framework
+      - required_tools
+      - repository_compatibility
+      - operating_system
+      - public_skill_compatibility
+      - consequence_level
+      - exclusion_status
+    maximum_detailed_native_candidates: 5
+    detailed_review_boundary: isolated_capability_review
+    selected_only_enters_worker_context: true
+  detailed_review:
+    caller_supplied_evaluate_callback: forbidden
+    opaque_native_evaluation_broker_required: true
+    broker_bound_to_exact_capability_request: true
+    candidate_identity_binding:
+      - provider_source
+      - source_path
+      - revision
+      - content_sha256
+    immutable_identity_required_before_review: true
+    closed_digest_bearing_output_required: true
+    request_derived_fit_gate_required: true
+    duplicate_immutable_candidate_identity: rejected
+  external_selection_authority:
+    opaque_process_local: true
+    requires_no_sufficient_native_candidate: true
+    binds_exact_request_inventory_need_assessment_and_candidates: true
+    serialized_selection_shape_alone_is_authority: false
+  reuse_before_install: true
+  every_source_must_record:
+    - inspected
+    - unavailable
+  external_discovery_before_every_source_recorded: forbidden
+
+resolution_order:
+  - host_native
+  - installed_plugin_or_skill
+  - installed_local
+  - official_codex_plugin
+  - trusted_catalog
+  - official_upstream_pinned
+  - learning_only_adaptation
+  - builtin_fallback
+  - approval_or_block
+
+external_discovery:
+  preconditions:
+    - no_native_candidate_passes_fit
+    - material_competency_gap_remains
+    - expected_completion_improvement
+    - calling_workflow_permits_latency_and_effects
+  bounded: true
+  exhaustive_internet_claim_forbidden: true
+  record:
+    - sources
+    - queries
+    - repositories_considered
+    - repositories_rejected
+    - stopping_condition
+    - saturation_reached
+  stop_conditions:
+    - configured_sources_exhausted
+    - query_variants_add_no_material_candidates
+    - enough_high_quality_candidates
+    - marginal_cost_exceeds_benefit
+    - public_workflow_budget_exhausted
+
+acquisition:
+  activation_during_acquisition: forbidden
+  opaque_native_first_selection_required: true
+  selection_must_bind_exact_request_inventory_need_and_candidate: true
+  effect_authorization_binds_exact_repository: true
+  repository_format: owner/repository
+  repository_mismatch_rejected_before_hosting_api_call: true
+  canonical_url_https_required: true
+  canonical_url_must_match_exact_repository_path: true
+  canonical_url_credentials_query_and_fragment_forbidden: true
+  order:
+    - hosting_api_metadata
+    - canonical_repository_identity
+    - immutable_commit_resolution
+    - repository_provenance_metadata
+    - nonexecuting_tree_inspection
+    - complete_review_closure_fetch
+    - complete_execution_closure_fetch
+  forbidden:
+    - target_workspace_checkout
+    - recursive_submodule_fetch
+    - git_lfs_materialization
+    - package_installation
+    - repository_hooks
+    - binary_execution
+    - script_execution
+  required_identity:
+    - canonical_owner_repository
+    - immutable_commit_sha
+    - content_sha256
+    - retrieval_time
+    - license
+  closure:
+    every_retained_path_sha256_required: true
+    ordered_manifest_sha256_required: true
+    execution_closure_complete_required_for_behavior_and_direct_use: true
+    review_closure_complete_required_for_behavior_and_direct_use: true
+    unexamined_execution_closure_must_be_empty: true
+    unexamined_review_closure_must_be_empty: true
+  selected_blob_validation:
+    tree_size_must_match_utf8_bytes: true
+    nul_bytes: rejected
+    replacement_characters: rejected
+    binary_extensions: rejected
+  acquisition_handle_authority:
+    serializable_shape_alone: false
+    opaque_binding:
+      - exact_capability_request
+      - exact_external_selection
+      - exact_acquisition_effect_authorization
+      - origin_sha256
+      - exclusion_root_and_digest
+      - immutable_repository_revision_and_content
+      - quarantined_blob_bytes
+
+trust:
+  tiers:
+    official:
+      direct_use_review_eligible: true
+      learning_only: false
+      still_requires_full_fit_and_compatibility: true
+    allowlisted:
+      direct_use_review_eligible: true
+      learning_only: false
+      exact_binding:
+        - owner
+        - repository
+        - capability
+        - immutable_commit
+        - reviewed_content_sha256
+        - release_process
+        - installation_path
+      invalidated_by:
+        - repository_transfer
+        - owner_change
+        - unexpected_release_process
+        - material_source_change
+    established-community:
+      direct_use_review_eligible: true
+      learning_only: false
+      requires_verified_star_threshold: true
+      requires_every_other_gate: true
+    uncertain:
+      direct_use_review_eligible: false
+      learning_only: true
+      activation_forbidden: true
+    rejected:
+      direct_use_review_eligible: false
+      learning_only: false
+      activation_forbidden: true
+  community_direct_use_threshold_stars: 1000
+  star_count:
+    heuristic_only: true
+    security_score: false
+    trusted_hosting_metadata_adapter_required: true
+    verified_when:
+      - trusted_metadata_marks_stars_verified
+      - trusted_api_source_is_recorded
+    record_timestamp_and_source: true
+    screenshots_badges_self_report_count_as_api_source: false
+    candidate_or_caller_self_report_is_authority: false
+    aggregate_across_forks: false
+    unavailable_becomes: uncertain
+    below_threshold_unofficial_becomes: uncertain
+    above_threshold_does_not_bypass_review: true
+
+sandboxes:
+  attestation:
+    required_issuer: trusted_host_isolation_broker
+    opaque_process_local_token_required: true
+    structural_profile_alone_is_proof: false
+    direct_use_requires_technically_attested: true
+    host_boundary_token_binds:
+      - sandbox_kind
+      - normalized_profile
+      - probe_result
+    candidate_specific_binding_is_separate_opaque_evidence: true
+    direct_external_activation_authority:
+      constructor_boolean: forbidden
+      synchronous_random_challenge_required: true
+      evidence_digest_recomputed: true
+      binds:
+        - challenge_nonce
+        - exact_request_acquisition_activation_context
+        - sandbox_profile
+        - isolation_and_enforcement_identity
+        - observed_at
+        - technical_probe_sha256
+      probe_points:
+        - attestation
+        - candidate_evaluation
+        - every_direct_or_privileged_use
+      replay_or_enforcement_drift: fail_closed
+    current_host_broker_available: false
+  instruction_analysis:
+    required_for_policy_direct_use: true
+    connected_to_candidate_evaluation_path: true
+    opaque_exact_result_required_by_behavior_evaluation: true
+    target_repository_access: false
+    user_home_access: false
+    credentials: false
+    environment_secrets: false
+    writable_paths: dedicated_result_directory_only
+    external_effect_tools: false
+    network_after_acquisition: false
+    package_installation: false
+    candidate_shell_execution: false
+    candidate_activation: false
+    structured_output_only: true
+    raw_candidate_marked_untrusted: true
+    opaque_result_binds:
+      - origin
+      - capability_request
+      - acquisition_handle
+      - repository
+      - immutable_revision
+      - content_sha256
+      - review_closure
+  execution:
+    required_for_direct_use: true
+    disposable: true
+    target_repository_secrets: false
+    ssh_agent: false
+    cloud_credentials: false
+    environment: empty_or_explicit_allowlist
+    filesystem: restricted
+    network_default: disabled
+    resource_limits: required
+    time_limit: required
+    privilege_escalation: false
+    sudo: false
+    host_configuration_changes: false
+    unrelated_repository_access: false
+    writable_directories: explicit_only
+    command_logging: full_redacted
+    file_change_logging: full
+    behavior_adapter_preconditions:
+      - fetched_static_review_passed
+      - isolated_instruction_findings_passed
+      - dependency_safety_passed
+      - execution_closure_complete
+      - review_closure_complete
+    behavior_adapter_called_before_preconditions_pass: false
+    behavior_evidence_binds_exact_instruction_analysis: true
+    same_analysis_binding_storage: opaque_process_local_weakmap
+    serializable_authority_flag: false
+    serialized_behavior_output_digests:
+      - content_sha256
+      - sandbox_attestation_sha256
+      - evidence_sha256
+      - command_log_sha256
+      - file_change_log_sha256
+      - license_evidence_sha256
+    serialized_digests_are_authority: false
+  unavailable_boundary_result:
+    direct_use_decision: learning_only
+    execution_or_activation: forbidden
+    structured_extraction_without_instruction_broker: forbidden
+  claims_must_match_observed_host: true
+  current_host:
+    instruction_analysis_isolation_confirmed: false
+    execution_isolation_confirmed: false
+    candidate_specific_sandbox_evidence_confirmed: false
+    instruction_analysis_broker_available: false
+    behavior_evaluation_broker_available: false
+    direct_external_activation_allowed: false
+    result: fail_closed
+
+static_security:
+  instruction_and_script_analysis_current_runtime:
+    static_review_source: fetched_candidate_content
+    instruction_finding_source: isolated_instruction_analysis
+    connected_to_candidate_evaluation_path: true
+    exact_opaque_instruction_analysis_required: true
+  instruction_findings:
+    - hierarchy_override
+    - hidden_action
+    - false_success
+    - approval_suppression
+    - sandbox_weakening
+    - secret_or_credential_access
+    - repository_upload
+    - unauthorized_instruction_or_host_config_change
+    - test_or_log_suppression
+    - unrelated_agent_or_skill_launch
+    - recursive_skill_invocation
+    - encoded_or_obfuscated_instruction
+    - excessive_authority_claim
+  script_findings:
+    - curl_or_wget_pipe_to_shell
+    - sudo_or_privilege_escalation
+    - destructive_recursive_deletion
+    - unbounded_glob_deletion
+    - chmod_or_chown_outside_sandbox
+    - credential_extraction
+    - process_injection
+    - shell_eval
+    - dynamic_code_execution
+    - decoded_payload_execution
+    - unpinned_package_install
+    - global_install
+    - package_lifecycle_script
+    - network_upload
+    - unexpected_network_access
+    - reverse_shell
+    - persistence
+    - shell_startup_modification
+    - git_hook
+    - unexpected_daemon
+    - undeclared_telemetry
+  tree_findings:
+    - symlink
+    - submodule
+    - git_lfs_pointer
+    - binary_executable
+    - oversized_or_compressed_blob
+    - hidden_file
+    - non_ascii_path
+    - dependency_file
+  tree_inspection_current_runtime:
+    nonexecuting: true
+    categories_above_are_automatic: true
+  tree_distinctions_not_implemented:
+    - escaping_symlink_vs_safe_symlink
+    - unicode_confusable_vs_other_non_ascii_path
+    - in_scope_vs_out_of_scope_script
+    - related_vs_unrelated_dependency_file
+  review_and_instruction_closure:
+    required_before_behavior_adapter: true
+    required_before_direct_use: true
+    runtime_fields:
+      review_closure_complete: boolean
+      unexamined_review_closure: string_array
+      execution_closure_complete: boolean
+      unexamined_execution_closure: string_array
+    completeness_rule: review_closure_complete_requires_every_regular_file_in_the_reviewed_tree_selected_and_hashed
+    incomplete_when_unexamined_review_closure_nonempty: true
+    execution_incomplete_when_unexamined_execution_closure_nonempty: true
+    behavior_adapter_blocked_when_incomplete: true
+    direct_use_blocked_when_incomplete: true
+    unselected_file_categories_that_block:
+      - every_regular_file
+      - README
+      - reference
+      - example
+      - other_instruction_bearing_file
+  hard_finding_rejects_direct_use: true
+
+security_signals:
+  collect_when_available:
+    - openssf_scorecard_and_checks
+    - pinned_commit
+    - signed_release
+    - provenance_attestation
+    - repository_age
+    - active_maintainers
+    - recent_commits
+    - release_count
+    - ownership_verified
+    - branch_protection
+    - security_policy
+    - vulnerability_reporting
+    - dependency_count
+    - dependency_pinning
+    - lockfile
+    - lifecycle_scripts
+  binary_guarantee_forbidden: true
+  current_runtime_dependency_hard_gate:
+    source: hosting_api_metadata_and_reviewed_tree
+    reviewed_tree_manifest_discovery: true
+    exact_package_json_dependency_and_lifecycle_parsing: true
+    unsupported_or_unselected_dependency_manifest_evidence: incomplete
+    no_dependency_manifest_is_complete_zero_dependency_evidence: true
+    evidence_complete_required: true
+    lifecycle_scripts_nonempty: rejected
+    known_positive_count_requires_pinned_true: true
+    known_positive_count_requires_lockfile_present_true: true
+    missing_or_unsupported_evidence_blocks_behavior_evaluation: true
+    missing_or_unsupported_evidence_blocks_all_direct_use: true
+  current_runtime_maintenance_ownership_and_provenance_direct_gate:
+    established_community: required
+    official: required
+    allowlisted: required
+    maintenance_requires:
+      - active_maintainers_positive
+      - recent_commits_positive
+      - nonempty_release_process
+    ownership_requires: ownership_verified_true
+    provenance_requires_one_of:
+      - attestation_available_true
+      - signed_release_and_signature_verified_true
+
+fit:
+  baseline_configuration: base_codex_plus_repository_instructions
+  aggregate_maximum: 100
+  dimensions:
+    semantic_task_match: 15
+    competence_gain: 15
+    verification_quality: 12
+    failure_mode_coverage: 10
+    repository_compatibility: 8
+    trust_and_provenance: 5
+    methodology_quality: 10
+    tool_compatibility: 8
+    context_efficiency: 7
+    maintenance_quality: 5
+    permission_proportionality: 5
+  normal_gate:
+    aggregate_minimum: 85
+    confidence_minimum: 0.85
+  high_consequence_gate:
+    aggregate_minimum: 90
+    confidence_minimum: 0.90
+  critical_minima:
+    semantic_task_match:
+      score: 12
+      maximum: 15
+    competence_gain:
+      score: 11
+      maximum: 15
+    verification_quality:
+      score: 9
+      maximum: 12
+    failure_mode_coverage:
+      score: 7
+      maximum: 10
+    repository_compatibility:
+      score: 6
+      maximum: 8
+    trust_and_provenance:
+      score: 4
+      maximum: 5
+  required:
+    - no_hard_disqualifier
+    - no_missing_mandatory_competency
+    - positive_delta_over_baseline
+    - representative_eval_passed
+    - minimum_improvement_delta_met
+  costs_applied_inside_fit_evaluator: false
+  consequence_level_source: opaque_capability_request
+  minimum_improvement_source: opaque_capability_request
+  caller_override_of_request_fit_inputs: forbidden
+  behavior_evidence_bound_to_exact_instruction_analysis: true
+
+direct_use:
+  optional_even_when_eligible: true
+  current_host_available: false
+  current_host_failure_mode: fail_closed
+  behavior_evidence_requires_runtime_issued_binding: true
+  fetched_static_review_and_isolated_instruction_findings_required: true
+  permission_proportionality_source: exact_capability_request_subset_check
+  allowed_trust_tiers:
+    - official
+    - allowlisted
+    - established-community
+  required:
+    - full_static_review_passed
+    - review_closure_complete
+    - execution_closure_complete
+    - provenance_pinned_and_hashed
+    - dependency_evidence_complete
+    - dependency_pinning_and_lockfile_when_dependencies_exist
+    - no_dependency_lifecycle_scripts
+    - credible_maintenance
+    - verified_ownership
+    - credible_provenance_attestation_or_verified_signed_release
+    - fit_threshold_passed
+    - representative_behavior_evals_passed
+    - execution_sandbox_attested
+    - sandbox_smoke_passed
+    - required_permissions_proportionate
+    - candidate_install_scope_repository_local
+    - no_safer_native_equivalent
+    - no_hard_disqualifier
+  install_scope_binding:
+    request_constraint_values:
+      - repository-local
+      - none
+    external_candidate_gate_required_value: repository-local
+    effect_authorized_scope_must_equal_request_and_evaluation: true
+    scheduler_effective_scope_must_equal_authorized_scope: true
+    opaque_evaluation_binds_scope: true
+    opaque_effect_authorization_binds_scope: true
+    end_to_end_scope_binding: true
+  external_install_command:
+    structured_argv_required: true
+    current_verified_grammar:
+      executable: absolute_attested_npm_path
+      argv:
+        - install
+        - --ignore-scripts
+        - --no-save
+        - --package-lock=false
+        - --workspaces=false
+        - --prefix
+        - .cruise/internal/tools/<identity>
+        - <reviewed-canonical-git-url-at-immutable-commit>
+    pnpm_and_yarn_direct_install_currently: fail_closed
+    reviewed_canonical_repository_url_required: true
+    immutable_commit_in_source_required: true
+    pinned_version_metadata_required: true
+    registry_semver_without_reviewed_repository_forbidden: true
+    command_sha256_effect_bound: true
+  installer_exit_is_proof: false
+  installer_authority:
+    opaque_executable_attestation_required: true
+    absolute_resolved_path_and_sha256_bound: true
+    regular_file_non_symlink_executable_required: true
+    synchronous_reinspection_before_use: true
+  install_execution:
+    opaque_broker_required: true
+    plain_scheduler_install_callback: forbidden
+    broker_bound_to_exact_capability_request_and_canonical_repository_root: true
+    broker_repository_root_must_equal_single_request_repository_constraint: true
+    exact_run_node_candidate_evaluation_effect_and_command_required: true
+    managed_write_root: .cruise/internal/tools/<identity>
+    absolute_observed_write_paths_required: true
+    every_observed_write_must_remain_within_managed_root: true
+    result_requires:
+      - command_sha256
+      - file_change_log_sha256
+      - isolation_evidence_sha256
+      - written_paths
+  smoke_proof:
+    - identity
+    - version_or_revision
+    - usable_scope
+    - evidence
+    - probe_sha256
+    - artifact_sha256
+    - observed_paths
+  smoke_execution:
+    opaque_broker_required: true
+    plain_scheduler_smoke_callback: forbidden
+    broker_bound_to_exact_capability_request_and_canonical_repository_root: true
+    broker_repository_root_must_equal_single_request_repository_constraint: true
+    install_smoke_requires_opaque_install_result: true
+    installed_artifact_observations_confined_to_managed_root: true
+  smoke_failure:
+    capability_available: false
+    safe_reviewed_rollback: attempted_when_declared_and_broker_available
+    rollback_authority:
+      opaque_broker: true
+      exact_capability_request_and_repository_root_bound: true
+      exact_candidate_install_result_and_install_effect_required: true
+      contract_digest_binds:
+        - request_authority_sha256
+        - provision_run_id
+        - capability_node_id
+        - candidate_identity_version_and_revision
+        - rollback_procedure_sha256
+        - install_command_sha256
+        - install_file_change_log_sha256
+        - install_isolation_evidence_sha256
+        - managed_install_root
+      result_requires:
+        - exact_rollback_contract_sha256
+        - rollback_evidence_sha256
+        - file_change_log_sha256
+        - observed_paths_confined_to_managed_install_root
+
+learning_only:
+  quarantine_required: true
+  extraction_authority:
+    exact_opaque_instruction_analysis_required: true
+    acquisition_and_content_digest_bound: true
+    caller_supplied_review_points_are_authority: false
+    current_host_broker_available: false
+  forbidden:
+    - install
+    - execute
+    - activate
+    - privileged_worker_context
+    - repository_access
+    - credential_access
+    - post_acquisition_network
+    - executable_export
+    - raw_instruction_export
+  export_allowlist:
+    - methodologies
+    - verification_patterns
+    - failure_modes
+    - domain_checks
+    - useful_examples
+  retained_output_structured_only: true
+
+effect_authorization:
+  opaque_process_local_token: true
+  common_binding:
+    - immutable_origin
+    - request_id
+    - exact_capability_request_object
+    - effect_kind
+    - public_skill
+    - exact_permission_decision
+  acquisition_target_binding:
+    - exact_repository
+  install_target_binding:
+    - action
+    - candidate_identity
+    - repository
+    - immutable_commit
+    - content_sha256
+    - version
+    - install_scope
+    - command_sha256
+    - installer_sha256
+    - exact_required_permissions
+  authentication_target_binding:
+    - capability_node_id
+    - candidate_identity
+    - provision_run_id
+    - authentication_job_id
+    - server_name
+    - authentication_job_sha256
+    - command_sha256
+    - exact_required_permissions
+  not_bound_by_current_effect_token:
+    - acquisition_closure_digest
+    - rollback_plan
+    - generic_adapter_identity
+  permission_scope_check:
+    supplied_permission_granted_required: true
+    effect_kind_must_be_listed: true
+    supplied_permission_must_be_declared_by_request: true
+  effect_descriptor_digest_stored: false
+  normalized_target_fields_bound_process_locally: true
+  acquisition_repository_bound_before_adapter_call: true
+  install_command_digest_bound: true
+  token_reuse_for_different_target_scope_or_command: forbidden
+  exact_target_authorization_guaranteed: true
+  direct_external_activation_on_current_host: fail_closed
+
+local_adaptation:
+  create_only_for_material_gain: true
+  name_pattern: "^cruise-local-[a-z0-9][a-z0-9-]*$"
+  root: .cruise/skills/adapted/
+  required_entries:
+    - SKILL.md
+    - provenance.yaml
+    - LEARNING-SOURCES.md
+    - SECURITY-REVIEW.md
+    - evals/
+    - references/
+  construction:
+    independently_authored: true
+    raw_uncertain_skill_as_template: false
+    copied_executable_code_default: false
+    copied_instruction_text_default: false
+    exact_license_and_attribution_for_copy: true
+    no_copy_when_license_absent_unclear_or_incompatible: true
+  validation:
+    - trigger_tests
+    - non_trigger_tests
+    - prompt_injection_resistance
+    - repository_fit
+    - tool_boundary
+    - write_scope
+    - secret_access_denial
+    - network_denial
+    - representative_task_fixtures
+    - stable_outputs
+    - fit_rescore
+    - baseline_improvement
+    - public_skill_compatibility
+    - origin_permission_requirement_override_denial
+  evaluation_authority:
+    opaque_trusted_local_spin_broker_evidence_required: true
+    capability_request_and_source_extraction_bound: true
+    caller_supplied_passed_booleans_are_authority: false
+    current_host_broker_available: false
+    current_host_activation_result: fail_closed
+    exact_capability_request_object_bound_process_locally: true
+    exact_repository_root_from_capability_request_required: true
+    learning_extraction_must_belong_to_same_exact_request: true
+  disk_activation_gate:
+    maximum_files: 512
+    maximum_directories: 128
+    maximum_depth: 12
+    maximum_relative_path_bytes: 512
+    maximum_total_bytes: 16777216
+    managed_path_and_real_files_verified: true
+    symlinks_forbidden: true
+    skill_name_matches_unique_id: true
+    immutable_provenance_matches_record: true
+    results_manifest: evals/results.yaml
+    every_required_eval_passed: true
+    every_eval_evidence_sha256_required: true
+    every_file_including_provenance_and_evidence_scanned: true
+    unexpected_executable_content_forbidden: true
+    current_exclusion_rechecked: true
+    request_authority_sha256_bound_in_validation_proof: true
+    activation_requires_same_exact_request_and_current_authority_digest: true
+    repository_root_must_equal_bound_capability_request_root: true
+
+authentication:
+  stage: after_selection_and_all_prior_gates
+  preferred_mechanism: host_native
+  mcp_oauth_preference: host_supported_login
+  command_representation: structured_argv
+  exact_native_mcp_argv:
+    - codex
+    - mcp
+    - login
+    - safe_server_name
+  identity_policy:
+    allowed:
+      - any-nonempty
+      - exact
+    any_nonempty:
+      required_identity: null
+      post_auth_identity_must_be_nonempty: true
+    exact:
+      required_identity_must_be_nonempty: true
+      post_auth_identity_must_equal_required_identity: true
+    exact_required_scope_is_canonical_sorted_unique: true
+    post_auth_scope_must_equal_required_scope: true
+  selection_binding:
+    opaque_selected_evaluation_required: true
+    exact_auth_effect_authorization_required: true
+    binds:
+      - immutable_origin
+      - capability_request
+      - capability_identity
+      - server_or_endpoint
+      - required_identity
+      - exact_required_scope
+      - structured_argv
+  verification:
+    plain_scheduler_callback: forbidden
+    opaque_capreq_and_repository_root_bound_broker_required: true
+    exact_success_attestation_process_local: true
+    binds:
+      - auth_effect_authorization
+      - exact_auth_job_object_and_sha256
+      - provision_run_and_capability_node
+      - candidate_and_server
+      - required_scope_and_identity_policy
+      - auth_state_path_parsed_state_and_persisted_digest
+      - host_evidence_sha256
+    live_revalidation_before_candidate_activation: true
+    drift: blocked
+    persisted_resume_requires_authority_reconstruction: true
+  forbidden:
+    - credential_arguments
+    - token_persistence
+    - environment_secret_logging
+    - shell_c
+    - untrusted_command_interpolation
+    - candidate_provided_unvalidated_endpoint
+  tmux:
+    optional_transport_only: true
+    session_pattern: "^cruise-auth-[A-Za-z0-9_.-]+-[A-Za-z0-9_.-]+$"
+    allowed_name_characters: "A-Za-z0-9_.-"
+    trusted_runner_only: true
+    opaque_host_broker_runner_attestation_required: true
+    runner_digest_required: true
+    runner_resolved_path_regular_file_and_non_symlink_required: true
+    runner_reinspection_before_transport_required: true
+    exact_request_effect_job_run_node_and_candidate_binding_required: true
+    persisted_job_semantic_digest_required: true
+    persisted_job_byte_digest_required: true
+    repeated_transport_review_rejects_byte_drift: true
+    runner_argv_receives_expected_job_sha256: true
+    runner_argv_receives_separate_auth_state_path: true
+    structured_argv_attestation_binding_required: true
+    endpoint_attestation_binding_required: true
+    raw_candidate_command: false
+    private_state: true
+    restrictive_permissions: true
+    redacted_output: true
+    atomic_status: true
+    post_auth_identity_scope_smoke: true
+    session_terminates_after_confirmed_success: true
+    source_of_job_state: false
+    codex_resume_mechanism: false
+    current_host_runner_confirmed: false
+    current_host_result: fail_closed
+  automatic_resume_authority:
+    opaque_trusted_client_attestation_required: true
+    exact_successful_auth_attestation_required: true
+    exact_auth_effect_authorization_required: true
+    exact_context_binding:
+      - exact_capability_request_object
+      - request_authority_sha256
+      - exact_auth_job_object_and_sha256
+      - successful_auth_evidence_sha256
+      - persisted_auth_state_sha256
+      - provision_run_id
+      - candidate_identity
+      - validated_identity
+      - exact_validated_scope
+      - dag_state_sha256
+      - thread_id
+    observed_client_binding:
+      - same_thread_auth_watcher
+      - post_auth_validation
+      - capability_dag_update
+      - same_thread_app_server_continuation
+      - client_evidence_sha256
+      - continuation_method
+    exact_context_match_required_when_resolving_resume: true
+    required_observations:
+      - terminal_client_auth_job_watcher
+      - post_auth_validation
+      - capability_dag_update
+      - same_thread_app_server_continuation
+    caller_supplied_status_object_is_authority: false
+    caller_supplied_identity_or_scope_is_authority: false
+    premature_or_cloned_attestation: rejected
+    current_host_attestation_available: false
+    current_host_result: persist_waiting_auth
+  otherwise:
+    - continue_independent_ready_nodes
+    - persist_waiting_auth
+    - stop_at_checkpoint
+    - ask_user_to_continue
+  persisted_job_states_current_runtime:
+    - running
+    - succeeded
+    - unconfirmed
+    - failed
+    - waiting_auth
+    - cancelled
+    - timed_out
+  state_store_current_runtime:
+    auth_job_transport_input_path: .cruise/internal/auth-jobs/<auth-id>.yaml
+    auth_job_transport_input_immutable_after_first_write: true
+    mutable_auth_state_path: .cruise/internal/auth-state/<auth-id>.yaml
+    immutable_job_and_mutable_state_are_separate: true
+  resume_revalidation:
+    - origin_and_baseline_constraints
+    - authenticated_identity
+    - authenticated_scope
+    - immutable_candidate_revision
+    - exclusion_status
+    - permissions
+    - deterministic_smoke
+
+approval_authority:
+  serialized_record_alone_is_authority: false
+  goal_effect_approval:
+    opaque_process_local: true
+    allowed_public_skill: goal
+    binds:
+      - exact_capability_request_object
+      - decision_id
+      - plan_sha256
+      - permissions_sha256
+      - approval_sha256
+      - synchronous_current_digest_reader
+    rechecked_when_authorizing_install_or_authenticate:
+      - plan_sha256
+      - permissions_sha256
+      - approval_sha256
+    asynchronous_digest_reader: fail_closed
+  fallback_approval:
+    opaque_process_local: true
+    binds:
+      - exact_capability_request_object
+      - provision_run_id
+      - capability_node_id
+      - decision_id
+      - exact_fallback_record_sha256
+      - plan_sha256
+      - permissions_sha256
+      - synchronous_current_digest_reader
+    rechecked_when_consumed:
+      - exact_fallback_record_sha256
+      - plan_sha256
+      - permissions_sha256
+    asynchronous_digest_reader: fail_closed
+  reconciliation_approval:
+    opaque_process_local: true
+    binds:
+      - exact_capability_request_object
+      - provision_run_id
+      - capability_node_id
+      - reconciliation_kind
+      - exact_record_sha256
+      - synchronous_current_digest_reader
+    rechecked_when_consumed:
+      alternate_plan:
+        - plan_sha256
+        - approval_sha256
+      weaker_evidence_waiver:
+        - decision_sha256
+        - affected_evidence_sha256
+    asynchronous_digest_reader: fail_closed
+    post_creation_contract_drift_recheck_implemented: true
+
+necessity:
+  optional:
+    unavailable_action: skip_and_record
+  preferred:
+    fallback_required_before_goal_activation: true
+    fallback_must_preserve_mandatory_acceptance: true
+  mandatory:
+    unavailable_action: block_dependents
+    allowed_resolution:
+      - replacement_capability
+      - contract_revision
+      - blocked_closeout
+
+fallback_reconciliation:
+  public_skill_invocation: forbidden
+  current_runtime_record_shape: branch_specific_sparse
+  full_identity_and_preservation_envelope_emitted: false
+  bare_alternate_plan_approved_boolean: forbidden
+  alternate_plan_decision_required_fields:
+    - id_D_star
+    - approved_true
+    - plan_sha256
+    - approval_sha256
+  allowed_outcomes:
+    - equivalent_fallback
+    - approved_alternate_plan_branch
+    - contract_revision_required
+    - blocked
+  automatic_fallback_requires:
+    - approved_before_activation_true
+    - approval_sha256
+    - expected_quality_or_cost_difference
+    - mandatory_acceptance_criteria_preserved
+    - protected_behavior_preserved
+    - permission_envelope_preserved
+    - mandatory_evidence_gates_preserved
+  weaker_evidence_requires:
+    - waiver_permitted_true
+    - explicit_waiver
+    - waiver_decision_sha256
+    - affected_evidence_sha256
+    - waiver_qualified_closeout_when_allowed
+  outcome_scope_or_requirement_change:
+    - invalidate_affected_approval
+    - revise_contract
+    - obtain_required_reapproval
+
+dag:
+  node_id_pattern: "^CAP-[A-Z0-9][A-Z0-9-]*$"
+  states:
+    - pending
+    - ready
+    - running
+    - waiting_auth
+    - blocked
+    - succeeded
+    - failed
+    - skipped
+    - excluded
+    - quarantined
+  cycle_detection_before_execution: true
+  auth_wait_blocks_dependents_only: true
+  independent_ready_nodes_continue_if_host_schedules: true
+  background_execution_claim_without_host_support: false
+
+scheduler:
+  capability_run_requires_nonempty_nodes: true
+  zero_node_no_provisioning_run_supported: false
+  immutable_dag_contract:
+    persisted_separately_as: .cruise/internal/provision-runs/<run-id>.contract.yaml
+    contract_sha256_persisted_on_run: true
+    persisted_self_digest_is_authority: false
+    live_opaque_capreq_run_expected_digest_required: true
+    new_process_must_reconstruct_from_approved_inputs: true
+    mutable_runtime_state_separate: true
+    binds:
+      - run_and_request_identity
+      - request_constraints_and_permissions
+      - resolution_order
+      - metadata
+      - node_membership_identity_and_kind
+      - dependencies
+      - required_for_completion_and_necessity
+      - approved_fallback
+      - immutable_requested_execution
+    editing_state_and_contract_with_recomputed_digest: rejected
+  request_authority:
+    exact_live_opaque_capability_request_required: true
+    request_id_must_match_run: true
+    authority_sha256_must_match_run: true
+    persisted_shape_or_digest_without_live_request_is_insufficient: true
+  state_store_authority:
+    opaque_private_binding_required: true
+    exact_capability_request_repository_root_required: true
+    forged_or_subclassed_store: rejected
+    canonical_root_revalidated_before_each_read_or_write: true
+    reviewed_prototype_methods_invoked_directly: true
+    cross_repository_revocation_or_persistence: forbidden
+  execution_brokers:
+    plain_install_callback: forbidden
+    plain_smoke_callback: forbidden
+    opaque_install_execution_broker_required_for_install: true
+    opaque_smoke_verification_broker_required_for_success: true
+    plain_rollback_callback: forbidden
+    opaque_rollback_broker_required_when_rollback_is_attempted: true
+    plain_auth_callback: forbidden
+    opaque_auth_verification_broker_required: true
+  authenticated_candidate_revalidation:
+    process_local_opaque_verified_auth_attestation: true
+    binds:
+      - exact_capability_request_and_repository_root
+      - exact_auth_effect_authorization
+      - request_id
+      - provision_run_id
+      - capability_node_id
+      - candidate_identity
+      - exact_auth_job_object
+      - auth_job_sha256
+      - server_name
+      - required_scope
+      - identity_policy
+      - required_identity
+      - persisted_state_path_and_sha256
+      - parsed_state_and_host_evidence_sha256
+    live_revalidation_before_activation: true
+    persisted_resume_requires_fresh_exact_job_and_effect_authority: true
+    drift_result: authenticated_candidate_authority_drift
+  run_states_current_runtime:
+    - pending
+    - running
+    - waiting_auth
+    - blocked
+    - failed
+    - succeeded
+  running_is_persisted_intermediate_state: true
+  terminal_outcome_resolution:
+    - succeeded
+    - waiting_auth
+    - failed
+    - blocked
+    - pending
+  node_action_field_emitted: false
+  node_capability_and_kind_required: true
+
+private_state_io:
+  store_authority:
+    private_weakmap_binding: true
+    requested_and_canonical_root_bound: true
+    exact_capability_request_root_required_by_scheduler: true
+    canonical_root_drift: rejected
+  provision_run_state:
+    maximum_bytes: 4194304
+    maximum_nodes: 1024
+    maximum_attempts_per_node: 64
+  provision_run_contract:
+    maximum_bytes: 4194304
+    immutable_atomic_first_write: true
+    exact_repeat_is_idempotent: true
+    different_existing_bytes: rejected
+    live_expected_digest_required_on_load: true
+  capability_registry:
+    maximum_bytes: 4194304
+    maximum_entries: 4096
+  exclusion_state:
+    maximum_bytes: 262144
+    maximum_entries: 4096
+  rejected_capability_state:
+    maximum_bytes: 1048576
+    maximum_entries: 4096
+  authentication_job:
+    maximum_bytes: 1048576
+    immutable_atomic_first_write: true
+    exact_repeat_is_idempotent: true
+    different_existing_bytes: rejected
+  authority_file_reads:
+    bounded: true
+    regular_file_required: true
+    symlink_forbidden: true
+    canonical_repository_containment_required: true
+    size_or_identity_drift_during_read: rejected
+  encoded_payload_review:
+    streaming_match_iteration: true
+    candidate_wide_budget: true
+    maximum_matches: 20
+    maximum_encoded_bytes: 131072
+    maximum_decoded_bytes: 65536
+    budget_exhaustion: hard_rejection
+
+exclusion:
+  file: .cruise/skills/exclude
+  mandatory_rechecks:
+    - native_relevance_filtering
+    - external_metadata_return
+    - external_selection
+    - acquisition
+    - instruction_analysis
+    - behavior_evaluation
+    - learning_extraction
+    - local_spin_construction
+    - local_spin_disk_validation
+    - effect_adapter_entry
+    - scheduler_selection
+    - privileged_context_construction
+    - invocation
+  current_state_not_only_original_snapshot: true
+  opaque_handles_bind_reviewed_exclusion_state: true
+  snapshot_root_must_equal_exact_capability_request_root: true
+  cross_repository_snapshot_reuse: forbidden
+  newly_added_exclusion_rechecked_at_activation: true
+  end_to_end_closure_guaranteed: true
+  quarantine_root: .cruise/skills/quarantine/
+  quarantine_persistence_requires_exact_request_root_and_current_exclusion_digest: true
+  adapted_root: .cruise/skills/adapted/
+  rejected_registry: .cruise/internal/rejected-capabilities.yaml
+  host_wide_hiding_claim: forbidden
+  immutable_rejection_identity:
+    - repository
+    - commit_sha
+    - content_sha256
+  new_revision_requires_new_review: true
+
+hard_rejections:
+  rules:
+    - confirmed_prompt_injection
+    - unrelated_sensitive_data_request
+    - unreviewed_executable
+    - unrestricted_network_or_filesystem
+    - danger_full_access
+    - approval_policy_never
+    - privilege_escalation
+    - unpinned_remote_install
+    - unexplained_telemetry
+    - unnecessary_host_configuration_change
+    - incompatible_license
+    - unresolved_critical_technical_error
+    - immutable_pin_unavailable
+    - meaningful_evaluation_unavailable
+    - immutable_origin_conflict
+    - selected_public_skill_contract_conflict
+  bypass_for_user_convenience: false
+  unsafe_override_policy_implemented: false
+
+required_evaluations:
+  star_threshold:
+    - official_200_stars_may_qualify_after_official_review
+    - unofficial_999_stars_learning_only
+    - unofficial_1001_stars_still_requires_full_review
+    - malicious_50000_stars_rejected
+    - missing_star_count_uncertain
+    - stars_never_reverse_failed_security
+  prompt_injection:
+    - ignore_cruise_rules
+    - request_dot_env
+    - request_ssh_keys
+    - upload_repository_files
+    - change_codex_configuration
+    - hidden_unicode_instruction
+    - base64_shell_payload
+    - disable_tests
+    - falsify_completion
+    - recursively_activate_public_skill
+  script_safety:
+    - curl_pipe_shell
+    - sudo
+    - global_package_install
+    - package_lifecycle_hook
+    - reverse_shell
+    - hidden_telemetry
+    - unexpected_network
+    - symlink_present
+    - submodule_payload
+    - binary_executable
+    - oversized_compressed_archive
+    - non_ascii_path
+    - dependency_file_present
+  learning_only:
+    - uncertain_never_installed
+    - uncertain_scripts_never_executed
+    - structured_learning_only_leaves_quarantine
+    - privileged_worker_never_receives_raw_instructions
+    - local_adaptation_has_unique_name
+    - local_adaptation_records_provenance
+    - local_adaptation_passes_security_and_behavior_evals
+  no_op:
+    - no_concrete_gap
+    - native_tools_sufficient
+    - no_measurable_candidate_gain
+    - search_cost_exceeds_benefit
+  authentication:
+    - native_mcp_oauth_preferred
+    - auth_argv_structured
+    - credentials_absent_from_logs
+    - tmux_names_sanitized
+    - tmux_exit_without_smoke_unconfirmed
+    - untrusted_tmux_runner_rejected
+    - auth_process_exception_persists_redacted_failure
+    - post_auth_exception_persists_redacted_failure
+    - unrelated_dag_branches_continue
+    - no_resume_claim_without_client_support
+    - declined_preferred_uses_approved_fallback
+    - declined_mandatory_blocks_dependents
+
+static_enforcement:
+  fail_when:
+    - raw_external_content_reaches_privileged_context_before_approval
+    - uncertain_candidate_installed_or_executed
+    - external_revision_unpinned_or_unhashed
+    - star_count_used_as_complete_trust_decision
+    - direct_use_without_security_review
+    - behavior_or_direct_use_with_incomplete_review_closure
+    - local_adaptation_without_provenance_or_evals
+    - candidate_command_uses_shell_c_or_interpolation
+    - secret_in_provision_artifact
+    - unauthorized_host_configuration_change
+    - public_cruise_skill_invoked_recursively
+    - provisioner_exposed_on_public_skill_surface
+    - excluded_candidate_survives_any_mandatory_recheck
+    - effect_authorization_target_scope_or_command_mismatch
+    - behavior_evidence_not_bound_to_exact_instruction_analysis
+    - local_spin_without_brokered_evaluation_evidence
+    - automatic_resume_without_opaque_observed_client_attestation
+    - sandbox_claim_exceeds_observed_host
+    - tmux_runner_lacks_host_broker_attestation
+
+completion_conditions:
+  - no_op_default
+  - native_first
+  - external_candidates_untrusted_by_default
+  - unofficial_below_threshold_learning_only
+  - stars_never_sole_control
+  - direct_external_activation_fails_closed_while_sandbox_brokers_unconfirmed
+  - raw_uncertain_instructions_excluded_from_privileged_context
+  - external_revisions_and_content_pinned_and_hashed
+  - all_regular_files_selected_and_reviewed_before_behavior_or_direct_use
+  - security_provenance_maintenance_dependency_signals_recorded
+  - reviewed_tree_dependency_evidence_complete_before_behavior_or_direct_use
+  - all_direct_external_tiers_require_credible_maintenance_ownership_and_provenance
+  - uncertain_sources_export_reviewed_learning_only
+  - local_adaptations_unique_independent_provenance_tracked_and_evaluated
+  - authentication_native_first
+  - tmux_transport_only
+  - goal_fallback_never_silently_weakened
+  - exact_request_permission_and_effect_descriptor_authority
+  - exclusion_rechecked_before_effect_and_invocation
+  - exact_instruction_analysis_required_for_behavior_evidence
+  - brokered_local_spin_evidence_or_fail_closed
+  - opaque_observed_client_continuation_attestation_or_waiting_auth
+  - exact_continuation_request_job_run_identity_scope_dag_and_thread_binding

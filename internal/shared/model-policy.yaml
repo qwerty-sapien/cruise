@@ -1,0 +1,109 @@
+schema_version: 2
+root_coordinator:
+  change_model: forbidden
+  recommended_level: 1
+  substantive_work: forbidden
+  owns:
+    - deterministic_routing
+    - user_questions
+    - approvals
+    - permissions
+    - native_goal_activation
+    - worker_spawning
+    - integration
+    - final_synthesis
+worker_launch:
+  adapter: codex_app_server
+  level_only_in_worker_packet: true
+  allow_provider_model_fallback: false
+  require_exact_catalog_pair: true
+  runtime_receipt_required: true
+recommended_levels:
+  "1":
+    agent_type: cruise_l1
+    alias: luna-M
+    model: gpt-5.6-luna
+    reasoning: medium
+  "2":
+    agent_type: cruise_l2
+    alias: terra-M
+    model: gpt-5.6-terra
+    reasoning: medium
+  "3":
+    agent_type: cruise_l3
+    alias: terra-H
+    model: gpt-5.6-terra
+    reasoning: high
+  "4":
+    agent_type: cruise_l4
+    alias: terra-X
+    model: gpt-5.6-terra
+    reasoning: xhigh
+  "5":
+    agent_type: cruise_l5
+    alias: sol-H
+    model: gpt-5.6-sol
+    reasoning: high
+  "6":
+    agent_type: cruise_l6
+    alias: sol-X
+    model: gpt-5.6-sol
+    reasoning: xhigh
+  "7":
+    agent_type: cruise_l7
+    alias: sol-U
+    model: gpt-5.6-sol
+    reasoning: ultra
+maximum_soft_level_escalations: 1
+stages:
+  deterministic_routing:
+    recommended_level: 1
+    coordinator_only: true
+  bounded_repository_identity_probe:
+    recommended_level: 1
+    coordinator_only: true
+    deterministic_tools_only: true
+  semantic_repository_mapping:
+    recommended_level: 2
+  capability_inventory:
+    recommended_level: 2
+  quick_implementation:
+    recommended_level: 2
+  quick_verification:
+    recommended_level: 2
+  refine_clarification_analysis:
+    recommended_level: 3
+  refine_planning:
+    recommended_level: 3
+  normal_planned_execution:
+    recommended_level: 3
+  independent_normal_verification:
+    recommended_level: 3
+  debug_hypothesis_generation:
+    recommended_level: 3
+  debug_discriminating_experiment:
+    recommended_level: 3
+  debug_causal_repair:
+    recommended_level: 3
+  difficult_debug_or_failed_normal_execution:
+    recommended_level: 5
+  goal_contract_planning:
+    recommended_level: 3
+  architectural_or_consequential_implementation:
+    recommended_level: 5
+  repeated_failure_or_exceptional_consequence:
+    recommended_level: 6
+  extreme_safety_critical_adjudication:
+    recommended_level: 7
+  review_analysis:
+    recommended_level: 3
+  independent_consequential_review:
+    recommended_level: 5
+  research_retrieval_and_extraction:
+    recommended_level: 2
+  research_synthesis_and_recommendation:
+    recommended_level: 3
+  high_conflict_or_frontier_research:
+    recommended_level: 5
+  routine_structured_scans:
+    recommended_level: 2

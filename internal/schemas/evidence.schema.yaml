@@ -1,0 +1,226 @@
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - kind
+  - run_id
+  - recorded_at
+  - outcome
+  - determined_at
+  - items
+  - final_verification
+properties:
+  schema_version:
+    const: 1
+  kind:
+    const: cruise_evidence_record
+  run_id:
+    type: string
+    minLength: 1
+  recorded_at:
+    type: string
+    format: date-time
+  outcome:
+    type: string
+    enum:
+      - active
+      - completed
+      - completed_waiver_qualified
+      - blocked
+  determined_at:
+    type:
+      - string
+      - "null"
+    format: date-time
+  items:
+    type: array
+    maxItems: 10000
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - gate
+        - scope
+        - status
+        - performed
+        - procedure
+        - command
+        - expected
+        - actual
+        - identity
+        - started_at
+        - finished_at
+        - supports
+        - side_effects
+        - cleanup
+        - waiver
+      properties:
+        id:
+          type: string
+          pattern: '^E-[0-9]{2,}$'
+        gate:
+          type: string
+          enum:
+            - mandatory
+            - advisory
+        scope:
+          type: string
+          enum:
+            - task
+            - final_verification
+            - advisory
+        status:
+          type: string
+          enum:
+            - PASS
+            - BLOCK
+            - NOT_RUN
+        performed:
+          type: boolean
+        procedure:
+          type: string
+          minLength: 1
+        command:
+          type:
+            - string
+            - "null"
+          minLength: 1
+        expected:
+          type: string
+          minLength: 1
+        actual:
+          type: string
+          minLength: 1
+        identity:
+          type: object
+          additionalProperties: false
+          required:
+            - source
+            - build
+            - environment
+          properties:
+            source:
+              type: string
+              minLength: 1
+            build:
+              type: string
+              minLength: 1
+            environment:
+              type: string
+              minLength: 1
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        supports:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^(G|R|AC|D|T|F|H)-[0-9]{2,}$'
+        side_effects:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        cleanup:
+          type: object
+          additionalProperties: false
+          required:
+            - required
+            - procedure
+            - actual
+            - completed
+          properties:
+            required:
+              type: boolean
+            procedure:
+              type:
+                - string
+                - "null"
+              minLength: 1
+            actual:
+              type: string
+              minLength: 1
+            completed:
+              type: boolean
+        waiver:
+          type:
+            - object
+            - "null"
+          additionalProperties: false
+          required:
+            - decision_id
+            - reason
+            - accepted_residual_risk
+            - owner
+            - approved_at
+            - reopen_trigger
+            - compensating_evidence_ids
+            - locked
+          properties:
+            decision_id:
+              type: string
+              pattern: '^D-[0-9]{2,}$'
+            reason:
+              type: string
+              minLength: 1
+            accepted_residual_risk:
+              type: string
+              minLength: 1
+            owner:
+              type: string
+              minLength: 1
+            approved_at:
+              type: string
+              format: date-time
+            reopen_trigger:
+              type: string
+              minLength: 1
+            compensating_evidence_ids:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                pattern: '^E-[0-9]{2,}$'
+            locked:
+              const: true
+  final_verification:
+    type:
+      - object
+      - "null"
+    additionalProperties: false
+    required:
+      - verifier
+      - performed_at
+      - origin_compared
+      - normalized_contract_compared
+      - actual_changes_or_outputs_compared
+      - task_completion_only
+      - evidence_ids
+    properties:
+      verifier:
+        type: string
+        minLength: 1
+      performed_at:
+        type: string
+        format: date-time
+      origin_compared:
+        type: boolean
+      normalized_contract_compared:
+        type: boolean
+      actual_changes_or_outputs_compared:
+        type: boolean
+      task_completion_only:
+        const: false
+      evidence_ids:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          pattern: '^E-[0-9]{2,}$'

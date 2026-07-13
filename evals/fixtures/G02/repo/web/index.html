@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Choose workspace permissions</title>
+  </head>
+  <body>
+    <main>
+      <h1>Set up workspace permissions</h1>
+      <p>Choose the role for the first teammate.</p>
+      <form>
+        <fieldset>
+          <legend>Role</legend>
+          <label><input type="radio" name="role" value="viewer"> Viewer — can read projects.</label>
+          <label><input type="radio" name="role" value="editor"> Editor — can change projects.</label>
+          <label><input type="radio" name="role" value="admin"> Admin — can manage people and billing.</label>
+        </fieldset>
+        <label>Email <input type="email" name="email"></label>
+        <button type="submit">Invite teammate</button>
+      </form>
+    </main>
+  </body>
+</html>
