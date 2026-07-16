@@ -10,7 +10,7 @@ state.
 
 The source change set is reviewed and validated. It is large but constrained and meaningful: each
 remaining file group maps to a requested Doctor-integrity, real-inference, reconnect, foreign-diff,
-worker-admission, or spatiomics-fixture requirement. Unrelated automatic-approval work and
+worker-admission, or repository-local-fixture requirement. Unrelated automatic-approval work and
 formatting-only residue were removed. The source is ready for installation, but this run is not an
 installed release: the final plugin remove/add was rejected by the managed approval service after
 the account reached its Codex usage limit. The installed-digest and live deep-Doctor rows therefore
@@ -23,7 +23,7 @@ remain explicitly blocked rather than being reported as passing.
 | Remove the recurring packet-export consent prompt | Public skills require Doctor readiness and explicitly forbid asking for a per-packet prompt/repository-export authorization. Deep Doctor is the one-time operational proof of the host path. |
 | Fail Doctor on source/cache mismatch | The runtime digest includes the manifest, package metadata, all skills, internal contracts/schemas, scripts, and the bundled fixture. Static Doctor fails on any missing, extra, or changed runtime file. Deep Doctor also pins and rechecks one installed snapshot for the whole run. |
 | Exercise real skills in a real repository | Deep Doctor creates isolated copies of `fixtures/doctor/repository`, loads the six public skills from the installed cache, loads the repository-local skill, runs real app-server inference, and requires real runtime/worker evidence for every case. |
-| Add a `spatiomics-skill` | The fixture contains a repository-local skill, references, deterministic inspector, validator, Snakemake canary, and synthetic data markers for StereoPy, STAR, BANKSY, SAW 8.1.3, Snakemake, Leiden, BAM, GEM, GEF/GEFF, H5AD/H5MS, annotations, references, GTF, and SIF. It proves structural routing and documentation coverage, not biological validity. |
+| Add a repository-local fixture skill | The fixture contains a repository-local skill, generic references, a deterministic inspector, a validator, an offline workflow canary, and synthetic data markers. It proves structural routing and documentation coverage, not real-world validity. |
 | Retain complete reconnect history | Worker sessions retain every ordered retry and terminal notification, Codex error identity, HTTP status when present, and sanitized details. Terminal attempt reports retain the full history even when report persistence or packet availability later fails. |
 | Determine frequent disconnect cause | The primary Cruise defect was treating every app-server `error` notification as terminal, including `willRetry: true`. Additional deterministic contributors were inherited extension/MCP state, an app-server home that could be unwritable in a restricted worker, unbounded startup/cleanup phases, and shutdown that stopped at SIGTERM. Genuine upstream response-transport or network failures can still exhaust Codex's retry budget. |
 | Remove optional network fields | `networkAccess` is omitted from every emitted app-server sandbox policy. Doctor introspects the live schema and fails if the field becomes required or if omission no longer means the verified Boolean false default. Authenticated inference transport is separate from tool/network egress. |
@@ -113,10 +113,9 @@ The guard intentionally treats tracked paths matched by ignore rules as tracked,
 ### Real Doctor fixture
 
 `fixtures/doctor/repository` is a small, deterministic repository idea with its own `.cruise`
-directory and `.agents/skills/spatiomics-skill`. It contains documentation references, an input
-inspector, a manifest-bound validator, synthetic positive and negative format markers, a Snakemake
-workflow, and tests. Large scientific runtimes and real biological datasets are deliberately not
-vendored or executed.
+directory and repository-local skill. It contains generic documentation, an input inspector, a
+manifest-bound validator, synthetic positive and negative format markers, an offline workflow, and
+tests. Large domain runtimes and real datasets are deliberately not vendored or executed.
 
 ### Regression and adversarial tests
 
@@ -207,7 +206,7 @@ The entries below are filled only from final commands run against the completed 
 | Independent final security review | PASS — no blocker or high-risk issue; independent 79/79 rerun |
 | Complete `npm test` | PASS — 584/584 |
 | `npm run validate` | PASS — 15/15, including six public-skill Doctor/guard contracts |
-| Spatiomics fixture test/validator | PASS — 4/4 and standalone manifest-bound validator |
+| Local fixture test/validator | PASS — 4/4 and standalone manifest-bound validator |
 | Syntax and `git diff --check` | PASS |
 | Source/cache mismatch regression | PASS — unit/adversarial coverage; final static Doctor also failed closed on source `20260715172532` versus installed `20260715165311` and the absent matching cache |
 | Plugin remove/add and managed-agent reinstall | BLOCKED — managed approval rejected the requested removal because Codex usage is exhausted until 2026-07-22 10:03; installed version remains `20260715165311` |
@@ -231,16 +230,16 @@ The entries below are filled only from final commands run against the completed 
   compare-and-swap. Cruise serializes its own workers, pins parents, immediately rechecks, journals
   recovery, and stays paused on mismatch; the final security review must ensure the docs do not
   claim a stronger cross-process atomicity guarantee.
-- Deep Doctor validates the real Cruise/Codex orchestration path and structural spatiomics skill
-  behavior. It is not a substitute for installing every scientific package, processing a real
-  study, or validating a biological conclusion.
+- Deep Doctor validates the real Cruise/Codex orchestration path and structural local-skill
+  behavior. It is not a substitute for installing every domain package, processing real inputs, or
+  validating a domain conclusion.
 
 ## Final constrainedness verdict
 
 > The source changes are constrained and meaningful. They materially improve Cruise in the areas
 > the user requested: installation integrity, real public-skill canaries, reconnect survival and
 > evidence, bounded worker attempts, user-controlled foreign-diff handling, and a realistic
-> spatiomics skill fixture. The size of the diff reflects cross-cutting trust-boundary and
+> repository-local fixture skill. The size of the diff reflects cross-cutting trust-boundary and
 > adversarial test work; no remaining feature surface is unrelated to those outcomes.
 
 That verdict applies to the reviewed source tree, not to completion of the installed rollout. The

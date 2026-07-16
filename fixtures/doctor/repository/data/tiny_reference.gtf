@@ -1,2 +1,0 @@
-chrSynthetic	doctor	gene	1	20	.	+	.	gene_id "SYN_GENE_A"; gene_name "synthetic-alpha";
-chrSynthetic	doctor	gene	21	40	.	+	.	gene_id "SYN_GENE_B"; gene_name "synthetic-beta";

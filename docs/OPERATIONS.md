@@ -59,7 +59,7 @@ cruise doctor
 - Has no workflow liveness deadline; it ends on a semantic terminal result, host failure, or cancellation.
 - Prints a failed workspace path and returns it to JSON callers.
 
-The bundled fixture includes repository-local spatiomics guidance and synthetic structure for StereoPy, STAR, BANKSY, SAW 8.1.3, Snakemake, Leiden, BAM, GEM, GEF/GEFF, H5AD/H5MS, annotations, references, GTF, and SIF. It tests documented boundaries; it does not claim to run every scientific tool or perform biological validation.
+The bundled fixture contains repository-local guidance and synthetic inputs for testing documented boundaries. It is a structural canary only; it does not claim to execute every domain tool or validate a real-world outcome.
 
 ## Automatic update verification
 
