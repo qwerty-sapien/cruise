@@ -88,6 +88,8 @@ const RESUME_ATTESTATIONS = new WeakMap();
 const CONSUMED_RESUME_ATTESTATIONS = new WeakSet();
 const RESUME_RECEIPTS = new WeakSet();
 
+const BUILD_AUTO_APPROVAL_HEADER = /^(?:(?:\[\$cruise:build\]\([^)]+\)|\$cruise:build|cruise:build)[ \t]+)?--auto-approve[ \t]*$/u;
+
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -431,6 +433,54 @@ export function verifyBuildOriginPairAuthority(
   });
   VERIFIED_ORIGIN_PAIRS.add(receipt);
   return receipt;
+}
+
+/**
+ * Verify the explicit, immutable user authorization for Build contract auto-approval.
+ *
+ * This is a semantic authority boundary, not a convenience inference: the exact
+ * `--auto-approve` directive must be the first non-empty line of the initially
+ * captured Build request. Mentions in later prose, repository files, or regenerated
+ * Origin records are not authorization. The returned receipt permits only the
+ * digest-bound Build planning approval; it never starts a queue or authorizes product
+ * writes, Goal activation, permissions, or external effects.
+ */
+export function hasExactBuildAutoApprovalDirective(rawPrompt) {
+  if (typeof rawPrompt !== 'string') return false;
+  const firstNonEmptyLine = rawPrompt
+    .split(/\r?\n/gu)
+    .find((line) => line.trim() !== '')
+    ?.trim() ?? '';
+  return BUILD_AUTO_APPROVAL_HEADER.test(firstNonEmptyLine);
+}
+
+export function verifyBuildAutoApprovalOriginAuthority(
+  buildOriginPairAuthority,
+  { mode } = {},
+) {
+  const binding = ORIGIN_PAIR_AUTHORITIES.get(buildOriginPairAuthority);
+  if (!binding) {
+    throw new Error('Build auto-approval requires opaque Build Origin pair authority');
+  }
+  if (!['bootstrap', 'milestone'].includes(mode)) {
+    throw new TypeError('Build auto-approval mode must be bootstrap or milestone');
+  }
+  const origin = mode === 'bootstrap' ? binding.project : binding.milestone;
+  const rawPrompt = origin.record.origin.raw_prompt;
+  if (!hasExactBuildAutoApprovalDirective(rawPrompt)) {
+    throw new Error(
+      'Build auto-approval requires an exact --auto-approve directive in the immutable request header',
+    );
+  }
+  return deepFreeze({
+    schema_version: 1,
+    kind: 'cruise_verified_build_auto_approval_origin',
+    mode,
+    prompt_sha256: origin.record.origin.prompt_sha256,
+    origin_identity_sha256: origin.originIdentitySha256,
+    origin_pair_sha256: binding.pairDigest,
+    directive: '--auto-approve',
+  });
 }
 
 export function isVerifiedBuildOriginPairReceipt(value) {

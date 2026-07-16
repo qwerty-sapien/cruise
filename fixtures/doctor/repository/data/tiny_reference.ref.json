@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture_only": true,
+  "organism": "synthetic construct",
+  "assembly": "doctor-fixture-v1",
+  "contig_namespace": "chrSynthetic",
+  "fasta": "tiny_reference.fa",
+  "gtf": "tiny_reference.gtf",
+  "files": [
+    {
+      "path": "tiny_reference.fa",
+      "sha256": "d7c523cfb0ef506af9fac2d59eea64a09894e2f2211f6aa13503ad5662a5758f"
+    },
+    {
+      "path": "tiny_reference.gtf",
+      "sha256": "3209275bd074f68c3269fb8849819adc542ff520e3a75db5072f072eb38d5066"
+    }
+  ],
+  "builder": "none; inspection-only fixture",
+  "coordinate_convention": "GTF 1-based inclusive",
+  "license": "repository fixture"
+}

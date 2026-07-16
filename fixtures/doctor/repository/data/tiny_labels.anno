@@ -1,0 +1,3 @@
+gene_id	label	confidence	provenance
+SYN_GENE_A	synthetic-alpha	1.0	doctor-fixture
+SYN_GENE_B	synthetic-beta	1.0	doctor-fixture

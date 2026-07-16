@@ -27,10 +27,12 @@ quick_hard_gates:
   - requires_external_research
   - material_design_choice
 fact:
-  id_pattern: "^PF-\\d{2,}$"
+  id_sequence: "PF-01 through PF-18 in quick_hard_gates order"
   required_coverage: "exactly one evidence-bound verdict for every Quick hard gate"
-  values: "boolean, except failed_quick_repairs which is a non-negative integer; >= 2 activates that gate"
-  maximum_facts: 64
+  values: "boolean, except failed_quick_repairs which is non-negative append-only telemetry; promotion follows semantic gates or an explicit workflow stop condition, never a universal count"
+  minimum_facts: 18
+  maximum_facts: 18
+  immutable_order_and_identity: "facts[n].id and facts[n].signal must match PF-(n+1) and quick_hard_gates[n]"
   maximum_bases_per_fact: 8
   basis_kinds:
     prompt_span: "locator bytes:<start>:<end>; SHA-256 is verified against exact raw prompt bytes"

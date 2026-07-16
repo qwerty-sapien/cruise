@@ -215,11 +215,17 @@ export class AppServerClient extends EventEmitter {
       return terminated.value;
     }
 
+    child.kill?.("SIGKILL");
+    const killed = await waitFor(this._exitPromise, timeoutMs);
+    if (killed.done) {
+      return killed.value;
+    }
+
     const error = new AppServerProcessError(
-      "Timed out waiting for Codex app-server to stop",
-      { signal: "SIGTERM" },
+      "Timed out waiting for Codex app-server to stop after SIGKILL",
+      { signal: "SIGKILL" },
     );
-    this._terminate({ signal: "SIGTERM", cause: error });
+    this._terminate({ signal: "SIGKILL", cause: error });
     return this._exitInfo;
   }
 

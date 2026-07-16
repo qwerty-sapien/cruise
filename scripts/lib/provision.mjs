@@ -828,7 +828,7 @@ export function validateProvisionRun(run) {
         node.requires.length > PROVISION_RUN_MAX_NODES || node.dependents.length > PROVISION_RUN_MAX_NODES) {
       throw new ProvisionValidationError(`${node.id} has invalid dependency fields.`);
     }
-    if (!Array.isArray(node.attempts) || node.attempts.length > 64) {
+    if (!Array.isArray(node.attempts)) {
       throw new ProvisionValidationError(`${node.id} attempts must be an array.`);
     }
   }
@@ -1661,7 +1661,7 @@ export class ProvisionScheduler {
     trustPolicy = {},
     exclusions = [],
     concurrency = 4,
-    maxAttempts = 2,
+    maxAttempts = null,
     maxAuthChecks = 3,
     authWaitTimeoutMs = 60_000,
     authPollIntervalMs = 1_000,
@@ -1680,8 +1680,8 @@ export class ProvisionScheduler {
     if (!Number.isInteger(concurrency) || concurrency < 1) {
       throw new TypeError('Provision concurrency must be a positive integer.');
     }
-    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-      throw new TypeError('Provision maxAttempts must be a positive integer.');
+    if (maxAttempts !== null && (!Number.isInteger(maxAttempts) || maxAttempts < 1)) {
+      throw new TypeError('Provision maxAttempts must be null or a positive integer.');
     }
     if (install !== null || smokeTest !== null || rollback !== null || authCheck !== null) {
       throw new ProvisionValidationError(
@@ -2428,7 +2428,10 @@ export class ProvisionScheduler {
         for (let index = 0; index < ready.length; index += this.concurrency) {
           const batch = ready.slice(index, index + this.concurrency);
           for (const node of batch) {
-            if (this._consumedAttemptCount(node) >= this.maxAttempts) {
+            if (
+              this.maxAttempts !== null &&
+              this._consumedAttemptCount(node) >= this.maxAttempts
+            ) {
               node.status = 'blocked';
               node.blocking_reason = 'attempt_limit_reached';
               node.outcome = { code: 'attempt_limit_reached' };
@@ -2627,7 +2630,10 @@ export class ProvisionScheduler {
     if (!['failed', 'blocked'].includes(node.status)) {
       throw new ProvisionValidationError(`${nodeId} is not retryable from status ${node.status}.`);
     }
-    if (this._consumedAttemptCount(node) >= this.maxAttempts) {
+    if (
+      this.maxAttempts !== null &&
+      this._consumedAttemptCount(node) >= this.maxAttempts
+    ) {
       throw new ProvisionValidationError(`${nodeId} reached its bounded attempt limit.`, {
         code: 'CRUISE_PROVISION_ATTEMPT_LIMIT',
       });

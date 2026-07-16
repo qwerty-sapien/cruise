@@ -15,15 +15,38 @@ Cruise has three deliberate phases:
 
 ## Keep the root coordinator in control
 
-The root agent owns deterministic routing, user-facing questions, both approvals, permission requests, native Goal activation/status checks, worker spawning, integration, CLOSEOUT ownership, and final synthesis. It never changes its own model and never performs substantive reconnaissance, planning, implementation, or verification itself.
+The root agent owns deterministic routing, user-facing questions, both approvals, permission requests, native Goal activation/status checks, worker spawning, integration, CLOSEOUT ownership, and final synthesis. It never performs substantive reconnaissance, planning, implementation, or verification itself. Codex CLI/GUI retain their host model; the native Cruise client alone applies the selected class to its host thread.
 
-Delegate ordinary Goal contract planning and independent normal verification through level `3` using `cruise worker`. Levels `5`, `6`, and `7` cover architectural/consequential implementation or increasingly exceptional adjudication. Bounded supporting mapping may use level `2`. Every launch carries exact Origin/baseline and approval snapshots, task/evidence IDs, ownership, permissions/effects, dependencies, limits, and stop rules; every returned attempt report and launcher receipt is persisted immutably before integration.
+Delegate ordinary Goal contract planning, execution, and independent normal verification through the persisted Cruise class default from the passing Doctor report using `cruise worker`. Consequence floors and levels `5`, `6`, and `7` still govern architectural/consequential implementation or increasingly exceptional adjudication; bounded supporting mapping may use level `2`. Every launch carries exact Origin/baseline and approval snapshots, task/evidence IDs, ownership, permissions/effects, dependencies, limits, and stop rules; every returned attempt report and launcher receipt is persisted immutably before integration.
 
 Workers never ask questions, accept **Approve Plan**/**Start Cruise**, activate Goal mode, integrate siblings, write CLOSEOUT, or address the user. The root supplies only the selected level and bounded packet; `cruise worker` owns the runtime configuration and receipt.
 
+## Establish worker readiness before creating run state
+
+Run `cruise doctor --json` before capturing Origin or writing any run artifact. Continue only
+when the command exits zero and its top-level `ok` is `true`; explicitly confirm `model-policy`,
+`worker-host-rule`, `installed-plugin-digest`, and `client-on-path` all pass, while treating every
+other failed Doctor check as blocking too. Otherwise create no run, packet, or evidence record and
+give the single setup action reported by Doctor; the attested launcher is the complete input
+boundary and needs no extra user-facing transfer ceremony.
+
+After readiness passes, take the absolute `workerExecutable` from that same Doctor result and
+launch every `<workerExecutable> worker` command directly through the host execution tool; never
+use the PATH token `cruise`. Keep the command cwd and `-C` equal to the canonical repository and
+keep packet/report paths as different direct named artifacts in the same
+`.cruise/runs/<run-id>` directory. Use `sandbox_permissions: "require_escalated"` and the concise
+justification `Run the Doctor-attested Cruise worker.` (or the host's equivalent field). The exact
+scoped rule installed and exercised by Doctor makes this non-interactive. Never try the worker in
+the ordinary sandbox first and never turn a connection failure into a second launch. If the
+launcher returns `CRUISE_WORKER_HOST_PATH_LOST`, preserve that incident, stop without substituting
+root work, and run `cruise doctor --deep --install-worker-rule`; do not produce a
+repository-export authorization question.
+
 ## Preserve origin and route once
 
-Read [the shared invocation contract](../../internal/shared/invocation-contract.md) before any Goal-specific reconnaissance or question. Capture the triggering prompt verbatim in `.cruise/goal/ORIGIN.yaml`, validate its SHA-256, run the bounded deterministic probe and root-owned routing decision, and record worker resolution and any admission reason. Goal remains the selected route when consequence, durability, slicing, material permissions, or robust recovery is established. Hand a smaller finite current-thread outcome to Refine, an unknown-cause failure to Debug, a native Codex or GitHub review request to the corresponding native review surface, or evidence-only inquiry to Research; preserve the current origin record and never reroute recursively.
+Read [the shared invocation contract](../../internal/shared/invocation-contract.md) before any Goal-specific reconnaissance or question. Capture the triggering prompt verbatim in `.cruise/goal/ORIGIN.yaml`, validate its SHA-256, let `begin` automatically establish shared non-destructive foreign-diff monitoring before any worker or further write, then run the bounded deterministic probe and root-owned routing decision and record worker resolution and any admission reason. Do not ask a speculative start question. Handle a later unexpected change only through the shared root-owned incident pause protocol after the concrete incident is persisted. If intentional drift is accepted before routing, preserve its bytes, never rewrite the stale immutable Origin, and continue only from a fresh Origin in a new run. Goal remains the selected route when consequence, durability, slicing, material permissions, or robust recovery is established. Hand a smaller finite current-thread outcome to Refine, an unknown-cause failure to Debug, a native Codex or GitHub review request to the corresponding native review surface, or evidence-only inquiry to Research; preserve the current origin record and never reroute recursively.
+
+At terminal success, perform the shared final clean check and call `foreign-diff-finalize --run-dir <run-dir> --expected-inventory-sha256 <checkpoint-sha256>` before the final response. Never finalize a failed, dirty, active, blocked, or waiting run.
 
 For new suites, use stable `G/R/AC/D/T/E/F/H` identifiers and require every `T-XX` task to name `satisfies`, `preserves`, and `verification`. Existing locked suites that use legacy `N-XX`/`VG-XX` identifiers remain readable and must not be rewritten; reconcile them explicitly into a new origin-bearing candidate before new activation. The final verifier compares raw origin, normalized clauses and ledger, decisions, plan, actual diff, evidence, documentation, effects, and waivers—not merely task completion.
 

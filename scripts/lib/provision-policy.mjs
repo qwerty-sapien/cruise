@@ -4882,8 +4882,8 @@ export async function runStructuredAuthJob({
     .filter(([key, value]) => allowlist.has(key) && typeof value === 'string' &&
       !SENSITIVE_ARG.test(key) && !SENSITIVE_ARG.test(value)));
   const [file, ...args] = job.command.argv;
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30 * 60 * 1000) {
-    throw new TypeError('Auth runner timeout must be between 1 ms and 30 minutes.');
+  if (timeoutMs !== null && (!Number.isInteger(timeoutMs) || timeoutMs < 1)) {
+    throw new TypeError('Auth runner timeout must be null or a positive integer.');
   }
   await persistAuthState({
     status: 'running',
@@ -4903,7 +4903,9 @@ export async function runStructuredAuthJob({
   let timer = null;
   let abortListener = null;
   const timeout = new Promise((resolveTimeout) => {
-    timer = setTimeout(() => resolveTimeout({ type: 'timed_out' }), timeoutMs);
+    if (timeoutMs !== null) {
+      timer = setTimeout(() => resolveTimeout({ type: 'timed_out' }), timeoutMs);
+    }
   });
   const cancelled = new Promise((resolveCancelled) => {
     if (abortSignal?.aborted) resolveCancelled({ type: 'cancelled' });
@@ -4940,8 +4942,8 @@ export async function runStructuredAuthJob({
   }
   let check = null;
   let postAuthTimer = null;
-  const remainingMs = timeoutMs - (Date.now() - startedAt);
-  const postOutcome = remainingMs <= 0
+  const remainingMs = timeoutMs === null ? null : timeoutMs - (Date.now() - startedAt);
+  const postOutcome = remainingMs !== null && remainingMs <= 0
     ? { type: 'timed_out' }
     : await Promise.race([
         Promise.resolve().then(() => postAuthCheck({
@@ -4951,9 +4953,9 @@ export async function runStructuredAuthJob({
           (value) => ({ type: 'check', value }),
           () => ({ type: 'check_error' }),
         ),
-        new Promise((resolvePostTimeout) => {
+        ...(remainingMs === null ? [] : [new Promise((resolvePostTimeout) => {
           postAuthTimer = setTimeout(() => resolvePostTimeout({ type: 'timed_out' }), remainingMs);
-        }),
+        })]),
         cancelled,
       ]);
   if (postAuthTimer) clearTimeout(postAuthTimer);

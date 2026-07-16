@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spatiomics"
+  short_description: "Safe spatial transcriptomics workflows"
+  default_prompt: "Use $spatiomics-skill to inspect and plan a provenance-preserving spatial transcriptomics workflow."

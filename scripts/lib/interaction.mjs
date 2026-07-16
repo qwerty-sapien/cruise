@@ -2,42 +2,40 @@ import {
   isApprovePlanChoice,
   isStartCruiseChoice,
 } from './goal-contract.mjs';
+import { sanitizeUserFacingText } from './user-facing-output.mjs';
 
 function writeLine(output, value = '') {
   output.write(`${value}\n`);
 }
 
-function questionTitle(question) {
-  const header = String(question.header ?? '').trim();
-  const prompt = String(question.question ?? '').trim();
+function questionTitle(question, style) {
+  const header = sanitizeUserFacingText(question.header, { style });
+  const prompt = sanitizeUserFacingText(question.question, { style });
   return header ? `${header}: ${prompt}` : prompt;
 }
 
-function displayOption(option) {
-  const label = String(option.label ?? '').trim();
-  const description = String(option.description ?? '').trim();
+function displayOption(option, style) {
+  const label = sanitizeUserFacingText(option.label, { style });
+  const description = sanitizeUserFacingText(option.description, { style });
   return description ? `${label} — ${description}` : label;
 }
 
-function visibleText(value) {
-  return String(value ?? '')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '')
-    .replace(/\r\n?/gu, '\n')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu, ' ');
+function visibleText(value, style) {
+  return sanitizeUserFacingText(value, { style });
 }
 
-function displayCommand(command) {
+function displayCommand(command, style) {
   if (Array.isArray(command)) {
     return command
       .map((argument, index) => `argv[${index}]=${JSON.stringify(String(argument))}`)
       .join('\n');
   }
-  return String(command ?? '').trim();
+  return sanitizeUserFacingText(command, { style });
 }
 
 export async function answerUserInputRequest(
   params,
-  { pickOne, readLine, input, output, lineReader = null, signal = null },
+  { pickOne, readLine, input, output, lineReader = null, signal = null, communicationStyle = 'default' },
 ) {
   const questions = params.questions ?? [];
   if (questions.length !== 1) {
@@ -64,7 +62,7 @@ export async function answerUserInputRequest(
     try {
       if (options.length === 0) {
         answer = await readLine({
-          prompt: `${questionTitle(question)} `,
+          prompt: `${questionTitle(question, communicationStyle)} `,
           input,
           output,
           secret: Boolean(question.isSecret),
@@ -72,10 +70,10 @@ export async function answerUserInputRequest(
           signal,
         });
       } else {
-        const pickerOptions = options.map(displayOption);
+        const pickerOptions = options.map((option) => displayOption(option, communicationStyle));
         if (question.isOther) pickerOptions.push('Other — type a different answer');
         const picked = await pickOne({
-          title: questionTitle(question),
+          title: questionTitle(question, communicationStyle),
           options: pickerOptions,
           input,
           output,
@@ -149,6 +147,7 @@ export async function answerApprovalRequest(
     availableDecisions,
     lineReader = null,
     signal = null,
+    communicationStyle = 'default',
   },
 ) {
   const decisions = (availableDecisions ?? ['accept', 'decline', 'cancel']).filter(
@@ -156,12 +155,12 @@ export async function answerApprovalRequest(
   );
   if (decisions.length === 0) decisions.push('decline');
 
-  const reason = String(params.reason ?? '').trim();
-  const command = displayCommand(params.command);
+  const reason = sanitizeUserFacingText(params.reason, { style: communicationStyle });
+  const command = displayCommand(params.command, communicationStyle);
   const title = reason || (command ? 'Command approval' : 'Permission approval');
   if (command) {
     writeLine(output, 'Command:');
-    writeLine(output, visibleText(command));
+    writeLine(output, visibleText(command, communicationStyle));
   }
 
   const picked = await pickOne({
@@ -177,10 +176,10 @@ export async function answerApprovalRequest(
 }
 
 export function formatGoalStatus(goal) {
-  if (!goal) return 'No persisted Goal';
+  if (!goal) return 'No work status is available';
   const tokenText =
     typeof goal.tokensUsed === 'number'
       ? `, ${goal.tokensUsed.toLocaleString()} tokens used`
       : '';
-  return `Goal ${goal.status}${tokenText}`;
+  return `Work ${goal.status}${tokenText}`;
 }

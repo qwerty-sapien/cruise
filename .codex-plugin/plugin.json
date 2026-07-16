@@ -1,7 +1,7 @@
 {
   "name": "cruise",
-  "version": "0.1.0+codex.20260713111124",
-  "description": "Route coding work into six exclusive evidence-backed workflows, from quick edits to durable native Goals.",
+  "version": "0.1.0+codex.20260716081908",
+  "description": "Plan, review, and carry out software work with Codex.",
   "author": {
     "name": "qwerty-sapien"
   },
@@ -26,8 +26,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Cruise",
-    "shortDescription": "Six exclusive evidence-backed coding workflows",
-    "longDescription": "Cruise preserves the raw request, probes and routes once, then applies one of six exclusive workflows: durable Build foundations and milestones, bounded Quick edits, finite Refine plans, durable native Goals, systematic Debug repair, or source-backed Research. Machine records are YAML, model choices resolve against host capabilities, and the Goal terminal client retains separate byte-locked Plan and Start approvals.",
+    "shortDescription": "Guided coding workflows",
+    "longDescription": "Cruise helps turn a coding request into the right-sized plan, change, investigation, or research task. It asks only the questions that change the result and keeps Codex's normal safety checks in charge.",
     "developerName": "qwerty-sapien",
     "category": "Developer Tools",
     "capabilities": [
@@ -36,10 +36,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use $cruise:build to establish this project foundation or next milestone.",
-      "Use $cruise:quick for this exact small change.",
-      "Use $cruise:refine to approve and execute this finite feature.",
-      "Use $cruise:goal to stage and durably execute this migration."
+      "Use $cruise:build to plan a new project or major milestone.",
+      "Use $cruise:refine to plan and carry out this feature.",
+      "Use $cruise:goal to carry out this larger migration."
     ]
   }
 }

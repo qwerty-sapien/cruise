@@ -40,7 +40,7 @@ export const WORKER_POLICY_RECORD_SCHEMA = Object.freeze({
     schema_version: { const: 1 },
     kind: { const: 'cruise_root_managed_worker_policy' },
     recommended_level: { type: 'integer', minimum: 1, maximum: 7 },
-    attempt_number: { type: 'integer', minimum: 1, maximum: 2 },
+    attempt_number: { type: 'integer', minimum: 1 },
     soft_escalation_reason: { type: ['string', 'null'], minLength: 1 },
     coordinator: {
       type: 'object',
@@ -113,8 +113,8 @@ export function resolveWorkerPolicy({
   softEscalationReason = null,
 } = {}) {
   const level = normalizeRecommendedLevel(recommendedLevel);
-  if (!Number.isInteger(attemptNumber) || attemptNumber < 1 || attemptNumber > 2) {
-    throw new TypeError('worker attemptNumber must be 1 or 2');
+  if (!Number.isInteger(attemptNumber) || attemptNumber < 1) {
+    throw new TypeError('worker attemptNumber must be a positive integer');
   }
   if (
     softEscalationReason != null &&
@@ -123,7 +123,7 @@ export function resolveWorkerPolicy({
     throw new TypeError('softEscalationReason must be null or a non-empty string');
   }
   if ((attemptNumber === 1) !== (softEscalationReason == null)) {
-    throw new Error('only the second worker attempt may carry one soft escalation reason');
+    throw new Error('the initial worker attempt has no escalation reason; every later attempt requires one');
   }
 
   const selection = WORKER_LEVEL_POLICY[level];
@@ -172,21 +172,19 @@ export function resolveWorkerPolicy({
 }
 
 /**
- * Permit exactly one soft escalation. The level increases by one and is capped
- * at 7, so the mapping is monotonic even at the upper bound.
+ * Create the next evidenced soft-failure attempt. The level increases by one
+ * and is capped at 7, so selection remains monotonic even when a workflow's
+ * reviewed stop conditions permit additional attempts at the strongest level.
  */
 export function escalateWorkerPolicy(previous, { catalog = [], reason } = {}) {
   assertYamlSchema(previous, WORKER_POLICY_RECORD_SCHEMA, { name: 'previous worker policy' });
-  if (previous.attempt_number >= 2 || previous.soft_escalation_reason != null) {
-    throw new Error('Cruise allows at most one root-managed worker escalation.');
-  }
   if (typeof reason !== 'string' || !reason.trim()) {
     throw new TypeError('a soft worker escalation reason is required');
   }
   return resolveWorkerPolicy({
     recommendedLevel: Math.min(previous.recommended_level + 1, 7),
     catalog,
-    attemptNumber: 2,
+    attemptNumber: previous.attempt_number + 1,
     softEscalationReason: reason,
   });
 }

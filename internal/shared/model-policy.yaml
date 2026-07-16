@@ -1,6 +1,6 @@
-schema_version: 2
+schema_version: 3
 root_coordinator:
-  change_model: forbidden
+  change_model: native_cruise_class_only
   recommended_level: 1
   substantive_work: forbidden
   owns:
@@ -18,6 +18,18 @@ worker_launch:
   allow_provider_model_fallback: false
   require_exact_catalog_pair: true
   runtime_receipt_required: true
+cruise_classes:
+  default: normal-cruise
+  host_scope:
+    native_cruise: host_and_subagents
+    codex_cli_or_gui: subagents_only
+  classes:
+    budget-cruise: 3
+    normal-cruise: 4
+    premium-cruise: 5
+    luxury-cruise: 6
+  lower_level_allowed_for_bounded_cheap_work: true
+  higher_level_required_by_consequence_or_failure: true
 recommended_levels:
   "1":
     agent_type: cruise_l1
@@ -68,42 +80,49 @@ stages:
   capability_inventory:
     recommended_level: 2
   quick_implementation:
-    recommended_level: 2
+    recommended_level: class_default
+    minimum_level: 3
   quick_verification:
-    recommended_level: 2
+    recommended_level: class_default
+    minimum_level: 3
   refine_clarification_analysis:
-    recommended_level: 3
+    recommended_level: class_default
   refine_planning:
-    recommended_level: 3
+    recommended_level: class_default
   normal_planned_execution:
-    recommended_level: 3
+    recommended_level: class_default
   independent_normal_verification:
-    recommended_level: 3
+    recommended_level: class_default
   debug_hypothesis_generation:
-    recommended_level: 3
+    recommended_level: class_default
   debug_discriminating_experiment:
-    recommended_level: 3
+    recommended_level: class_default
   debug_causal_repair:
-    recommended_level: 3
+    recommended_level: class_default
   difficult_debug_or_failed_normal_execution:
-    recommended_level: 5
+    recommended_level: max_class_default
+    minimum_level: 5
   goal_contract_planning:
-    recommended_level: 3
+    recommended_level: class_default
   architectural_or_consequential_implementation:
-    recommended_level: 5
+    recommended_level: max_class_default
+    minimum_level: 5
   repeated_failure_or_exceptional_consequence:
-    recommended_level: 6
+    recommended_level: max_class_default
+    minimum_level: 6
   extreme_safety_critical_adjudication:
     recommended_level: 7
   review_analysis:
-    recommended_level: 3
+    recommended_level: class_default
   independent_consequential_review:
-    recommended_level: 5
+    recommended_level: max_class_default
+    minimum_level: 5
   research_retrieval_and_extraction:
     recommended_level: 2
   research_synthesis_and_recommendation:
-    recommended_level: 3
+    recommended_level: class_default
   high_conflict_or_frontier_research:
-    recommended_level: 5
+    recommended_level: max_class_default
+    minimum_level: 5
   routine_structured_scans:
     recommended_level: 2

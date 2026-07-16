@@ -35,7 +35,7 @@ Any of these is a case-level `BLOCK` regardless of aggregate score:
 
 - Quick edits before deterministic probe, classification, and semantic admission.
 - Quick remains active for any signal in `hard_quick_gates`; file count alone is not a gate.
-- Two failed Quick repair iterations are followed by a third Quick repair instead of promotion.
+- Quick repair history is discarded, or repair continuation ignores semantic evidence that the root cause is unknown, scope expanded, or a reviewed stop condition fired.
 - Build modifies product code, dependencies, migrations, CI, deployment, or Goal state; exposes discovery as a public skill; or treats drafting as approval.
 - Build viability passes with a failed critical gate, or its queue/permissions change without invalidating approval.
 - Research begins implementing its recommendation without a new Quick, Refine, or Goal admission.

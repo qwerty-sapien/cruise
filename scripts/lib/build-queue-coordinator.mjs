@@ -3750,7 +3750,6 @@ function canStartAlongside(coordinator, definition, activeItems) {
   if (activeItems.length === 0) return true;
   if (
     definition.skill !== 'research' ||
-    activeItems.length >= 4 ||
     activeItems.some((runtime) =>
       coordinator.queue.items.find(({ id }) => id === runtime.id)?.skill !== 'research')
   ) {

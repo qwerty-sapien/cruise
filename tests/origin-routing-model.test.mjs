@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, truncate, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, realpath, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -141,6 +141,27 @@ test('Origin preserves raw prompt bytes, exact hash, baseline schema, and immuta
     () => validateOriginRecord(baselineTampered, { expectedOrigin: record }),
     /repository baseline is immutable/,
   );
+});
+
+test('repository baselines exclude tracked host metadata and disposable caches', async () => {
+  const root = await gitRepository();
+  await mkdir(join(root, 'pkg', '__pycache__'), { recursive: true });
+  await writeFile(join(root, '.DS_Store'), 'tracked host metadata\n');
+  await writeFile(join(root, 'pkg', '__pycache__', 'module.pyc'), 'tracked cache\n');
+  execFileSync('git', ['add', '-f', '.DS_Store', 'pkg/__pycache__/module.pyc'], { cwd: root });
+  execFileSync('git', ['commit', '-qm', 'tracked non-product fixtures'], { cwd: root });
+
+  const before = captureRepositoryBaseline(root);
+  await mkdir(join(root, 'pkg', '__pycache__'), { recursive: true });
+  await writeFile(join(root, '.DS_Store'), 'changed host metadata with different bytes\n');
+  await writeFile(join(root, 'pkg', '__pycache__', 'module.pyc'), 'changed cache\n');
+  await mkdir(join(root, '.pytest_cache'), { recursive: true });
+  await writeFile(join(root, '.pytest_cache', 'state'), 'new cache\n');
+  const after = captureRepositoryBaseline(root);
+
+  assert.equal(after.dirty_state_digest, before.dirty_state_digest);
+  await assert.rejects(lstat(join(root, '.DS_Store')), /ENOENT/u);
+  await assert.rejects(lstat(join(root, 'pkg', '__pycache__')), /ENOENT/u);
 });
 
 test('Build Origin binds repository-evidenced mode and stable project identity without changing shared records', async () => {
@@ -345,6 +366,21 @@ test('repository probe gathers only bounded identity, status, instructions, and 
   assert.equal(probe.truncated.semantic_evidence_bytes, false);
 });
 
+test('repository probes never expose host metadata or disposable cache paths', async () => {
+  const root = await gitRepository();
+  await mkdir(join(root, 'pkg', '__pycache__'), { recursive: true });
+  await writeFile(join(root, '.DS_Store'), 'tracked host metadata\n');
+  await writeFile(join(root, 'pkg', '__pycache__', 'module.pyc'), 'tracked cache\n');
+  execFileSync('git', ['add', '-f', '.DS_Store', 'pkg/__pycache__/module.pyc'], { cwd: root });
+  execFileSync('git', ['commit', '-qm', 'tracked non-product fixtures'], { cwd: root });
+  await writeFile(join(root, '.DS_Store'), 'changed metadata\n');
+  await writeFile(join(root, 'pkg', '__pycache__', 'module.pyc'), 'changed cache\n');
+  await writeFile(join(root, 'app.txt'), 'product change\n');
+
+  const probe = probeRepository({ repositoryRoot: root });
+  assert.deepEqual(probe.status_entries, ['M app.txt']);
+});
+
 test('evidence-bound semantic assessment represents and enforces every hard Quick gate', async () => {
   const root = await gitRepository();
   const rawPrompt = 'Change the requested behavior only after checking every Quick gate.\n';
@@ -408,8 +444,13 @@ test('evidence-bound semantic assessment represents and enforces every hard Quic
       probe,
       classifier: classifierOutput(),
     });
-    assert.notEqual(admission.route, 'quick', signal);
-    assert.deepEqual(admission.promotion_reasons, [signal]);
+    if (signal === 'failed_quick_repairs') {
+      assert.equal(admission.route, 'quick', signal);
+      assert.deepEqual(admission.promotion_reasons, []);
+    } else {
+      assert.notEqual(admission.route, 'quick', signal);
+      assert.deepEqual(admission.promotion_reasons, [signal]);
+    }
   }
 });
 
@@ -440,7 +481,7 @@ test('semantic enrichment rejects incomplete assessment and unverified prompt or
     enrichment: { ...base, assessed_quick_gates: QUICK_HARD_GATE_SIGNALS.slice(1) },
     rawPrompt,
     repositoryBaseline: baseline,
-  }), /every one of the 18 Quick hard gates/);
+  }), /exact ordered 17 semantic gates plus repair-history telemetry/);
   assert.throws(() => enrichDeterministicProbe({
     probe: probeRepository({ repositoryRoot: root }),
     enrichment: { ...base, prompt_sha256: '0'.repeat(64) },
@@ -452,7 +493,39 @@ test('semantic enrichment rejects incomplete assessment and unverified prompt or
     enrichment: { ...base, facts: [] },
     rawPrompt,
     repositoryBaseline: baseline,
-  }), /every Quick hard gate requires an evidence-bound verdict/);
+  }), /exactly 17 semantic gates plus repair-history telemetry|at least 18/u);
+  assert.throws(() => enrichDeterministicProbe({
+    probe: probeRepository({ repositoryRoot: root }),
+    enrichment: {
+      ...base,
+      facts: [...base.facts, {
+        id: 'PF-19',
+        signal: 'durable_continuation_required',
+        value: true,
+        basis: promptBasis,
+      }],
+    },
+    rawPrompt,
+    repositoryBaseline: baseline,
+  }), /at most 18|Quick hard gate/u);
+  assert.throws(() => enrichDeterministicProbe({
+    probe: probeRepository({ repositoryRoot: root }),
+    enrichment: { ...base, facts: [...base.facts].reverse() },
+    rawPrompt,
+    repositoryBaseline: baseline,
+  }), /must preserve PF-01\/public_api_change/u);
+  assert.throws(() => enrichDeterministicProbe({
+    probe: probeRepository({ repositoryRoot: root }),
+    enrichment: {
+      ...base,
+      facts: base.facts.map((fact, index) => ({
+        ...fact,
+        id: `PF-${String(index + 81).padStart(2, '0')}`,
+      })),
+    },
+    rawPrompt,
+    repositoryBaseline: baseline,
+  }), /must preserve PF-01\/public_api_change/u);
   assert.throws(() => enrichDeterministicProbe({
     probe: probeRepository({ repositoryRoot: root }),
     enrichment: {
@@ -652,15 +725,27 @@ test('Quick hard gates promote deterministically while file count alone never de
   });
   assert.equal(unknownCause.selected_route, 'debug');
 
-  const exhaustedQuickRepair = await classifyRoute({
+  const repairHistoryAlone = await classifyRoute({
     selectedSkill: 'quick',
     rawPrompt: 'Make the known change.',
     probe: createDeterministicProbe({ signals: { failed_quick_repairs: 2 } }),
     modelCatalog: modelCatalog(),
     classify: () => classifierOutput(),
   });
-  assert.equal(exhaustedQuickRepair.selected_route, 'debug');
-  assert.deepEqual(exhaustedQuickRepair.promotion_reasons, ['failed_quick_repairs']);
+  assert.equal(repairHistoryAlone.selected_route, 'quick');
+  assert.deepEqual(repairHistoryAlone.promotion_reasons, []);
+
+  const uncertainRepair = await classifyRoute({
+    selectedSkill: 'quick',
+    rawPrompt: 'Make the known change.',
+    probe: createDeterministicProbe({
+      signals: { failed_quick_repairs: 5, root_cause_unknown: true },
+    }),
+    modelCatalog: modelCatalog(),
+    classify: () => classifierOutput(),
+  });
+  assert.equal(uncertainRepair.selected_route, 'debug');
+  assert.deepEqual(uncertainRepair.promotion_reasons, ['root_cause_unknown']);
 
   const largeButOtherwiseKnown = await classifyRoute({
     selectedSkill: 'quick',
@@ -693,7 +778,7 @@ test('classifier schema rejects prose, extra fields, and hidden reasoning disclo
   );
 });
 
-test('model policy maps Luna/Terra/Sol IDs, degrades truthfully, and caps escalation', () => {
+test('model policy maps Luna/Terra/Sol IDs, degrades truthfully, and permits reviewed escalation histories', () => {
   const exact = resolveModelPolicy({
     stage: 'research_synthesis_and_recommendation',
     catalog: modelCatalog(),
@@ -701,14 +786,14 @@ test('model policy maps Luna/Terra/Sol IDs, degrades truthfully, and caps escala
   assert.deepEqual(exact.requested, {
     tier: 'terra',
     model_id: MODEL_IDS.terra,
-    reasoning_effort: 'high',
+    reasoning_effort: 'xhigh',
   });
   assert.equal(exact.resolved.model_id, MODEL_IDS.terra);
-  assert.equal(exact.resolved.reasoning_effort, 'high');
+  assert.equal(exact.resolved.reasoning_effort, 'xhigh');
   assert.equal(exact.degraded, false);
   assert.deepEqual(modelRequestOptions(exact), {
     model: MODEL_IDS.terra,
-    reasoningEffort: 'high',
+    reasoningEffort: 'xhigh',
   });
 
   const withoutLuna = modelCatalog().slice(1);
@@ -733,10 +818,19 @@ test('model policy maps Luna/Terra/Sol IDs, degrades truthfully, and caps escala
   assert.equal(second.requested.tier, 'sol');
   assert.equal(second.attempt_number, 2);
   assert.equal(second.escalation_reason, 'one soft execution failure');
-  assert.throws(
-    () => escalateModelPolicy(second, { catalog: modelCatalog(), reason: 'again' }),
-    /at most one/,
-  );
+  const third = escalateModelPolicy(second, {
+    catalog: modelCatalog(),
+    reason: 'second evidenced soft execution failure',
+  });
+  assert.equal(third.requested.tier, 'sol');
+  assert.equal(third.requested.reasoning_effort, 'ultra');
+  assert.equal(third.attempt_number, 3);
+  const fourth = escalateModelPolicy(third, {
+    catalog: modelCatalog(),
+    reason: 'third evidenced soft execution failure',
+  });
+  assert.equal(fourth.requested.reasoning_effort, 'max');
+  assert.equal(fourth.attempt_number, 4);
 });
 
 test('model/list validation requires the complete app-server catalog shape', () => {

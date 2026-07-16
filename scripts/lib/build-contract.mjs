@@ -15,6 +15,7 @@ import { milestoneContractDigest } from './milestone-contract-digest.mjs';
 import {
   scanBuildIdentifiers,
   validateBuildIdRegistry,
+  verifyBuildAutoApprovalOriginAuthority,
   verifyBuildOriginPairAuthority,
   verifyValidatedBuildIdHistoryAuthority,
 } from './build-history.mjs';
@@ -332,9 +333,41 @@ export function attestStructuredBuildApprovalSelection(event) {
   return selection;
 }
 
-function requireStructuredBuildSelection(selection, mode) {
+/**
+ * Mint the same one-use, review-digest-bound selection authority when the
+ * immutable triggering request explicitly opted into `--auto-approve`.
+ * This approves only the Build planning contract represented by reviewDigest.
+ */
+export function attestOriginBoundBuildAutoApprovalSelection({
+  buildOriginPairAuthority,
+  mode,
+  reviewDigest,
+  selectedAt = () => new Date(),
+} = {}) {
+  assertDigest(reviewDigest, 'Build auto-approval reviewDigest');
+  const originAuthority = verifyBuildAutoApprovalOriginAuthority(
+    buildOriginPairAuthority,
+    { mode },
+  );
+  const expected = BUILD_SELECTION_OPTIONS[mode];
+  if (!expected) throw new TypeError('Build auto-approval mode must be bootstrap or milestone');
+  const selection = deepFreeze({
+    kind: 'cruise_structured_build_approval_selection',
+    mode,
+    source: 'origin_auto_approval',
+    interaction_id: `origin-auto-approval:${originAuthority.prompt_sha256}`,
+    option_id: expected.id,
+    selected_label: expected.label,
+    review_digest: reviewDigest,
+    selected_at: nowIso(selectedAt),
+  });
+  STRUCTURED_BUILD_SELECTIONS.add(selection);
+  return selection;
+}
+
+function requireBuildApprovalSelection(selection, mode) {
   if (!isPlainObject(selection) || !STRUCTURED_BUILD_SELECTIONS.has(selection)) {
-    throw new Error('Build approval requires a trusted opaque structured-selection token');
+    throw new Error('Build approval requires trusted opaque selection authority');
   }
   if (selection.mode !== mode || selection.selected_label !== approvalLabel(mode)) {
     throw new Error('Build approval selection does not match the requested mode');
@@ -3604,7 +3637,7 @@ export async function captureBuildApproval({
   if (selectedLabel !== undefined) {
     throw new Error('typed/free-text selectedLabel cannot mint Build approval');
   }
-  const selection = requireStructuredBuildSelection(approvalSelection, mode);
+  const selection = requireBuildApprovalSelection(approvalSelection, mode);
   const readinessAuthority = requireBuildApprovalReadiness(approvalReadiness, mode);
   assertDigest(repositoryBaselineDigest, 'repositoryBaselineDigest');
   await assertFreshProductRepositoryBaseline(root, repositoryBaselineDigest);
@@ -3702,7 +3735,7 @@ export async function verifyBuildApproval({
   if (approval.selected_label !== approvalLabel(approval.mode)) {
     throw new Error('Build approval label is not exact');
   }
-  const selection = requireStructuredBuildSelection(approvalSelection, approval.mode);
+  const selection = requireBuildApprovalSelection(approvalSelection, approval.mode);
   if (canonicalJson(selectionSnapshot(selection)) !== canonicalJson(approval.approval_selection)) {
     throw new Error('trusted structured approval selection does not match the persisted snapshot');
   }

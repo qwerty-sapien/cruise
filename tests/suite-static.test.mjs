@@ -47,7 +47,7 @@ const REQUIRED_COVERAGE = Object.freeze([
   'routing.model_resolution_recorded',
   'quick.focused_success',
   'quick.scope_expansion_promotes',
-  'quick.two_repairs_promote',
+  'quick.uncertain_repairs_promote',
   'quick.api_and_migration_rejected',
   'quick.no_formal_artifacts',
   'refine.zero_questions',

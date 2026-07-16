@@ -228,5 +228,6 @@ Readiness attestation also is not approval. It fails unless repository evidence 
 chosen mode, every mechanically blocking readiness condition is clear, evidence citations are
 stable `E-XX` references to an opaque `attestBuildReadinessEvidence` authority, and viability is
 exactly `ready_for_build`; it is bound to repository root/baseline,
-target IDs, and Origin hashes. Only the later review-digest-echoing structured choice can be
+target IDs, and Origin hashes. Only the later review-digest-echoing structured choice—or an exact
+immutable request-header `--auto-approve` authority bound to that same displayed digest—can be
 captured as Build approval, and capture fails if the product baseline or reviewed bytes changed.

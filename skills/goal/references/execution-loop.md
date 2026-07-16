@@ -25,6 +25,8 @@ Do not enter execution until:
 - Start is bound to exact repository and artifact identities;
 - the immediate time-of-use identity recheck passes;
 - the permission envelope names allowed and prohibited effects;
+- shared non-destructive foreign-diff monitoring is active automatically, with no speculative
+  start question or restoration authority;
 - `ORIGIN.yaml`, `ALIGNMENT.md`, `PLAN.md`, and `GOAL.md` resolve to the exact approved identities, and the raw prompt hash validates;
 - exactly one execution branch applies: callable native Goal confirmed active, or the separately selected, digest-bound **Execute in Current Thread** fallback with a `D-XX` loss-of-durability decision and no native handoff;
 - `CLOSEOUT.md` is created with activation/fallback provenance.
@@ -81,6 +83,7 @@ Before every command or write:
 4. link any non-routine effect to the locked permission entry;
 5. obtain the runtime/tool approval still required by the environment;
 6. confirm cleanup and evidence capture.
+7. recheck the shared foreign-diff inventory and stop on any foreign or ambiguous change.
 
 If a command can write caches, generated outputs, snapshots, a lockfile, or an external system, include those outputs in ownership. A permission entry does not defeat sandbox, managed policy, or tool approval.
 
@@ -172,13 +175,24 @@ Give each write-capable subagent:
 - requirement to return an immutable attempt report and never edit `.cruise/goal/CLOSEOUT.md`;
 - instruction to report accidental out-of-scope mutation without cleaning it.
 
-The coordinator remains the sole CLOSEOUT writer and is responsible for reviewing diffs, validating identities, recording reports, and integrating results. Reject or quarantine changes outside assigned ownership.
+The coordinator remains the sole CLOSEOUT writer and is responsible for reviewing diffs, validating identities, recording reports, and integrating results. Treat changes outside assigned ownership, and overlaps that cannot be attributed exactly, as foreign-diff incidents; stop and preserve them through the shared protocol rather than rejecting, quarantining, or cleaning them.
 
 If nodes touch a shared manifest, generated client, migration chain, fixture, DB, process, or deployment target, serialize through the integration owner.
 
 ## 10. Drift and interruption
 
-Expected drift consists only of current node outputs, authorized integration outputs, and recorded evidence. Detect unexpected drift with status/diff/resource inspection.
+The immutable start inventory, including pre-existing dirty state, is accepted as-is. Expected
+drift thereafter consists only of current node outputs, authorized integration outputs, and
+recorded evidence that can be attributed exactly to the declared action. Detect foreign or
+ambiguous drift with the shared checkpoint protocol.
+
+On detection, atomically record the incident, stop every worker and write, and ask whether the
+listed exact changes were intentional. An intentional answer preserves the bytes and adopts the
+current inventory without claiming Cruise authorship, followed by scope/ownership/approval/evidence
+revalidation. A stop answer leaves the repository unchanged. An unintended answer does not itself
+authorize restoration. Leave the changes untouched and remain paused until the user resolves them
+outside Cruise or stops the run. Never use reset, checkout, clean, stash,
+quarantine, move-aside, generic overwrite, or another blanket cleanup mechanism.
 
 Interrupt the user only for:
 

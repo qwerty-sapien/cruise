@@ -99,9 +99,13 @@ State is not part of the immutable artifact manifest.
 
 The card must show the complete queue—including mandatory/optional status, dependencies,
 permissions, auto-start behavior, and every digest-bound artifact—plus the returned
-`review_digest`. Exact **Approve Foundation** or **Approve Milestone** must then be selected
-through the host's structured option, and the observed event must echo that same digest before
-`attestStructuredBuildApprovalSelection` will mint its opaque receipt. `captureBuildApproval`
+`review_digest`. Ordinarily, exact **Approve Foundation** or **Approve Milestone** must then be
+selected through the host's structured option, and the observed event must echo that same digest
+before `attestStructuredBuildApprovalSelection` will mint its opaque receipt. An exact
+`--auto-approve` directive in the immutable request header instead permits
+`attestOriginBoundBuildAutoApprovalSelection` to bind that same displayed digest to the opaque
+Origin pair without a selector. This approves planning bytes only; queue start, Goal activation,
+product writes, permissions, and external effects retain their independent gates. `captureBuildApproval`
 requires the same readiness, Origin-pair, and ID-history authorities,
 checks the product baseline and rereads/recomputes the review; stale review authority or any
 changed artifact/queue byte or approval-time State drift is rejected. `verifyBuildApproval`
@@ -228,10 +232,10 @@ Auto-start only when queue approval explicitly included `auto_start: true`, prer
 passed, baselines and artifact digests remain current, permissions/authentication are
 satisfied, no mandatory ambiguity remains, the host truthfully supports continuation, and
 the selected skill passes semantic admission. Otherwise mark `ready` or `waiting_approval`
-and provide the exact next action. Runtime policy serializes mutating/effectful work. At most
-four independent read-only Research items may run concurrently, only when dependencies and
-ownership are disjoint and the host genuinely supports it; auth-blocked branches do not stop
-eligible independent Research.
+and provide the exact next action. Runtime policy serializes mutating/effectful work. Any
+number of independent read-only Research items may run concurrently when dependencies and
+ownership are disjoint and the host genuinely schedules them; auth-blocked branches do not
+stop eligible independent Research.
 
 ## 4. Research and failures
 

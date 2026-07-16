@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import { CruiseSession } from '../scripts/lib/session.mjs';
+import { MODEL_IDS } from '../scripts/lib/model-policy.mjs';
 import { createLineReader } from '../scripts/lib/line-input.mjs';
 import { pickOne } from '../scripts/lib/picker.mjs';
 import { createOriginRecord } from '../scripts/lib/origin.mjs';
@@ -80,6 +81,18 @@ class FakeAppServer extends EventEmitter {
 
   async request(method, params) {
     this.calls.push({ method, params });
+    if (method === 'model/list') {
+      return {
+        data: [{
+          id: MODEL_IDS.sol,
+          model: MODEL_IDS.sol,
+          hidden: false,
+          isDefault: true,
+          defaultReasoningEffort: 'high',
+          supportedReasoningEfforts: ['high', 'xhigh', 'ultra'],
+        }],
+      };
+    }
     if (method === 'thread/start') {
       return {
         thread: { id: 'thread-test' },
@@ -107,8 +120,10 @@ class FakeAppServer extends EventEmitter {
       return { turn: { id: 'turn-prep', status: 'inProgress' } };
     }
     if (method === 'thread/settings/update') {
-      this.emit('settings-requested');
-      if (this.settingsGate) await this.settingsGate.promise;
+      if (params.collaborationMode?.mode === 'default') {
+        this.emit('settings-requested');
+        if (this.settingsGate) await this.settingsGate.promise;
+      }
       return {};
     }
     if (method === 'thread/goal/get') {
@@ -422,8 +437,8 @@ test('exact controller option plus re-verified Build receipt preserves Plan and 
   assert.equal(result.controllerDriver.describe().milestone_id, 'M-003');
   assert.equal(result.controllerDriver.state.kind, 'cruise_milestone_controller_state');
   assert.match(client.goal.objective, /hierarchical milestone controller for M-003/);
-  assert.match(errorOutput.value, /Milestone controller selected and Build approval re-verified: M-003/);
-  assert.match(errorOutput.value, /Milestone controller runtime created: M-003/);
+  assert.match(errorOutput.value, /Project handoff selected: M-003/);
+  assert.match(errorOutput.value, /Project handoff is created: M-003/);
   assert.deepEqual(client.responses.map(({ id }) => id), ['q0', 'q1', 'q2']);
   assert.equal(await result.controllerDriver.close('test_complete'), true);
 });
@@ -536,15 +551,15 @@ test('separate Plan and Start approvals activate native Goal exactly once', asyn
   assert.match(client.goal.objective, /ORIGIN\.yaml/);
   assert.match(client.goal.objective, /PLAN\.md/);
   assert.match(client.goal.objective, /GOAL\.md/);
-  assert.match(errorOutput.value, /Plan approval locked/);
-  assert.match(errorOutput.value, /Goal approval locked/);
-  assert.match(errorOutput.value, /sha256:[0-9a-f]{64}/);
-  assert.match(errorOutput.value, /Native Goal execution has started/);
+  assert.match(errorOutput.value, /Plan approval saved/);
+  assert.match(errorOutput.value, /Final approval saved/);
+  assert.doesNotMatch(errorOutput.value, /sha-?256|digest/iu);
+  assert.match(errorOutput.value, /Work has started/);
   assert.equal(client.stopped, true);
 
   const turnStart = client.calls.find(({ method }) => method === 'turn/start');
   assert.equal(turnStart.params.collaborationMode.mode, 'plan');
-  assert.equal(turnStart.params.approvalPolicy, 'never');
+  assert.equal(turnStart.params.approvalPolicy, 'on-request');
   assert.deepEqual(turnStart.params.runtimeWorkspaceRoots, []);
   assert.equal(turnStart.params.cwd, join(canonicalCwd, '.cruise', 'goal'));
   assert.deepEqual(turnStart.params.sandboxPolicy.writableRoots, [
@@ -563,15 +578,47 @@ test('separate Plan and Start approvals activate native Goal exactly once', asyn
     /single-slice Goal only: do not offer Use Milestone Controller/,
   );
   assert.equal(client.calls.some(({ method }) => method === 'model/list'), false);
-  assert.equal(Object.hasOwn(turnStart.params.collaborationMode.settings, 'model'), false);
-  assert.equal(Object.hasOwn(turnStart.params.collaborationMode.settings, 'reasoning_effort'), false);
-  const settings = client.calls.find(({ method }) => method === 'thread/settings/update');
-  assert.equal(settings.params.cwd, canonicalCwd);
-  assert.equal(settings.params.approvalPolicy, 'on-request');
-  assert.deepEqual(settings.params.sandboxPolicy.writableRoots, [canonicalCwd]);
+  assert.equal(turnStart.params.model, 'gpt-root');
+  assert.equal(turnStart.params.effort, 'medium');
+  assert.equal(turnStart.params.collaborationMode.settings.model, 'gpt-root');
+  assert.equal(turnStart.params.collaborationMode.settings.reasoning_effort, 'medium');
+  const settings = client.calls.filter(({ method }) => method === 'thread/settings/update');
+  assert.deepEqual(settings.map(({ params }) => params.collaborationMode.mode), ['plan', 'default']);
+  assert.ok(client.calls.indexOf(settings[0]) < client.calls.indexOf(turnStart));
+  assert.equal(settings[0].params.cwd, join(canonicalCwd, '.cruise', 'goal'));
+  assert.equal(settings[0].params.approvalPolicy, 'on-request');
+  assert.equal(settings[1].params.cwd, canonicalCwd);
+  assert.equal(settings[1].params.approvalPolicy, 'on-request');
+  assert.deepEqual(settings[1].params.sandboxPolicy.writableRoots, [canonicalCwd]);
+  assert.equal(settings[1].params.collaborationMode.settings.model, 'gpt-root');
+  assert.equal(settings[1].params.collaborationMode.settings.reasoning_effort, 'medium');
   const threadStart = client.calls.find(({ method }) => method === 'thread/start');
   assert.deepEqual(threadStart.params.runtimeWorkspaceRoots, []);
   assert.equal(Object.hasOwn(threadStart.params, 'model'), false);
+});
+
+test('native Goal sessions apply the Cruise class to preparation and execution host settings', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer();
+  const { session } = createSession(client, cwd, {
+    cruiseClass: { cruise_class: 'luxury-cruise' },
+  });
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  const threadStart = client.calls.find(({ method }) => method === 'thread/start').params;
+  assert.equal(threadStart.model, MODEL_IDS.sol);
+  assert.equal(threadStart.allowProviderModelFallback, false);
+  assert.match(threadStart.developerInstructions, /pinned to level 6/u);
+  const turnStart = client.calls.find(({ method }) => method === 'turn/start').params;
+  assert.equal(turnStart.model, MODEL_IDS.sol);
+  assert.equal(turnStart.effort, 'xhigh');
+  assert.match(
+    turnStart.collaborationMode.settings.developer_instructions,
+    /ordinary-work default is level 6/u,
+  );
+  const settings = client.calls.filter(({ method }) => method === 'thread/settings/update');
+  assert.match(settings.at(-1).params.collaborationMode.settings.developer_instructions, /level 6/u);
 });
 
 test('Plan approval without Start Cruise leaves the contract inactive', async () => {
@@ -582,7 +629,7 @@ test('Plan approval without Start Cruise leaves the contract inactive', async ()
 
   assert.equal(result.status, 'saved');
   assert.equal(client.calls.some(({ method }) => method === 'thread/goal/set'), false);
-  assert.match(errorOutput.value, /saved inactive/);
+  assert.match(errorOutput.value, /plan was saved/i);
 });
 
 test('Start Cruise as the first review is rejected and never activates', async () => {
@@ -716,7 +763,7 @@ test('interactive server requests are serialized FIFO', async () => {
   );
 });
 
-test('preparation automatically denies permission widening without opening a picker', async () => {
+test('preparation preserves native permission choices instead of auto-denying them', async () => {
   const { cwd } = await createContract();
   const client = new FakeAppServer({
     labels: ['Approve Plan'],
@@ -732,12 +779,12 @@ test('preparation automatically denies permission widening without opening a pic
   const result = await session.run();
 
   assert.equal(result.status, 'saved');
-  assert.equal(pickerCalls, 1); // Plan review only
+  assert.equal(pickerCalls, 3); // Two native approvals and Plan review
   assert.deepEqual(
     client.responses.slice(0, 2).map(({ result: response }) => response.decision),
-    ['decline', 'decline'],
+    ['accept', 'accept'],
   );
-  assert.match(errorOutput.value, /cannot widen permissions/);
+  assert.doesNotMatch(errorOutput.value, /cannot widen permissions/);
 });
 
 test('an externally resolved queued approval is never shown or answered', async () => {
@@ -835,7 +882,7 @@ test('an ended active Goal turn cannot hang without a continuation', async () =>
   const result = await session.run();
 
   assert.equal(result.status, 'paused');
-  assert.match(errorOutput.value, /without a continuation; pausing safely/);
+  assert.match(errorOutput.value, /work stopped unexpectedly.*paused/i);
 });
 
 test('continuation guard cannot pause a turn that starts while Goal GET is pending', async () => {
@@ -896,7 +943,7 @@ test('uncertain post-set confirmation reconciles and pauses a matching Goal', as
   await assert.rejects(session.run(), /failed after Goal state may have changed/);
 
   assert.equal(client.goal.status, 'paused');
-  assert.match(errorOutput.value, /matching Goal was paused safely/);
+  assert.match(errorOutput.value, /Could not confirm that work began, so it was paused/);
 });
 
 test('uncertain activation polls through a late set commit and pauses it', async () => {
@@ -917,7 +964,7 @@ test('uncertain activation polls through a late set commit and pauses it', async
 
   await assert.rejects(running, /Goal state is uncertain/);
   assert.equal(client.goal.status, 'paused');
-  assert.match(errorOutput.value, /matching Goal was paused safely/);
+  assert.match(errorOutput.value, /Could not confirm that work began, so it was paused/);
 });
 
 test('uncertain activation is bounded when the set RPC never settles', async () => {

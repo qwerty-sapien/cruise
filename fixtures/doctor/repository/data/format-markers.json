@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "fixture_only": true,
+  "markers": [
+    {
+      "format": "BAM",
+      "container": "BGZF",
+      "decompressed_magic_hex": "42414d01",
+      "mode": "non_executable_catalog_marker",
+      "required_checks": ["BGZF BC subfield", "BAM header", "EOF", "full decode", "reference dictionary", "tags"]
+    },
+    {
+      "format": "GEM",
+      "path": "data/tiny_expression.gem",
+      "container": "text",
+      "mode": "structural_fixture"
+    },
+    {
+      "format": "GEF",
+      "container": "HDF5",
+      "container_magic_hex": "894844460d0a1a0a",
+      "mode": "non_executable_catalog_marker",
+      "required_checks": ["geneExp or cellBin schema", "bin type", "bin size", "offsets", "count fields"]
+    },
+    {
+      "format": "GEFF",
+      "path": "data/tiny_graph.geff",
+      "container": "Zarr",
+      "mode": "structural_marker",
+      "required_checks": ["schema version", "nodes", "edges", "axes", "units"]
+    },
+    {
+      "format": "H5AD",
+      "container": "HDF5",
+      "container_magic_hex": "894844460d0a1a0a",
+      "mode": "non_executable_catalog_marker",
+      "required_checks": ["encoding-type", "encoding-version", "X", "obs", "var", "spatial metadata"]
+    },
+    {
+      "format": "H5MS",
+      "container": "HDF5",
+      "container_magic_hex": "894844460d0a1a0a",
+      "mode": "non_executable_catalog_marker",
+      "required_checks": ["StereoPy writer version", "sample order", "relationships", "raw data", "results"]
+    },
+    {
+      "format": "ANNO",
+      "path": "data/tiny_labels.anno",
+      "container": "text",
+      "mode": "structural_fixture",
+      "requires_manifest": true
+    },
+    {
+      "format": "REF",
+      "path": "data/tiny_reference.ref.json",
+      "container": "JSON manifest",
+      "mode": "structural_fixture",
+      "requires_manifest": true
+    },
+    {
+      "format": "GTF",
+      "path": "data/tiny_reference.gtf",
+      "container": "text",
+      "mode": "structural_fixture"
+    },
+    {
+      "format": "SIF",
+      "path": "data/tiny_not_a_container.sif",
+      "container": "intentionally invalid",
+      "mode": "negative_marker",
+      "expected_inspector_ok": false,
+      "required_checks": ["global-header magic", "apptainer sif list", "signature or pinned digest"]
+    }
+  ]
+}

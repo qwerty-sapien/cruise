@@ -76,8 +76,14 @@ test('checked-in stage defaults preserve exact model policy under worker levels'
     'utf8',
   );
   const config = parseYaml(source);
-  assert.equal(config.root_coordinator.change_model, 'forbidden');
+  assert.equal(config.root_coordinator.change_model, 'native_cruise_class_only');
   assert.equal(config.root_coordinator.substantive_work, 'forbidden');
+  assert.deepEqual(config.cruise_classes.classes, {
+    'budget-cruise': 3,
+    'normal-cruise': 4,
+    'premium-cruise': 5,
+    'luxury-cruise': 6,
+  });
   for (const [level, selection] of Object.entries(WORKER_LEVEL_POLICY)) {
     const configured = config.recommended_levels[level];
     assert.equal(configured.agent_type, selection.agent_type);
@@ -92,19 +98,20 @@ test('checked-in stage defaults preserve exact model policy under worker levels'
   });
   assert.equal(config.stages.semantic_repository_mapping.recommended_level, 2);
   assert.equal(config.stages.capability_inventory.recommended_level, 2);
-  assert.equal(config.stages.quick_implementation.recommended_level, 2);
-  assert.equal(config.stages.quick_verification.recommended_level, 2);
-  assert.equal(config.stages.refine_planning.recommended_level, 3);
-  assert.equal(config.stages.normal_planned_execution.recommended_level, 3);
-  assert.equal(config.stages.independent_normal_verification.recommended_level, 3);
-  assert.equal(config.stages.debug_hypothesis_generation.recommended_level, 3);
-  assert.equal(config.stages.difficult_debug_or_failed_normal_execution.recommended_level, 5);
-  assert.equal(config.stages.architectural_or_consequential_implementation.recommended_level, 5);
-  assert.equal(config.stages.repeated_failure_or_exceptional_consequence.recommended_level, 6);
+  assert.equal(config.stages.quick_implementation.recommended_level, 'class_default');
+  assert.equal(config.stages.quick_implementation.minimum_level, 3);
+  assert.equal(config.stages.quick_verification.recommended_level, 'class_default');
+  assert.equal(config.stages.refine_planning.recommended_level, 'class_default');
+  assert.equal(config.stages.normal_planned_execution.recommended_level, 'class_default');
+  assert.equal(config.stages.independent_normal_verification.recommended_level, 'class_default');
+  assert.equal(config.stages.debug_hypothesis_generation.recommended_level, 'class_default');
+  assert.equal(config.stages.difficult_debug_or_failed_normal_execution.minimum_level, 5);
+  assert.equal(config.stages.architectural_or_consequential_implementation.minimum_level, 5);
+  assert.equal(config.stages.repeated_failure_or_exceptional_consequence.minimum_level, 6);
   assert.equal(config.stages.extreme_safety_critical_adjudication.recommended_level, 7);
   assert.equal(config.stages.research_retrieval_and_extraction.recommended_level, 2);
-  assert.equal(config.stages.research_synthesis_and_recommendation.recommended_level, 3);
-  assert.equal(config.stages.high_conflict_or_frontier_research.recommended_level, 5);
+  assert.equal(config.stages.research_synthesis_and_recommendation.recommended_level, 'class_default');
+  assert.equal(config.stages.high_conflict_or_frontier_research.minimum_level, 5);
   assert.equal(config.stages.routine_structured_scans.recommended_level, 2);
 });
 
@@ -155,20 +162,37 @@ test('model/list degradation is recorded and forbidden from masquerading as the 
 
 });
 
-test('one soft worker escalation is monotonic, crosses Terra to Sol, and caps at seven', () => {
+test('a same-tier model-version change is degraded without an exact catalog match', () => {
+  const upgraded = modelCatalog().map((entry) => ({
+    ...entry,
+    id: entry.id.replace('gpt-5.6-', 'gpt-5.7-'),
+    model: entry.model.replace('gpt-5.6-', 'gpt-5.7-'),
+  }));
+  const policy = resolveWorkerPolicy({ recommendedLevel: 4, catalog: upgraded });
+  assert.equal(policy.worker.requested.model_id, MODEL_IDS.terra);
+  assert.equal(policy.worker.resolved.model_id, 'gpt-5.7-luna');
+  assert.equal(policy.worker.resolution_source, 'catalog_default');
+  assert.equal(policy.degraded, true);
+  assert.match(policy.degradation_reasons.join(' '), /gpt-5\.6-terra is unavailable/u);
+});
+
+test('reviewed worker escalation histories are monotonic, cross Terra to Sol, and remain at seven', () => {
   for (let level = 2; level <= 7; level += 1) {
     const initial = resolveWorkerPolicy({ recommendedLevel: level, catalog: modelCatalog() });
-    const escalated = escalateWorkerPolicy(initial, {
+    const second = escalateWorkerPolicy(initial, {
       catalog: modelCatalog(),
       reason: 'one evidenced soft execution failure',
     });
-    assert.equal(escalated.recommended_level, Math.min(level + 1, 7));
-    assert.equal(escalated.attempt_number, 2);
-    assert.equal(escalated.soft_escalation_reason, 'one evidenced soft execution failure');
-    assert.throws(
-      () => escalateWorkerPolicy(escalated, { catalog: modelCatalog(), reason: 'again' }),
-      /at most one/,
-    );
+    assert.equal(second.recommended_level, Math.min(level + 1, 7));
+    assert.equal(second.attempt_number, 2);
+    assert.equal(second.soft_escalation_reason, 'one evidenced soft execution failure');
+    const third = escalateWorkerPolicy(second, {
+      catalog: modelCatalog(),
+      reason: 'another evidenced soft execution failure',
+    });
+    assert.equal(third.recommended_level, Math.min(level + 2, 7));
+    assert.equal(third.attempt_number, 3);
+    assert.equal(third.soft_escalation_reason, 'another evidenced soft execution failure');
   }
 
   const terra = resolveWorkerPolicy({ recommendedLevel: 4, catalog: modelCatalog() });

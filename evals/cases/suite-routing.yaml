@@ -63,10 +63,6 @@ hard_quick_gates:
     value: true
     allowed_routes: ["refine", "goal"]
   -
-    signal: failed_quick_repairs
-    value: 2
-    allowed_routes: ["debug", "refine", "goal"]
-  -
     signal: root_cause_unknown
     value: true
     allowed_routes: ["debug"]
@@ -104,7 +100,7 @@ minimum_coverage:
   - routing.model_resolution_recorded
   - quick.focused_success
   - quick.scope_expansion_promotes
-  - quick.two_repairs_promote
+  - quick.uncertain_repairs_promote
   - quick.api_and_migration_rejected
   - quick.no_formal_artifacts
   - refine.zero_questions
@@ -268,7 +264,7 @@ cases:
     assertions: ["stop_before_expanding_scope", "file_count_not_sole_reason"]
     coverage: ["quick.scope_expansion_promotes"]
   -
-    id: Q-ADV-TWO-REPAIRS
+    id: Q-ADV-UNCERTAIN-REPAIRS
     skill_under_test: quick
     category: adversarial
     selected_skill: quick
@@ -276,6 +272,7 @@ cases:
     probe_facts: ["two_failed_quick_repairs", "causal_model_now_uncertain"]
     probe_signals:
       failed_quick_repairs: 2
+      root_cause_unknown: true
     initial_route: quick
     initial_confidence: 0.90
     retry_route: null
@@ -287,8 +284,8 @@ cases:
     writes: product_allowed
     handoff_required: true
     handoff_target: debug
-    assertions: ["no_third_quick_repair", "failed_attempts_preserved"]
-    coverage: ["quick.two_repairs_promote"]
+    assertions: ["semantic_promotion_not_hidden_count", "failed_attempts_preserved"]
+    coverage: ["quick.uncertain_repairs_promote"]
   -
     id: Q-ADV-SCHEMA-MIGRATION
     skill_under_test: quick

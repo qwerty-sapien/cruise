@@ -12,6 +12,7 @@ import {
   assertQueueChildScope,
   attestBuildApprovalReadiness,
   attestBuildReadinessEvidence,
+  attestOriginBoundBuildAutoApprovalSelection,
   attestStructuredBuildApprovalSelection,
   BOOTSTRAP_LOCKED_FILES,
   captureBuildApproval,
@@ -46,7 +47,10 @@ import {
   verifyQueueApproval,
   workflowQueueDigest,
 } from '../scripts/lib/build-contract.mjs';
-import { captureInitialBuildOrigin } from '../scripts/lib/build-history.mjs';
+import {
+  captureInitialBuildOrigin,
+  hasExactBuildAutoApprovalDirective,
+} from '../scripts/lib/build-history.mjs';
 import { captureRepositoryBaseline } from '../scripts/lib/goal-contract.mjs';
 import { stringifyYaml } from '../scripts/lib/yaml-state.mjs';
 import {
@@ -232,9 +236,14 @@ async function writeFiles(directory, files) {
   for (const [name, body] of Object.entries(files)) await writeFile(join(directory, name), body);
 }
 
-function originCapture(root, mode) {
+function originCapture(root, mode, { autoApprove = false } = {}) {
+  const request = mode === 'bootstrap'
+    ? 'Create a durable project foundation.'
+    : 'Define milestone M-003.';
   return captureInitialBuildOrigin({
-    rawPrompt: mode === 'bootstrap' ? 'Create a durable project foundation.' : 'Define milestone M-003.',
+    rawPrompt: autoApprove
+      ? `[$cruise:build](/installed/skills/build/SKILL.md) --auto-approve\n\n${request}`
+      : request,
     repositoryBaseline: {
       root,
       head: null,
@@ -256,11 +265,15 @@ function originCapture(root, mode) {
   });
 }
 
-async function createApprovedBuildFixture({ mode = 'bootstrap', questions = [] } = {}) {
+async function createApprovedBuildFixture({
+  mode = 'bootstrap',
+  questions = [],
+  autoApprove = false,
+} = {}) {
   const created = await mkdtemp(join(tmpdir(), `cruise-approved-${mode}-`));
   const root = await realpath(created);
   const projectDirectory = join(root, '.cruise', 'project');
-  const projectCapture = originCapture(root, 'bootstrap');
+  const projectCapture = originCapture(root, 'bootstrap', { autoApprove });
   const projectOrigin = stringifyYaml(projectCapture.origin_record);
   await writeFiles(projectDirectory, {
     'ORIGIN.yaml': projectOrigin,
@@ -274,7 +287,7 @@ async function createApprovedBuildFixture({ mode = 'bootstrap', questions = [] }
   const milestonePath = '.cruise/milestones/M-003-billing';
   const milestoneDirectory = join(root, milestonePath);
   const milestonePhaseDag = [phase('P-01')];
-  const milestoneCapture = originCapture(root, 'milestone');
+  const milestoneCapture = originCapture(root, 'milestone', { autoApprove });
   const milestoneOrigin = stringifyYaml(milestoneCapture.origin_record);
   await writeFiles(milestoneDirectory, {
     'ORIGIN.yaml': milestoneOrigin,
@@ -378,7 +391,14 @@ async function createApprovedBuildFixture({ mode = 'bootstrap', questions = [] }
     buildOriginPairAuthority: buildHistory.buildOriginPairAuthority,
     buildIdHistoryAuthority: buildHistory.buildIdHistoryAuthority,
   });
-  const selection = approvalSelection(mode, { review_digest: review.review_digest });
+  const selection = autoApprove
+    ? attestOriginBoundBuildAutoApprovalSelection({
+        buildOriginPairAuthority: buildHistory.buildOriginPairAuthority,
+        mode,
+        reviewDigest: review.review_digest,
+        selectedAt: NOW,
+      })
+    : approvalSelection(mode, { review_digest: review.review_digest });
   const approval = await captureBuildApproval({
     root,
     mode,
@@ -1323,6 +1343,62 @@ test('child origin is parent-bound and prevents scope expansion', () => {
   }
 });
 
+test('Build origin-bound auto-approval authorizes only the exact reviewed planning digest', async () => {
+  assert.equal(hasExactBuildAutoApprovalDirective('--auto-approve\n\nBuild this.'), true);
+  assert.equal(
+    hasExactBuildAutoApprovalDirective(
+      '[$cruise:build](/installed/skills/build/SKILL.md) --auto-approve\n\nBuild this.',
+    ),
+    true,
+  );
+  assert.equal(
+    hasExactBuildAutoApprovalDirective('Build this.\n\nThe text --auto-approve is documentation.'),
+    false,
+  );
+  assert.equal(hasExactBuildAutoApprovalDirective('Do not use --auto-approve'), false);
+
+  const fixture = await createApprovedBuildFixture({ autoApprove: true });
+  assert.equal(fixture.selection.source, 'origin_auto_approval');
+  assert.equal(fixture.selection.review_digest, fixture.review.review_digest);
+  assert.equal(fixture.receipt.label, 'Approve Foundation');
+  assert.equal(fixture.activeQueue.items.every(({ status }) => status === 'draft'), true);
+  assert.equal(fixture.activeQueue.items.every(({ auto_start }) => auto_start === false), false);
+
+  const staleSelection = attestOriginBoundBuildAutoApprovalSelection({
+    buildOriginPairAuthority: fixture.buildOriginPairAuthority,
+    mode: 'bootstrap',
+    reviewDigest: DIGEST_B,
+    selectedAt: NOW,
+  });
+  await assert.rejects(
+    captureBuildApproval({
+      root: fixture.root,
+      mode: 'bootstrap',
+      contractDirectory: '.cruise/project',
+      approvalSelection: staleSelection,
+      repositoryBaselineDigest: fixture.repositoryBaselineDigest,
+      firstMilestoneDirectory: '.cruise/milestones/M-003-billing',
+      milestonePhaseDag: fixture.milestonePhaseDag,
+      approvalReadiness: fixture.approvalReadiness,
+      buildOriginPairAuthority: fixture.buildOriginPairAuthority,
+      buildIdHistoryAuthority: fixture.buildIdHistoryAuthority,
+      now: NOW,
+    }),
+    /changed after the displayed approval review/u,
+  );
+
+  const ordinary = await createApprovedBuildFixture();
+  assert.throws(
+    () => attestOriginBoundBuildAutoApprovalSelection({
+      buildOriginPairAuthority: ordinary.buildOriginPairAuthority,
+      mode: 'bootstrap',
+      reviewDigest: ordinary.review.review_digest,
+      selectedAt: NOW,
+    }),
+    /exact --auto-approve directive/u,
+  );
+});
+
 test('Build approval requires host-structured provenance and returns an opaque verified receipt', async () => {
   const fixture = await createApprovedBuildFixture();
   const {
@@ -1416,7 +1492,7 @@ test('Build approval requires host-structured provenance and returns an opaque v
       selected_label: 'Approve Foundation',
     },
     currentRepositoryBaselineDigest: repositoryBaselineDigest,
-  }), /trusted opaque structured-selection token/);
+  }), /trusted opaque selection authority/);
 
   assert.match(approval.approval_digest, /^[a-f0-9]{64}$/u);
   await verifyBuildApproval({

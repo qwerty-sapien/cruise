@@ -5,6 +5,10 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { resolveModelPolicy } from './model-policy.mjs';
 import {
+  clearDisposableRepositoryArtifacts,
+  repositoryGitPathspec,
+} from './repository-scope.mjs';
+import {
   assertYamlSchema,
   canonicalJson,
   parseYaml,
@@ -58,8 +62,8 @@ const PROBE_SIGNAL_DEFAULTS = Object.freeze({
   failed_quick_repairs: 0,
 });
 
-/** The 18 non-negotiable Quick admission gates exercised by the suite evals. */
-export const QUICK_HARD_GATE_SIGNALS = Object.freeze([
+/** Seventeen semantic gates plus append-only Quick repair-history telemetry. */
+export const QUICK_ASSESSMENT_SIGNALS = Object.freeze([
   'public_api_change',
   'abi_change',
   'authentication_or_authorization',
@@ -80,8 +84,11 @@ export const QUICK_HARD_GATE_SIGNALS = Object.freeze([
   'material_design_choice',
 ]);
 
+// Backward-compatible public name for packet/schema consumers. The
+// failed_quick_repairs member is telemetry and is not itself a hard gate.
+export const QUICK_HARD_GATE_SIGNALS = QUICK_ASSESSMENT_SIGNALS;
+
 const PROBE_FACT_SIGNALS = Object.freeze(Object.keys(PROBE_SIGNAL_DEFAULTS));
-const MAX_SEMANTIC_FACTS = 64;
 const MAX_FACT_BASES = 8;
 const DEFAULT_PROBE_BUDGETS = Object.freeze({
   git_command_timeout_ms: 10_000,
@@ -151,14 +158,15 @@ export const PROBE_ENRICHMENT_SCHEMA = Object.freeze({
     },
     facts: {
       type: 'array',
-      maxItems: MAX_SEMANTIC_FACTS,
+      minItems: QUICK_HARD_GATE_SIGNALS.length,
+      maxItems: QUICK_HARD_GATE_SIGNALS.length,
       items: {
         type: 'object',
         additionalProperties: false,
         required: ['id', 'signal', 'value', 'basis'],
         properties: {
           id: { type: 'string', pattern: '^PF-\\d{2,}$' },
-          signal: { type: 'string', enum: PROBE_FACT_SIGNALS },
+          signal: { type: 'string', enum: QUICK_HARD_GATE_SIGNALS },
           value: { type: ['boolean', 'integer'] },
           basis: {
             type: 'array',
@@ -276,7 +284,10 @@ export const DETERMINISTIC_PROBE_SCHEMA = Object.freeze({
           : { type: 'boolean' },
       ])),
     },
-    semantic_facts: PROBE_ENRICHMENT_SCHEMA.properties.facts,
+    semantic_facts: {
+      ...PROBE_ENRICHMENT_SCHEMA.properties.facts,
+      minItems: 0,
+    },
     acquisition: {
       type: 'object',
       additionalProperties: false,
@@ -580,6 +591,7 @@ export function probeRepository({
     throw new TypeError('repositoryRoot must be a non-empty path');
   }
   let root = realpathSync(resolve(repositoryRoot));
+  clearDisposableRepositoryArtifacts(root);
   const boundedBudgets = normalizeBudgets(budgets);
   const rootResult = gitProbe(root, ['rev-parse', '--show-toplevel'], boundedBudgets);
   const isGit = rootResult.status === 0;
@@ -599,9 +611,7 @@ export function probeRepository({
       '-z',
       '--untracked-files=normal',
       '--',
-      '.',
-      ':(exclude).cruise',
-      ':(exclude).cruise/**',
+      ...repositoryGitPathspec(),
     ], boundedBudgets);
     if (statusResult.status !== 0) {
       throw new Error(`could not gather bounded Git status: ${String(statusResult.stderr).trim()}`);
@@ -666,17 +676,28 @@ export function repositoryBaselineDigest(repositoryBaseline) {
 }
 
 function assertCompleteGateAssessment(value) {
-  const expected = [...QUICK_HARD_GATE_SIGNALS].sort((a, b) => a.localeCompare(b, 'en'));
-  const actual = [...value].sort((a, b) => a.localeCompare(b, 'en'));
-  if (canonicalJson(actual) !== canonicalJson(expected)) {
-    throw new TypeError('assessed_quick_gates must contain every one of the 18 Quick hard gates exactly once');
+  if (canonicalJson(value) !== canonicalJson(QUICK_HARD_GATE_SIGNALS)) {
+    throw new TypeError('assessed_quick_gates must contain the exact ordered 17 semantic gates plus repair-history telemetry');
   }
 }
 
 function assertFactValues(facts) {
+  if (facts.length !== QUICK_HARD_GATE_SIGNALS.length) {
+    throw new TypeError('semantic facts must contain exactly 17 semantic gates plus repair-history telemetry');
+  }
   const ids = new Set();
   const signals = new Set();
-  for (const fact of facts) {
+  for (const [index, fact] of facts.entries()) {
+    const expectedId = `PF-${String(index + 1).padStart(2, '0')}`;
+    const expectedSignal = QUICK_HARD_GATE_SIGNALS[index];
+    if (fact.id !== expectedId || fact.signal !== expectedSignal) {
+      throw new TypeError(
+        `semantic fact ${index + 1} must preserve ${expectedId}/${expectedSignal}`,
+      );
+    }
+    if (!QUICK_HARD_GATE_SIGNALS.includes(fact.signal)) {
+      throw new TypeError(`semantic fact signal is not a Quick hard gate: ${fact.signal}`);
+    }
     if (ids.has(fact.id)) throw new TypeError(`duplicate semantic fact id: ${fact.id}`);
     if (signals.has(fact.signal)) throw new TypeError(`duplicate semantic fact signal: ${fact.signal}`);
     ids.add(fact.id);
@@ -764,6 +785,14 @@ function verifyFactBasis({
   if (!pathWithin(repositoryRoot, candidate)) {
     throw new TypeError('repository_file locator escapes the repository root');
   }
+  const repositoryRelative = relative(repositoryRoot, candidate);
+  if (
+    ['.cruise', '.git'].includes(repositoryRelative)
+    || repositoryRelative.startsWith(`.cruise${sep}`)
+    || repositoryRelative.startsWith(`.git${sep}`)
+  ) {
+    throw new TypeError('repository_file basis cannot cite mutable repository control state');
+  }
   const metadata = lstatSync(candidate);
   if (metadata.isSymbolicLink() || !metadata.isFile()) {
     throw new TypeError('repository_file basis must name a regular non-symlink file');
@@ -776,6 +805,14 @@ function verifyFactBasis({
   const real = realpathSync(candidate);
   if (!pathWithin(repositoryRoot, real)) {
     throw new TypeError('repository_file basis resolves outside the repository root');
+  }
+  const realRelative = relative(repositoryRoot, real);
+  if (
+    ['.cruise', '.git'].includes(realRelative)
+    || realRelative.startsWith(`.cruise${sep}`)
+    || realRelative.startsWith(`.git${sep}`)
+  ) {
+    throw new TypeError('repository_file basis cannot resolve into mutable repository control state');
   }
   byteBudget.files ??= new Set();
   if (!byteBudget.files.has(real)) {
@@ -1023,13 +1060,16 @@ export function applyQuickPromotion({ selectedSkill, proposedRoute, probe, class
   }
   const signals = combinedPromotionSignals(probe, classifier);
   const reasons = Object.entries(signals)
-    .filter(([key, value]) => key === 'failed_quick_repairs' ? value >= 2 : value === true)
+    // failed_quick_repairs is append-only telemetry, not a universal hidden
+    // retry budget. Unknown cause, scope growth, conflicting evidence, or an
+    // explicit workflow stop condition provides the semantic promotion signal.
+    .filter(([key, value]) => key !== 'failed_quick_repairs' && value === true)
     .map(([key]) => key)
     .sort((left, right) => left.localeCompare(right, 'en'));
   if (reasons.length === 0) {
     return { route: proposedRoute, promotion_reasons: [] };
   }
-  if (signals.root_cause_unknown || signals.failed_quick_repairs >= 2) {
+  if (signals.root_cause_unknown) {
     return { route: 'debug', promotion_reasons: reasons };
   }
   if (reasons.some((reason) => GOAL_PROMOTION_SIGNALS.has(reason))) {

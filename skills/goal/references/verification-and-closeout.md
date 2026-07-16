@@ -132,6 +132,8 @@ Insufficient evidence includes:
 
 Manual evidence can be mandatory when steps, inputs, environment, expected observations, and capture are reproducible.
 
+For a change-set or write-ownership gate, `git diff` alone is insufficient because it omits untracked files. Bind the baseline's tracked-diff digest and untracked path/digest manifest, then collect a current untracked-aware inventory such as `git status --porcelain=v1 -z --untracked-files=all` and digest every owned new regular file with no-follow reads. Apply `scripts/lib/repository-scope.mjs` before recording or presenting that inventory: auto-clear disposable artifacts first, and never let paths outside canonical product scope become evidence, status output, a question, or conversational content, even when tracked. Compare the scoped current inventory with the approved product paths and the separately allowed Cruise control/planning paths. A sole-product-write claim must fail on any extra tracked or untracked product path, symlink, type change, missing owned output, or unexplained digest drift.
+
 ## 7. Unavailable evidence and waivers
 
 When a check cannot run:

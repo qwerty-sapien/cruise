@@ -232,7 +232,7 @@ async function writeFiles(directory, files) {
   }
 }
 
-async function approvedFixture({ researchBeforeGoal = false } = {}) {
+async function approvedFixture({ researchBeforeGoal = false, extraResearchCount = 0 } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-queue-coordinator-')));
   const projectPath = '.cruise/project';
   const milestonePath = '.cruise/milestones/M-003-coordinator';
@@ -284,6 +284,11 @@ async function approvedFixture({ researchBeforeGoal = false } = {}) {
         auto_start_conditions: ['host_ready'],
       }),
       queueItem('QI-04', 'research', { mandatory: false }),
+      ...Array.from({ length: extraResearchCount }, (_entry, index) => queueItem(
+        `QI-${String(index + 5).padStart(2, '0')}`,
+        'research',
+        { mandatory: false },
+      )),
     ],
   });
   const milestoneQueue = createWorkflowQueue({
@@ -1166,6 +1171,30 @@ test('bounded independent read-only Research items may run concurrently', async 
   });
   assert.equal(completed.expected_repository_baseline_digest, fixture.repositoryBaselineDigest);
   assert.equal(completed.items.find(({ id }) => id === 'QI-04').status, 'running');
+});
+
+test('disjoint read-only Research concurrency has no hidden numeric ceiling', async () => {
+  const fixture = await approvedFixture({ extraResearchCount: 5 });
+  let state = initializeBuildQueueState(fixture.coordinator, { now: NOW });
+  const researchIds = Array.from(
+    { length: 7 },
+    (_entry, index) => `QI-${String(index + 3).padStart(2, '0')}`,
+  );
+  for (const [index, itemId] of researchIds.entries()) {
+    const admission = await manualAdmission(fixture, fixture.coordinator, state, itemId);
+    state = transitionBuildQueueItem(fixture.coordinator, state, {
+      itemId,
+      toStatus: 'running',
+      evidence: [evidence(`E-${String(index + 60).padStart(2, '0')}`)],
+      childOrigin: childOrigin(fixture.projectQueue, itemId),
+      startAdmission: admission,
+      consumedInputs: [],
+    });
+  }
+  assert.deepEqual(
+    state.items.filter(({ active_attempt: active }) => active != null).map(({ id }) => id),
+    researchIds,
+  );
 });
 
 test('auth waits block only dependent branches and global evidence IDs cannot be reused', async () => {

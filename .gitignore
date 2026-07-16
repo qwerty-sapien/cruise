@@ -1,6 +1,8 @@
 # OS and editor state
 .DS_Store
 **/.DS_Store
+._*
+**/._*
 Thumbs.db
 .idea/
 .vscode/
@@ -45,3 +47,22 @@ dist/
 __pycache__/
 **/__pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.hypothesis/
+**/.hypothesis/
+.tox/
+**/.tox/
+.nox/
+**/.nox/
+**/.cache/
+**/.parcel-cache/
+**/.turbo/
+**/.next/cache/
+**/.yarn/cache/
+**/.pnpm-store/

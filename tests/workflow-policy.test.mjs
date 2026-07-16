@@ -403,7 +403,7 @@ test('external Research reports require exact path approval and D-ID effect scop
   }).allowed, true);
 });
 
-test('Quick product writes require admission, no hard promotion, bounded exact scope, and fewer than two repairs', async () => {
+test('Quick product writes require admission, no hard promotion, bounded exact scope, and a complete repair ledger', async () => {
   const root = await repository();
   assert.equal(decidePath(quick(root)).allowed, true);
   assert.equal(decidePath(quick(root, { admitted: false })).code, REASON_CODES.DENY_QUICK_NOT_ADMITTED);
@@ -439,13 +439,28 @@ test('Quick product writes require admission, no hard promotion, bounded exact s
     repairEvidenceIds: [],
   })).code, REASON_CODES.DENY_QUICK_REPAIR_LEDGER);
   assert.equal(decidePath(quick(root, {
-    repairAttempts: 2,
-    repairEvidenceIds: ['E-01', 'E-02'],
+    repairAttempts: 5,
+    repairEvidenceIds: ['E-01', 'E-02', 'E-03', 'E-04', 'E-05'],
     evidenceRecord: evidenceRecord([
       evidenceItem('E-01', 'BLOCK'),
       evidenceItem('E-02', 'BLOCK'),
+      evidenceItem('E-03', 'BLOCK'),
+      evidenceItem('E-04', 'BLOCK'),
+      evidenceItem('E-05', 'BLOCK'),
     ]),
-  })).code, REASON_CODES.DENY_QUICK_REPAIR_LIMIT);
+  })).allowed, true);
+  assert.equal(decidePath(quick(root, {
+    repairAttempts: 5,
+    repairEvidenceIds: ['E-01', 'E-02', 'E-03', 'E-04', 'E-05'],
+    evidenceRecord: evidenceRecord([
+      evidenceItem('E-01', 'BLOCK'),
+      evidenceItem('E-02', 'BLOCK'),
+      evidenceItem('E-03', 'BLOCK'),
+      evidenceItem('E-04', 'BLOCK'),
+      evidenceItem('E-05', 'BLOCK'),
+    ]),
+    hardPromotionReasons: ['root_cause_unknown'],
+  })).code, REASON_CODES.DENY_QUICK_HARD_PROMOTION);
 });
 
 test('Refine product writes require a current exact-label plan approval and exact plan ownership', async () => {

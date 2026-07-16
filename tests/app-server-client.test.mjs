@@ -11,10 +11,11 @@ import {
 } from "../scripts/lib/app-server-client.mjs";
 
 class FakeChild extends EventEmitter {
-  constructor({ exitOnStdinEnd = true } = {}) {
+  constructor({ exitOnStdinEnd = true, ignoredSignals = [] } = {}) {
     super();
     this.writes = [];
     this.kills = [];
+    this.ignoredSignals = new Set(ignoredSignals);
     this.stdout = new PassThrough();
     this.stderr = new PassThrough();
     this.stdin = new Writable({
@@ -30,6 +31,7 @@ class FakeChild extends EventEmitter {
 
   kill(signal) {
     this.kills.push(signal);
+    if (this.ignoredSignals.has(signal)) return true;
     queueMicrotask(() => this.emit("exit", null, signal));
     return true;
   }
@@ -274,6 +276,20 @@ test("stop closes stdin and waits for a graceful app-server exit", async () => {
   assert.equal(child.stdin.writableEnded, true);
   assert.deepEqual(child.kills, []);
   assert.deepEqual(exit, { code: 0, signal: null, error: null });
+  assert.equal(client.state, "stopped");
+});
+
+test("stop escalates an unresponsive app-server from SIGTERM to bounded SIGKILL", async () => {
+  const { child, spawnFn } = createHarness({
+    childOptions: { exitOnStdinEnd: false, ignoredSignals: ["SIGTERM"] },
+  });
+  const client = new AppServerClient({ spawnFn });
+  await startHarness(client, child);
+
+  const exit = await client.stop({ timeoutMs: 5 });
+
+  assert.deepEqual(child.kills, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(exit, { code: null, signal: "SIGKILL", error: null });
   assert.equal(client.state, "stopped");
 });
 

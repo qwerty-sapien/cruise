@@ -29,6 +29,16 @@ import {
   answerUserInputRequest,
   formatGoalStatus,
 } from './interaction.mjs';
+import {
+  cruiseClassInstructions,
+  resolveNativeCruiseHost,
+} from './cruise-class.mjs';
+import { communicationStyleInstructions } from './communication-style.mjs';
+import {
+  UserFacingMessageBuffer,
+  sanitizeUserFacingText,
+  xmlPrompt,
+} from './user-facing-output.mjs';
 
 const TERMINAL_GOAL_STATUSES = new Set([
   'paused',
@@ -139,14 +149,13 @@ function preparationPrompt(
   const controllerBoundary = milestoneControllerAvailable
     ? 'Only for an explicitly supplied or selected approved milestone-wide handoff, also write MILESTONE-CONTROLLER.yaml, validate its locked Build contract manifest, and keep the referenced project/milestone files read-only; never infer controller mode from ROADMAP.md.'
     : 'This installed terminal entrypoint has no persistent Build-approval resolver, so it is single-slice Goal only: do not offer Use Milestone Controller, do not write MILESTONE-CONTROLLER.yaml, and direct milestone-wide execution to ordinary Codex with the approved Build run still in scope.';
-  return [
+  const system = [
     'Use $cruise:goal, attached as the goal skill input, to prepare this work. Inspect the repository first, then run the short adaptive Q&A and two mechanically separate reviews required by the skill.',
     'Use exactly one blocking request_user_input question at a time. Use the exact labels Approve Plan and Start Cruise at their respective reviews. End after the final selection; the client owns native Goal activation.',
     `The target repository root is ${repositoryRoot}. Your shell cwd is the isolated planning directory ${planningDirectory}; inspect the target with absolute paths or git -C, and write the Cruise artifacts as ORIGIN.yaml, SPEC.md, DECISIONS.md, ALIGNMENT.md, optional ROADMAP.md, PLAN.md, and GOAL.md directly in the current planning directory. Single-slice mode is the default. ${controllerBoundary}`,
-    'ORIGIN.yaml origin.raw_prompt must contain the exact request bytes after this final blank line, with no trimming, wrapper text, or delimiter:',
-    '',
-    request,
+    'ORIGIN.yaml origin.raw_prompt must contain the exact request bytes from the user section, with no trimming, wrapper text, or delimiter.',
   ].join('\n');
+  return xmlPrompt({ system, user: request });
 }
 
 function replaceAnswer(result, questionId, message) {
@@ -155,29 +164,6 @@ function replaceAnswer(result, questionId, message) {
 
 function rejectedAnswer(questionId, message) {
   return { answers: { [questionId]: { answers: [message] } } };
-}
-
-function snapshotSummary(snapshot) {
-  return snapshot.artifacts
-    .map(({ path, sha256 }) => `${path}=sha256:${sha256}`)
-    .join(', ');
-}
-
-function preparationDenial(method) {
-  switch (method) {
-    case 'item/commandExecution/requestApproval':
-    case 'item/fileChange/requestApproval':
-      return { decision: 'decline' };
-    case 'execCommandApproval':
-    case 'applyPatchApproval':
-      return { decision: 'denied' };
-    case 'item/permissions/requestApproval':
-      return { permissions: {}, scope: 'turn' };
-    case 'mcpServer/elicitation/request':
-      return { action: 'decline', content: null, _meta: null };
-    default:
-      return null;
-  }
 }
 
 async function ensurePlanningDirectory(repositoryRoot) {
@@ -220,6 +206,8 @@ export class CruiseSession extends EventEmitter {
     continuationGraceMs = 1_000,
     activationRpcTimeoutMs = 30_000,
     resolveBuildApproval = null,
+    cruiseClass = null,
+    communicationStyle = null,
   }) {
     super();
     if (!client) throw new TypeError('client is required');
@@ -246,6 +234,8 @@ export class CruiseSession extends EventEmitter {
     this.continuationGraceMs = continuationGraceMs;
     this.activationRpcTimeoutMs = activationRpcTimeoutMs;
     this.resolveBuildApproval = resolveBuildApproval;
+    this.cruiseClass = cruiseClass;
+    this.communicationStyle = communicationStyle;
     this.sessionId = `cruise-session-${randomUUID()}`;
 
     this.phase = 'idle';
@@ -262,7 +252,10 @@ export class CruiseSession extends EventEmitter {
     this._interactionBroker = null;
     this.lastDirectUserEventReceipt = null;
 
-    this._agentMessageOpen = false;
+    this._agentMessages = new UserFacingMessageBuffer({
+      output: this.output,
+      style: this.communicationStyle?.style,
+    });
     this._stopping = false;
     this._abortRequested = false;
     this._preparationDone = deferred();
@@ -282,7 +275,7 @@ export class CruiseSession extends EventEmitter {
 
     this._boundRequest = (message) => this._enqueueRequest(message);
     this._boundNotification = (message) => this._handleNotification(message);
-    this._boundStderr = (chunk) => write(this.errorOutput, chunk);
+    this._boundStderr = () => {};
     this._boundExit = (info) => this._handleExit(info);
   }
 
@@ -296,25 +289,83 @@ export class CruiseSession extends EventEmitter {
       this.initialBaseline = captureRepositoryBaseline(this.cwd);
       await this.client.start();
       this._throwIfAborted();
+      const hostSelection = this.cruiseClass === null
+        ? null
+        : resolveNativeCruiseHost(
+            this.cruiseClass,
+            await this.client.request('model/list', { limit: 100 }),
+          );
       const threadStart = await this.client.request('thread/start', {
         cwd: this.cwd,
         runtimeWorkspaceRoots: [],
         approvalPolicy: 'on-request',
         sandbox: 'read-only',
+        ...(hostSelection
+          ? {
+              model: hostSelection.model,
+              allowProviderModelFallback: false,
+            }
+          : {}),
+        developerInstructions: [
+          ...(this.cruiseClass === null
+            ? []
+            : [cruiseClassInstructions(this.cruiseClass, { nativeHost: true })]),
+          communicationStyleInstructions(this.communicationStyle),
+        ].join('\n\n'),
         serviceName: 'cruise_cli',
         ephemeral: false,
       });
       this._throwIfAborted();
 
       this.threadId = threadStart.thread.id;
+      const threadModel = hostSelection?.model ?? threadStart.model ?? threadStart.thread?.model;
+      const threadReasoningEffort = hostSelection?.reasoning_effort
+        ?? threadStart.reasoningEffort
+        ?? threadStart.thread?.reasoningEffort
+        ?? null;
+      if (typeof threadModel !== 'string' || threadModel.length === 0) {
+        throw new Error('Codex did not report the thread model required for collaboration-mode switching.');
+      }
       this._interactionBroker = createMilestoneControllerInteractionBroker({
         sessionId: this.sessionId,
         runId: this.threadId,
       });
-      writeLine(this.errorOutput, `Cruise thread: ${this.threadId}`);
-      writeLine(this.errorOutput, 'Preparation is active; target implementation is not.');
+      this._writeStatus('Working session started.');
+      this._writeStatus('Preparing the plan.');
 
       this.phase = 'preparing';
+      const preparationMode = {
+        mode: 'plan',
+        settings: {
+          model: threadModel,
+          ...(threadReasoningEffort
+            ? { reasoning_effort: threadReasoningEffort }
+            : {}),
+          developer_instructions: [
+            this.resolveBuildApproval === null
+              ? `${CRUISE_PREPARATION_INSTRUCTIONS}\n\nThis terminal adapter has no persistent Build-approval resolver. Keep this run in single-slice Goal mode, do not offer a milestone-controller option, and do not write MILESTONE-CONTROLLER.yaml.`
+              : CRUISE_PREPARATION_INSTRUCTIONS,
+            ...(this.cruiseClass === null
+              ? []
+              : [cruiseClassInstructions(this.cruiseClass, { nativeHost: true })]),
+            communicationStyleInstructions(this.communicationStyle),
+          ].join('\n\n'),
+        },
+      };
+      const preparationSandbox = {
+        type: 'workspaceWrite',
+        writableRoots: [this.planningDirectory],
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      };
+      await this.client.request('thread/settings/update', {
+        threadId: this.threadId,
+        cwd: this.planningDirectory,
+        approvalPolicy: 'on-request',
+        sandboxPolicy: preparationSandbox,
+        collaborationMode: preparationMode,
+      });
+      this._throwIfAborted();
       const turnStart = await this.client.request('turn/start', {
         threadId: this.threadId,
         input: [
@@ -330,24 +381,13 @@ export class CruiseSession extends EventEmitter {
             text_elements: [],
           },
         ],
-        collaborationMode: {
-          mode: 'plan',
-          settings: {
-            developer_instructions: this.resolveBuildApproval === null
-              ? `${CRUISE_PREPARATION_INSTRUCTIONS}\n\nThis terminal adapter has no persistent Build-approval resolver. Keep this run in single-slice Goal mode, do not offer a milestone-controller option, and do not write MILESTONE-CONTROLLER.yaml.`
-              : CRUISE_PREPARATION_INSTRUCTIONS,
-          },
-        },
+        model: threadModel,
+        ...(threadReasoningEffort ? { effort: threadReasoningEffort } : {}),
+        collaborationMode: preparationMode,
         cwd: this.planningDirectory,
         runtimeWorkspaceRoots: [],
-        sandboxPolicy: {
-          type: 'workspaceWrite',
-          writableRoots: [this.planningDirectory],
-          networkAccess: false,
-          excludeTmpdirEnvVar: true,
-          excludeSlashTmp: true,
-        },
-        approvalPolicy: 'never',
+        sandboxPolicy: preparationSandbox,
+        approvalPolicy: 'on-request',
       });
       this.turnId = turnStart.turn.id;
       this._activeTurnIds.add(turnStart.turn.id);
@@ -365,10 +405,7 @@ export class CruiseSession extends EventEmitter {
 
       if (!this.startRequested || !this.goalApproval) {
         this.phase = 'saved';
-        writeLine(
-          this.errorOutput,
-          'Cruise contract saved inactive; no persisted Goal was started.',
-        );
+        this._writeStatus('The plan was saved. Work has not started.');
         return {
           status: 'saved',
           threadId: this.threadId,
@@ -388,14 +425,22 @@ export class CruiseSession extends EventEmitter {
         sandboxPolicy: {
           type: 'workspaceWrite',
           writableRoots: [this.cwd],
-          networkAccess: false,
           excludeTmpdirEnvVar: false,
           excludeSlashTmp: false,
         },
         collaborationMode: {
           mode: 'default',
           settings: {
-            developer_instructions: null,
+            model: threadModel,
+            ...(threadReasoningEffort
+              ? { reasoning_effort: threadReasoningEffort }
+              : {}),
+            developer_instructions: [
+              ...(this.cruiseClass === null
+                ? []
+                : [cruiseClassInstructions(this.cruiseClass, { nativeHost: true })]),
+              communicationStyleInstructions(this.communicationStyle),
+            ].join('\n\n'),
           },
         },
       });
@@ -436,10 +481,7 @@ export class CruiseSession extends EventEmitter {
             interactionId: `native-goal-${randomUUID()}`,
           });
           this.controllerDriver = hosted.driver;
-          writeLine(
-            this.errorOutput,
-            `Milestone controller runtime ${hosted.disposition}: ${hosted.driver.describe().milestone_id}.`,
-          );
+          this._writeStatus(`Project handoff is ${hosted.disposition}: ${hosted.driver.describe().milestone_id}.`);
           this.emit('milestoneControllerReady', hosted.driver);
         } catch (cause) {
           await this._failControllerBootstrapSafely(activated, cause);
@@ -454,20 +496,14 @@ export class CruiseSession extends EventEmitter {
       }
 
       this.phase = 'executing';
-      writeLine(this.errorOutput, 'Cruise Goal is active. Native Goal execution has started.');
-      for (const artifact of activated.artifacts) {
-        writeLine(
-          this.errorOutput,
-          `  ${artifact.path}  sha256:${artifact.sha256.slice(0, 12)}`,
-        );
-      }
+      this._writeStatus('Work has started.');
       this._maybeFinishExecution();
 
       const goal = await this._executionDone.promise;
       this.activeGoal = goal;
       this.phase = goal.status;
       this._finishAgentMessage();
-      writeLine(this.errorOutput, formatGoalStatus(goal));
+      this._writeStatus( formatGoalStatus(goal));
       const result = {
         status: goal.status,
         threadId: this.threadId,
@@ -530,6 +566,13 @@ export class CruiseSession extends EventEmitter {
     if (this._abortRequested) throw new CruiseInterruptedError();
   }
 
+  _writeStatus(value) {
+    const safe = sanitizeUserFacingText(value, {
+      style: this.communicationStyle?.style,
+    });
+    if (safe) writeLine(this.errorOutput, safe);
+  }
+
   _attach() {
     this.client.on('request', this._boundRequest);
     this.client.on('notification', this._boundNotification);
@@ -557,7 +600,7 @@ export class CruiseSession extends EventEmitter {
       this._pendingRequestIds.delete(message.id);
     });
     this._interactionTail = finished.catch((error) => {
-      writeLine(this.errorOutput, `Cruise interaction failed: ${error.message}`);
+      this._writeStatus( `Cruise interaction failed: ${error.message}`);
     });
   }
 
@@ -565,20 +608,6 @@ export class CruiseSession extends EventEmitter {
     if (this._stopping) {
       this._safeRespondError(message.id, new Error('Cruise is stopping.'));
       return;
-    }
-
-    if (this.phase === 'preparing') {
-      const denied = preparationDenial(message.method);
-      if (denied) {
-        writeLine(
-          this.errorOutput,
-          `Denied ${message.method}: Cruise preparation cannot widen permissions or mutate the target.`,
-        );
-        if (!this._resolvedRequestIds.has(message.id)) {
-          this._safeRespond(message.id, denied);
-        }
-        return;
-      }
     }
 
     const controller = new AbortController();
@@ -601,6 +630,7 @@ export class CruiseSession extends EventEmitter {
             lineReader: this.lineReader,
             signal: controller.signal,
             availableDecisions: message.params.availableDecisions,
+            communicationStyle: this.communicationStyle?.style,
           });
           result = { decision };
           break;
@@ -613,6 +643,7 @@ export class CruiseSession extends EventEmitter {
             lineReader: this.lineReader,
             signal: controller.signal,
             availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'],
+            communicationStyle: this.communicationStyle?.style,
           });
           result = { decision };
           break;
@@ -630,6 +661,7 @@ export class CruiseSession extends EventEmitter {
               lineReader: this.lineReader,
               signal: controller.signal,
               availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'],
+              communicationStyle: this.communicationStyle?.style,
             },
           );
           result = {
@@ -652,6 +684,7 @@ export class CruiseSession extends EventEmitter {
             lineReader: this.lineReader,
             signal: controller.signal,
             availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'],
+            communicationStyle: this.communicationStyle?.style,
           });
           result = {
             decision:
@@ -673,6 +706,7 @@ export class CruiseSession extends EventEmitter {
             lineReader: this.lineReader,
             signal: controller.signal,
             availableDecisions: ['accept', 'decline'],
+            communicationStyle: this.communicationStyle?.style,
           });
           const requested = message.params.permissions ?? {};
           const granted = {};
@@ -684,9 +718,23 @@ export class CruiseSession extends EventEmitter {
           };
           break;
         }
-        case 'mcpServer/elicitation/request':
-          result = { action: 'decline', content: null, _meta: null };
+        case 'mcpServer/elicitation/request': {
+          const decision = await answerApprovalRequest(message.params, {
+            pickOne: this.pickOne,
+            input: this.input,
+            output: this.errorOutput,
+            lineReader: this.lineReader,
+            signal: controller.signal,
+            availableDecisions: ['accept', 'decline'],
+            communicationStyle: this.communicationStyle?.style,
+          });
+          result = {
+            action: decision === 'accept' ? 'accept' : 'decline',
+            content: null,
+            _meta: null,
+          };
           break;
+        }
         case 'currentTime/read':
           result = { currentTimeAt: Math.floor(Date.now() / 1000) };
           break;
@@ -707,7 +755,7 @@ export class CruiseSession extends EventEmitter {
       if (!this._resolvedRequestIds.has(message.id)) {
         this._safeRespondError(message.id, error);
       }
-      writeLine(this.errorOutput, `Cruise interaction failed: ${error.message}`);
+      this._writeStatus( `Cruise interaction failed: ${error.message}`);
     } finally {
       if (this._activeInteraction?.id === message.id) {
         this._activeInteraction = null;
@@ -733,13 +781,10 @@ export class CruiseSession extends EventEmitter {
           expectedRawPrompt: this.originPrompt,
           controllerAuthority: this.controllerAuthority,
         });
-        writeLine(
-          this.errorOutput,
-          `Plan review binds: ${snapshotSummary(planCandidate)}`,
-        );
+        this._writeStatus('Plan review is ready.');
       } catch (error) {
         this.planApproval = null;
-        writeLine(this.errorOutput, error.message);
+        this._writeStatus( error.message);
         return rejectedAnswer(
           question.id,
           `Plan review unavailable: ${error.message} Fix the artifacts and ask again.`,
@@ -749,7 +794,7 @@ export class CruiseSession extends EventEmitter {
 
     if (options.some((option) => isStartCruiseChoice(option.label))) {
       if (!planWasApproved || !this.planApproval) {
-        writeLine(this.errorOutput, 'Start Cruise rejected: no separate Plan approval is locked.');
+        this._writeStatus( 'Start Cruise rejected: no separate Plan approval is locked.');
         return rejectedAnswer(
           question.id,
           'Start Cruise rejected by Cruise client: approve the Plan in a separate earlier review.',
@@ -757,13 +802,10 @@ export class CruiseSession extends EventEmitter {
       }
       try {
         goalCandidate = await captureGoalApproval(this.cwd, this.planApproval);
-        writeLine(
-          this.errorOutput,
-          `Goal review binds: ${snapshotSummary(goalCandidate)}`,
-        );
+        this._writeStatus('Final review is ready.');
       } catch (error) {
         this.planApproval = null;
-        writeLine(this.errorOutput, error.message);
+        this._writeStatus( error.message);
         return rejectedAnswer(
           question.id,
           `Goal review unavailable: ${error.message} Reconcile and re-approve the Plan.`,
@@ -778,6 +820,7 @@ export class CruiseSession extends EventEmitter {
       output: this.errorOutput,
       lineReader: this.lineReader,
       signal,
+      communicationStyle: this.communicationStyle?.style,
     });
     if (answered.cancelled) return answered.result;
 
@@ -849,10 +892,7 @@ export class CruiseSession extends EventEmitter {
           verifiedBuildApproval,
         });
         this.verifiedBuildApproval = verifiedBuildApproval;
-        writeLine(
-          this.errorOutput,
-          `Milestone controller selected and Build approval re-verified: ${controllerMilestoneId}.`,
-        );
+        this._writeStatus(`Project handoff selected: ${controllerMilestoneId}.`);
       } catch (error) {
         this._clearControllerAuthority('selection_rejected');
         replaceAnswer(
@@ -860,7 +900,7 @@ export class CruiseSession extends EventEmitter {
           selection.id,
           `Milestone Controller rejected by Cruise client: ${error.message}`,
         );
-        writeLine(this.errorOutput, error.message);
+        this._writeStatus( error.message);
       }
       return answered.result;
     }
@@ -873,10 +913,7 @@ export class CruiseSession extends EventEmitter {
       try {
         await verifyPlanApproval(this.cwd, planCandidate);
         this.planApproval = planCandidate;
-        writeLine(
-          this.errorOutput,
-          `Plan approval locked: ${snapshotSummary(this.planApproval)}`,
-        );
+        this._writeStatus('Plan approval saved.');
       } catch (error) {
         this.planApproval = null;
         replaceAnswer(
@@ -884,7 +921,7 @@ export class CruiseSession extends EventEmitter {
           selection.id,
           `Approve Plan rejected by Cruise client: ${error.message}`,
         );
-        writeLine(this.errorOutput, error.message);
+        this._writeStatus( error.message);
       }
       return answered.result;
     }
@@ -896,17 +933,14 @@ export class CruiseSession extends EventEmitter {
           selection.id,
           'Start Cruise rejected by Cruise client: approve the Plan in a separate earlier review.',
         );
-        writeLine(this.errorOutput, 'Start Cruise rejected: no separate Plan approval is locked.');
+        this._writeStatus( 'Start Cruise rejected: no separate Plan approval is locked.');
         return answered.result;
       }
       try {
         await verifyGoalApproval(this.cwd, goalCandidate);
         this.goalApproval = goalCandidate;
         this.startRequested = true;
-        writeLine(
-          this.errorOutput,
-          `Goal approval locked: ${snapshotSummary(this.goalApproval)}`,
-        );
+        this._writeStatus('Final approval saved.');
       } catch (error) {
         this.planApproval = null;
         replaceAnswer(
@@ -914,7 +948,7 @@ export class CruiseSession extends EventEmitter {
           selection.id,
           `Start Cruise rejected by Cruise client: ${error.message} Re-approve the Plan after reconciliation.`,
         );
-        writeLine(this.errorOutput, error.message);
+        this._writeStatus( error.message);
       }
       return answered.result;
     }
@@ -983,6 +1017,7 @@ export class CruiseSession extends EventEmitter {
         break;
       }
       case 'turn/completed': {
+        this._agentMessages.flush();
         const id = params.turn?.id;
         if (id) this._activeTurnIds.delete(id);
         if (this.turnId === id) this.turnId = null;
@@ -996,8 +1031,7 @@ export class CruiseSession extends EventEmitter {
         break;
       }
       case 'item/agentMessage/delta':
-        this._agentMessageOpen = true;
-        write(this.output, params.delta ?? '');
+        this._agentMessages.append(params.delta);
         break;
       case 'thread/goal/updated':
         this.activeGoal = params.goal;
@@ -1013,10 +1047,7 @@ export class CruiseSession extends EventEmitter {
       case 'error':
       case 'warning':
       case 'configWarning':
-        writeLine(
-          this.errorOutput,
-          params.message ?? params.error?.message ?? JSON.stringify(params),
-        );
+        this._writeStatus(params.message ?? params.error?.message ?? JSON.stringify(params));
         break;
       default:
         break;
@@ -1083,10 +1114,7 @@ export class CruiseSession extends EventEmitter {
         return;
       }
       if (goal?.status === 'active') {
-        writeLine(
-          this.errorOutput,
-          `Native Goal turn ${turn?.status ?? 'ended'} without a continuation; pausing safely.`,
-        );
+        this._writeStatus(`The work stopped unexpectedly (${turn?.status ?? 'ended'}), so it was paused.`);
         const paused = await this.client.request('thread/goal/set', {
           threadId: this.threadId,
           status: 'paused',
@@ -1285,15 +1313,9 @@ export class CruiseSession extends EventEmitter {
     }
 
     if (goal.status === 'paused') {
-      writeLine(
-        this.errorOutput,
-        'Goal activation confirmation failed; the matching Goal was paused safely.',
-      );
+      this._writeStatus('Could not confirm that work began, so it was paused.');
     } else {
-      writeLine(
-        this.errorOutput,
-        `Goal activation confirmation failed; the matching Goal reached terminal status ${goal.status}.`,
-      );
+      this._writeStatus(`Could not confirm that work began; it ended with status ${goal.status}.`);
     }
   }
 
@@ -1320,6 +1342,7 @@ export class CruiseSession extends EventEmitter {
 
   _handleExit(info) {
     if (this._stopping) return;
+    this._agentMessages.flush();
     const error =
       info?.error ??
       new Error(
@@ -1335,9 +1358,6 @@ export class CruiseSession extends EventEmitter {
   }
 
   _finishAgentMessage() {
-    if (this._agentMessageOpen) {
-      writeLine(this.output);
-      this._agentMessageOpen = false;
-    }
+    this._agentMessages.flush();
   }
 }

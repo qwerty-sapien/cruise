@@ -89,7 +89,6 @@ export const REASON_CODES = Object.freeze({
   DENY_PHASE_TRANSITION: 'WP_DENY_PHASE_TRANSITION',
   DENY_QUICK_HARD_PROMOTION: 'WP_DENY_QUICK_HARD_PROMOTION',
   DENY_QUICK_NOT_ADMITTED: 'WP_DENY_QUICK_NOT_ADMITTED',
-  DENY_QUICK_REPAIR_LIMIT: 'WP_DENY_QUICK_REPAIR_LIMIT',
   DENY_QUICK_REPAIR_LEDGER: 'WP_DENY_QUICK_REPAIR_LEDGER',
   DENY_QUICK_SCOPE: 'WP_DENY_QUICK_SCOPE',
   DENY_REFINE_OWNERSHIP: 'WP_DENY_REFINE_OWNERSHIP',
@@ -660,9 +659,6 @@ function checkQuickContext(input, { targetPath = null } = {}) {
     subject: 'Quick repair history',
   });
   if (!repairs.allowed) return repairs;
-  if (input.repairAttempts >= 2) {
-    return deny(REASON_CODES.DENY_QUICK_REPAIR_LIMIT, 'Two failed Quick repairs require promotion; further Quick product writes are forbidden.');
-  }
   const scope = targetPath === null
     ? normalizeScope(input.repositoryRoot, input.declaredPaths)
     : scopeIncludes(input.repositoryRoot, input.declaredPaths, targetPath);

@@ -9,13 +9,35 @@ Refine is the middle lane: the finite outcome is known, but a small amount of de
 
 ## Delegate every substantive phase
 
-The root agent remains a coordinator throughout this current-thread workflow. It owns deterministic routing, user questions, approval selection, permissions, worker spawning, integration, and final synthesis; it never changes its own model or performs substantive planning/implementation itself.
+The root agent remains a coordinator throughout this current-thread workflow. It owns deterministic routing, user questions, approval selection, permissions, worker spawning, integration, and final synthesis; it does not perform substantive planning/implementation itself. Codex CLI/GUI retain control of the host model; only the native Cruise client applies the selected class to its host thread.
 
-Use level `3` through `cruise worker` for clarification analysis, planning, ordinary execution, and independent normal verification. Consequential work requiring a higher level is a Goal handoff rather than a hidden Refine expansion. Each worker gets a bounded packet and returns an immutable attempt report plus a launcher-owned receipt.
+Use the persisted Cruise class default from the passing Doctor report through `cruise worker` for clarification analysis, planning, ordinary execution, and independent normal verification. Budget mode therefore uses level `3`, normal level `4`, premium level `5`, and luxury level `6`; use a lower level only for a specifically bounded cheap task. Consequential scope is still a Goal handoff rather than a hidden Refine expansion. Each worker gets a bounded packet and returns an immutable attempt report plus a launcher-owned receipt.
+
+## Establish worker readiness before creating run state
+
+Run `cruise doctor --json` before capturing Origin or writing any run artifact. Continue only
+when the command exits zero and its top-level `ok` is `true`; explicitly confirm `model-policy`, `worker-host-rule`,
+`installed-plugin-digest`, and `client-on-path` all pass, while treating every other failed Doctor
+check as blocking too. Otherwise create no run, packet, or evidence record and give the single
+setup action reported by Doctor; the attested launcher is the complete input boundary and needs no
+extra user-facing transfer ceremony.
+
+After readiness passes, take the absolute `workerExecutable` from that same Doctor result and launch
+every `<workerExecutable> worker` command directly through the host execution tool; never use the PATH
+token `cruise`. Keep the command cwd and `-C` equal to the canonical repository and keep packet/report
+paths as direct named artifacts in the same `.cruise/runs/<run-id>` directory. Use
+`sandbox_permissions: "require_escalated"` and the concise justification
+`Run the Doctor-attested Cruise worker.` (or the host's equivalent field). The exact scoped rule
+installed and exercised by Doctor makes this non-interactive. Never try the worker in the ordinary
+sandbox first and never turn a connection failure into a second launch. If the launcher returns
+`CRUISE_WORKER_HOST_PATH_LOST`, preserve that incident, stop without substituting root work, and
+run `cruise doctor --deep --install-worker-rule`; do not produce a repository-export authorization question.
 
 ## Establish the finite contract
 
-Read [the shared invocation contract](../../internal/shared/invocation-contract.md) first. Capture the immutable origin, run the bounded probe and root-owned deterministic route, record worker resolution, and apply semantic admission before product edits.
+Read [the shared invocation contract](../../internal/shared/invocation-contract.md) first. Capture the immutable origin and baseline, let `begin` automatically establish shared non-destructive foreign-diff monitoring before any worker or further write, run the bounded probe and root-owned deterministic route, record worker resolution, and apply semantic admission before product edits. Do not ask a speculative start question. Handle a later unexpected change only through the shared root-owned incident pause protocol after the concrete incident is persisted. If intentional drift is accepted before routing, preserve its bytes, never rewrite the stale immutable Origin, and continue only from a fresh Origin in a new run.
+
+At terminal success, perform the shared final clean check and call `foreign-diff-finalize --run-dir <run-dir> --expected-inventory-sha256 <checkpoint-sha256>` before the final response. Never finalize a failed, dirty, active, blocked, or waiting run.
 
 Use Refine when repository inspection leaves at most a few material decisions about the known outcome. Hand off:
 

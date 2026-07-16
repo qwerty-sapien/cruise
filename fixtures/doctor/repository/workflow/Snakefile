@@ -1,0 +1,38 @@
+configfile: "workflow/config.json"
+
+rule all:
+    input:
+        ".canary/fixture.json",
+        ".canary/inspection.json",
+
+rule validate_fixture:
+    output:
+        ensure(".canary/fixture.json", non_empty=True),
+    log:
+        ".canary/fixture.log",
+    threads: 1
+    resources:
+        mem_mb=256,
+        runtime=1,
+    shell:
+        "mkdir -p .canary && node scripts/validate-spatiomics.mjs > {output:q} 2> {log:q}"
+
+rule inspect_fixture:
+    input:
+        "data/tiny_expression.gem",
+        "data/tiny_reference.gtf",
+        "data/tiny_labels.anno",
+        "data/tiny_reference_marker",
+        "data/tiny_graph.geff",
+    output:
+        ensure(".canary/inspection.json", non_empty=True),
+    log:
+        ".canary/inspection.log",
+    params:
+        inspector=".agents/skills/spatiomics-skill/scripts/inspect_spatial_inputs.py",
+    threads: 1
+    resources:
+        mem_mb=256,
+        runtime=1,
+    shell:
+        "mkdir -p .canary && python3 {params.inspector:q} --json {input:q} > {output:q} 2> {log:q}"

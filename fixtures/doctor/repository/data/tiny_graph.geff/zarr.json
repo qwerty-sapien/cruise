@@ -1,0 +1,9 @@
+{
+  "zarr_format": 3,
+  "node_type": "group",
+  "attributes": {
+    "fixture_only": true,
+    "geff_schema_marker": "1.0",
+    "warning": "Structural routing marker only; no graph arrays are present."
+  }
+}

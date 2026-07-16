@@ -10,17 +10,17 @@ export const MODEL_POLICY_DEFAULTS = Object.freeze({
   initial_classification: Object.freeze({ tier: 'luna', reasoning_effort: 'medium' }),
   bounded_repository_mapping: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
   capability_inventory: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  quick_implementation: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  quick_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  refine_clarification_and_planning: Object.freeze({ tier: 'terra', reasoning_effort: 'high' }),
-  normal_planned_execution: Object.freeze({ tier: 'terra', reasoning_effort: 'high' }),
-  independent_normal_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'high' }),
-  debug_hypothesis_generation: Object.freeze({ tier: 'terra', reasoning_effort: 'high' }),
+  quick_implementation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  quick_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  refine_clarification_and_planning: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  normal_planned_execution: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  independent_normal_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  debug_hypothesis_generation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
   difficult_debug_or_failed_normal_execution: Object.freeze({ tier: 'sol', reasoning_effort: 'high' }),
   architectural_or_consequential_implementation: Object.freeze({ tier: 'sol', reasoning_effort: 'high' }),
   repeated_failure_or_exceptional_consequence: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
   research_retrieval_and_extraction: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  research_synthesis_and_recommendation: Object.freeze({ tier: 'terra', reasoning_effort: 'high' }),
+  research_synthesis_and_recommendation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
   high_conflict_or_frontier_research: Object.freeze({ tier: 'sol', reasoning_effort: 'high' }),
   routine_structured_scans: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
 });
@@ -245,7 +245,14 @@ export function resolveModelPolicy({
 
 const NEXT_TIER = Object.freeze({ luna: 'terra', terra: 'sol', sol: 'sol' });
 
-/** Permit one soft-failure tier escalation, never an unbounded retry ladder. */
+/**
+ * Create the next evidenced soft-failure attempt.
+ *
+ * Cruise deliberately does not impose a universal attempt count here. The
+ * owning workflow supplies its reviewed stop conditions and resource policy;
+ * this resolver only keeps model/effort escalation monotonic and records the
+ * new attempt identity.
+ */
 export function escalateModelPolicy(
   previous,
   { catalog = [], reason, reasoningEffort = null, permissionBoundary = null } = {},
@@ -253,8 +260,8 @@ export function escalateModelPolicy(
   if (!previous || typeof previous !== 'object') {
     throw new TypeError('previous model-policy record is required');
   }
-  if (previous.attempt_number >= 2 || previous.escalation_reason != null) {
-    throw new Error('Cruise allows at most one model-tier escalation for a soft failure.');
+  if (!Number.isInteger(previous.attempt_number) || previous.attempt_number < 1) {
+    throw new TypeError('previous model-policy attempt_number must be a positive integer');
   }
   if (typeof reason !== 'string' || !reason.trim()) {
     throw new TypeError('an escalation reason is required');

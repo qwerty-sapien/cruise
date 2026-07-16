@@ -12,6 +12,11 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { LEGACY_PUBLIC_ROUTES, PUBLIC_ROUTES } from './routing.mjs';
+import {
+  clearDisposableRepositoryArtifacts,
+  isNonProductRepositoryPath,
+  repositoryGitPathspec,
+} from './repository-scope.mjs';
 import { assertYamlSchema, canonicalJson } from './yaml-state.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -362,7 +367,7 @@ function isInternal(relativePath) {
 
 function digestPath(hash, root, absolutePath, usage) {
   const relativePath = portable(relative(root, absolutePath));
-  if (relativePath && isInternal(relativePath)) return;
+  if (relativePath && (isInternal(relativePath) || isNonProductRepositoryPath(relativePath))) return;
   usage.entries += 1;
   if (usage.entries > BASELINE_CAPTURE_LIMITS.max_entries) {
     throw new BaselineCaptureBlockedError('ENTRY_COUNT_LIMIT', 'tree traversal', {
@@ -453,7 +458,7 @@ function defaultInstructionFiles(root) {
 }
 
 function gitDirtyDigest(root, usage) {
-  const pathspec = ['.', ':(exclude).cruise', ':(exclude).cruise/**'];
+  const pathspec = repositoryGitPathspec();
   const status = runGit(
     root,
     ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...pathspec],
@@ -500,6 +505,7 @@ export function captureRepositoryBaseline(repositoryRoot, { instructionFiles = n
     throw new TypeError('repositoryRoot must be a non-empty path');
   }
   let root = realpathSync(resolve(repositoryRoot));
+  clearDisposableRepositoryArtifacts(root);
   const usage = { git_bytes: 0, content_bytes: 0, entries: 0 };
 
   let head = null;

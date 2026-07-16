@@ -59,7 +59,6 @@ export const QUICK_HARD_GATE_FIXTURES = Object.freeze([
   ['root_cause_unknown', true],
   ['requires_external_research', true],
   ['material_design_choice', true],
-  ['failed_quick_repairs', 2],
 ]);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -285,8 +284,16 @@ function assertManifest(root, manifest) {
     }
   };
   visit(manifest);
-  if (!Array.isArray(manifest.interface?.defaultPrompt) || manifest.interface.defaultPrompt.length === 0) {
-    throw new Error('plugin interface.defaultPrompt must be a non-empty array');
+  const defaultPrompts = manifest.interface?.defaultPrompt;
+  if (
+    !Array.isArray(defaultPrompts)
+    || defaultPrompts.length === 0
+    || defaultPrompts.length > 3
+    || !defaultPrompts.every((prompt) => (
+      typeof prompt === 'string' && prompt.length > 0 && prompt.length <= 128
+    ))
+  ) {
+    throw new Error('plugin interface.defaultPrompt must contain one to three non-empty strings of at most 128 characters');
   }
 }
 
@@ -327,7 +334,11 @@ function assertNoPlaceholders(root) {
 function assertYamlStateOnly(root) {
   for (const path of walkFiles(root)) {
     const rel = portable(relative(root, path));
-    if ((rel.startsWith('.cruise/') || MACHINE_JSON_BASENAME.test(path.split(sep).at(-1))) && extname(path) === '.json') {
+    // Top-level .cruise is live user/run state, not checked-in suite source.
+    // Validate emitted path literals below without treating unrelated current
+    // run artifacts as files Cruise may rewrite or delete during validation.
+    if (rel.startsWith('.cruise/')) continue;
+    if (MACHINE_JSON_BASENAME.test(path.split(sep).at(-1)) && extname(path) === '.json') {
       throw new Error(`Cruise machine-state record must be YAML, not JSON: ${rel}`);
     }
   }
@@ -481,6 +492,16 @@ function assertGoalContract(root) {
   if (/spawn(?:Sync)?\s*\([^\n]*['"][^'"]*\/goal/iu.test(source + session)) {
     throw new Error('Goal activation must not simulate /goal through a shell process');
   }
+  const verification = readFileSync(
+    join(root, 'skills', 'goal', 'references', 'verification-and-closeout.md'),
+    'utf8',
+  );
+  if (
+    !verification.includes('git status --porcelain=v1 -z --untracked-files=all')
+    || !/`git diff` alone is insufficient/iu.test(verification)
+  ) {
+    throw new Error('Goal change-set evidence must account for untracked product writes');
+  }
 }
 
 function assertPlanningOnlySkills(root) {
@@ -496,6 +517,124 @@ function assertPlanningOnlySkills(root) {
     if (/\b(?:apply_patch|git\s+commit|sed\s+-i|writeFileSync\s*\()\b/iu.test(source)) {
       throw new Error(`${skill} workflow contains a product-write command`);
     }
+  }
+}
+
+function assertDoctorAttestedLauncher(root) {
+  const shared = readFileSync(join(root, 'internal', 'shared', 'invocation-contract.md'), 'utf8');
+  const normalizedShared = shared.replace(/\s+/gu, ' ');
+  for (const phrase of [
+    'cruise doctor --json',
+    '`worker-host-rule`',
+    'cruise doctor --deep --install-worker-rule',
+    'directly through the host',
+    '`sandbox_permissions: "require_escalated"`',
+    'Never attempt the worker',
+    'CRUISE_WORKER_HOST_PATH_LOST',
+    'Cruise Debug incident',
+  ]) {
+    if (!normalizedShared.includes(phrase)) {
+      throw new Error(`shared Doctor-attested launcher contract omits: ${phrase}`);
+    }
+  }
+  for (const skill of EXPECTED_PUBLIC_SKILLS) {
+    const source = readFileSync(join(root, 'skills', skill, 'SKILL.md'), 'utf8');
+    const normalizedSource = source.replace(/\s+/gu, ' ');
+    for (const phrase of [
+      'Establish worker readiness before creating run state',
+      'cruise doctor --json',
+      '`worker-host-rule`',
+      'cruise doctor --deep --install-worker-rule',
+      '`sandbox_permissions: "require_escalated"`',
+      'Never try the worker in the ordinary',
+      'CRUISE_WORKER_HOST_PATH_LOST',
+      'repository-export authorization question',
+    ]) {
+      if (!normalizedSource.includes(phrase)) {
+        throw new Error(`${skill} does not define the Doctor-attested launcher: ${phrase}`);
+      }
+    }
+  }
+
+  const doctor = readFileSync(join(root, 'scripts', 'lib', 'doctor-e2e.mjs'), 'utf8');
+  for (const phrase of ['DOCTOR_SKILL_CASES', 'FORBIDDEN_WORKER_UX', 'runDeepDoctor']) {
+    if (!doctor.includes(phrase)) throw new Error(`deep Doctor omits ${phrase}`);
+  }
+}
+
+function assertForeignDiffContract(root) {
+  const shared = readFileSync(
+    join(root, 'internal', 'shared', 'invocation-contract.md'),
+    'utf8',
+  );
+  const normalizedShared = shared.replace(/\s+/gu, ' ');
+  for (const phrase of [
+    'Start non-destructive foreign-diff monitoring automatically',
+    '`foreign-diff-guard.yaml` in `monitoring` state',
+    'does not ask a start question',
+    'pre-existing dirty path',
+    'never ask a speculative repository-change question when no incident exists',
+    'Cruise does not offer or apply restoration',
+    'publishes the staged run as blocked',
+    'fresh Origin in a new run',
+    'auto-clears disposable artifacts',
+    'deletes a noise-only pause together with its incident and history entries',
+    'never echo a legacy path directly from YAML',
+  ]) {
+    if (!normalizedShared.includes(phrase)) {
+      throw new Error(`shared foreign-diff contract omits: ${phrase}`);
+    }
+  }
+  for (const obsoletePhrase of [
+    'Preserve only (recommended)',
+    'Allow exact restore',
+    'foreign-diff-permission',
+    'awaiting_permission',
+    'restore_exact_changes',
+  ]) {
+    if (normalizedShared.includes(obsoletePhrase)) {
+      throw new Error(`shared foreign-diff contract retains obsolete start gate: ${obsoletePhrase}`);
+    }
+  }
+
+  for (const skill of EXPECTED_PUBLIC_SKILLS) {
+    const source = readFileSync(join(root, 'skills', skill, 'SKILL.md'), 'utf8');
+    const normalizedSource = source.replace(/\s+/gu, ' ');
+    if (
+      !normalizedSource.includes('automatically establish shared non-destructive foreign-diff monitoring')
+      || !normalizedSource.includes('Do not ask a speculative start question')
+      || !normalizedSource.includes('root-owned incident pause protocol')
+      || !normalizedSource.includes('after the concrete incident is persisted')
+      || !normalizedSource.includes('fresh Origin in a new run')
+    ) {
+      throw new Error(`${skill} does not bind automatic foreign-diff monitoring and the incident pause protocol`);
+    }
+  }
+
+  const executionLoop = readFileSync(
+    join(root, 'skills', 'goal', 'references', 'execution-loop.md'),
+    'utf8',
+  );
+  if (/Reject or quarantine changes outside assigned ownership/u.test(executionLoop)) {
+    throw new Error('Goal execution still permits rejecting or quarantining foreign changes');
+  }
+
+  const scopePolicy = readFileSync(join(root, 'scripts', 'lib', 'repository-scope.mjs'), 'utf8');
+  const guard = readFileSync(join(root, 'scripts', 'lib', 'foreign-diff-guard.mjs'), 'utf8');
+  const origin = readFileSync(join(root, 'scripts', 'lib', 'origin.mjs'), 'utf8');
+  const routing = readFileSync(join(root, 'scripts', 'lib', 'routing.mjs'), 'utf8');
+  const stagedSession = readFileSync(join(root, 'scripts', 'lib', 'skill-session.mjs'), 'utf8');
+  if (
+    !scopePolicy.includes('isNonProductRepositoryPath')
+    || !scopePolicy.includes('clearDisposableRepositoryArtifacts')
+    || !scopePolicy.includes('repositoryGitPathspec')
+    || !guard.includes('reconcileRepositoryScope')
+    || !guard.includes('removedIncidentIds')
+    || !origin.includes('repositoryGitPathspec()')
+    || !routing.includes('repositoryGitPathspec()')
+    || !stagedSession.includes('erases their incident history after auto-clearing')
+  ) {
+    throw new Error('foreign-diff product-scope filtering or legacy incident migration is not enforced end to end');
   }
 }
 
@@ -593,6 +732,8 @@ export function validateSuite({ root = ROOT } = {}) {
   check('Quick hard promotion gates', () => assertQuickGates());
   check('Goal exact labels locks and native state', () => assertGoalContract(canonicalRoot));
   check('Build and Research write boundaries', () => assertPlanningOnlySkills(canonicalRoot));
+  check('all public skills use the Doctor-attested worker path', () => assertDoctorAttestedLauncher(canonicalRoot));
+  check('all public skills auto-monitor and pause only on concrete foreign diffs', () => assertForeignDiffContract(canonicalRoot));
   check('private provision policy and enforcement boundary', () => assertPrivateProvisioner(canonicalRoot));
 
   return Object.freeze({

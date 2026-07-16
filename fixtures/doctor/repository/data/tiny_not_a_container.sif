@@ -1,0 +1,2 @@
+CRUISE_DOCTOR_NON_EXECUTABLE_CONTAINER_MARKER
+This deliberately invalid file must fail closed and must never be executed.

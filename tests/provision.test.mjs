@@ -1927,6 +1927,32 @@ test('blocked resolutions consume the bounded retry budget', async () => {
   );
 });
 
+test('provision retries have no hidden default attempt ceiling', async () => {
+  const run = createProvisionRun({
+    runId: 'reviewed-retry-history',
+    nodes: [node('CAP-A', 'parser')],
+    now: fixedNow,
+  });
+  const scheduler = new ProvisionScheduler({
+    run,
+    now: fixedNow,
+    resolvers: {
+      trusted_catalog: async () => trustedInstallCandidate({ official: false, trusted: false }),
+    },
+    installBroker: installExecutionBroker(async () => ({ exitCode: 0 })),
+    smokeBroker: smokeVerificationBroker(async () => smokeProof({
+      identity: 'official-tool',
+      version: '1.2.3',
+    })),
+  });
+  await scheduler.run();
+  await scheduler.retryNode('CAP-A');
+  await scheduler.retryNode('CAP-A');
+  const result = await scheduler.retryNode('CAP-A');
+  assert.equal(result.nodes[0].attempts.length, 4);
+  assert.equal(result.nodes[0].status, 'blocked');
+});
+
 test('successful retry requeues descendants blocked only by the failed dependency', async () => {
   let failRoot = true;
   const run = createProvisionRun({

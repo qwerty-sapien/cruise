@@ -9,13 +9,35 @@ Debug is an evidence-driven diagnosis lane. Its central deliverable is a proven 
 
 ## Delegate every substantive phase
 
-The root agent owns deterministic routing, user questions and permissions, worker launching, integration, and final synthesis. It never performs the diagnosis or repair itself. Launch level `3` through `cruise worker` for hypothesis generation, discriminating experiments, and normal causal repair. A genuinely difficult diagnosis or failed normal attempt may use one new level `5` attempt. Independent verification is another non-authoring worker attempt.
+The root agent owns deterministic routing, user questions and permissions, worker launching, integration, and final synthesis. It never performs the diagnosis or repair itself. Launch the persisted Cruise class default from the passing Doctor report through `cruise worker` for hypothesis generation, discriminating experiments, and normal causal repair; a narrowly bounded cheap experiment may use a lower justified level. Each evidenced soft failure may create a stronger new attempt, monotonically up to the level allowed by the workflow and host; explicit stop/resource conditions govern continuation. Independent verification is another non-authoring worker attempt.
 
 Each launch must carry bounded paths/effects, Origin and baseline digests, hypotheses/tasks/evidence IDs, limits, and stop rules. Persist returned reports and launcher receipts immutably.
 
+## Establish worker readiness before creating run state
+
+Run `cruise doctor --json` before capturing Origin or writing any run artifact. Continue only
+when the command exits zero and its top-level `ok` is `true`; explicitly confirm `model-policy`, `worker-host-rule`,
+`installed-plugin-digest`, and `client-on-path` all pass, while treating every other failed Doctor
+check as blocking too. Otherwise create no run, packet, or evidence record and give the single
+setup action reported by Doctor; the attested launcher is the complete input boundary and needs no
+extra user-facing transfer ceremony.
+
+After readiness passes, take the absolute `workerExecutable` from that same Doctor result and launch
+every `<workerExecutable> worker` command directly through the host execution tool; never use the PATH
+token `cruise`. Keep the command cwd and `-C` equal to the canonical repository and keep packet/report
+paths as direct named artifacts in the same `.cruise/runs/<run-id>` directory. Use
+`sandbox_permissions: "require_escalated"` and the concise justification
+`Run the Doctor-attested Cruise worker.` (or the host's equivalent field). The exact scoped rule
+installed and exercised by Doctor makes this non-interactive. Never try the worker in the ordinary
+sandbox first and never turn a connection failure into a second launch. If the launcher returns
+`CRUISE_WORKER_HOST_PATH_LOST`, preserve that incident, stop Cruise worker activity, and run
+`cruise doctor --deep --install-worker-rule`; do not produce a repository-export authorization question.
+
 ## Admit an actual unknown-cause symptom
 
-Read [the shared invocation contract](../../internal/shared/invocation-contract.md) first. Capture the raw symptom request in the immutable Origin Record, run the shared bounded probe and root-owned deterministic route, and record worker resolution before editing.
+Read [the shared invocation contract](../../internal/shared/invocation-contract.md) first. Capture the raw symptom request in the immutable Origin Record, let `begin` automatically establish shared non-destructive foreign-diff monitoring before any worker or further write, run the shared bounded probe and root-owned deterministic route, and record worker resolution before editing. Do not ask a speculative start question. Handle a later unexpected change only through the shared root-owned incident pause protocol after the concrete incident is persisted. If intentional drift is accepted before routing, preserve its bytes, never rewrite the stale immutable Origin, and continue only from a fresh Origin in a new run.
+
+At terminal success, perform the shared final clean check and call `foreign-diff-finalize --run-dir <run-dir> --expected-inventory-sha256 <checkpoint-sha256>` before the final response. Never finalize a failed, dirty, active, blocked, or waiting run.
 
 Require concrete observed behavior: a regression, wrong output, anomaly, failed test/CI run, crash, hang, or inconsistent result. If no failure exists and the change is already known, hand off to Quick or Refine. If the user wants examination without repair, use native Codex or GitHub review. If the question is evidence acquisition or option comparison, use Research. If the diagnosis or repair becomes long-running, cross-system, permission-heavy, or strategically sliced, promote to Goal with the same origin and evidence.
 

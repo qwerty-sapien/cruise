@@ -1,0 +1,8 @@
+#FileFormat=GEMv0.2
+#SortedBy=None
+#BinType=bin
+#BinSize=1
+geneID	x	y	MIDCounts	ExonCount
+SYN_GENE_A	10	20	3	2
+SYN_GENE_B	11	20	5	4
+SYN_GENE_A	10	21	2	1

@@ -2760,6 +2760,22 @@ test('trusted auth runner preserves argv boundaries, filters environment, redact
   assert.deepEqual(persisted.map(({ status }) => status), ['running', 'succeeded']);
   assert.equal(terminated, true);
 
+  for (const timeoutMs of [31 * 60 * 1000, null]) {
+    const withoutHiddenCeiling = await runAuth({
+      timeoutMs,
+      spawnProcess: async () => ({ exit_code: 0 }),
+      persistState: async () => {},
+      postAuthCheck: async () => ({
+        ok: true,
+        identity: 'signed-in-user',
+        scope: ['connector:read'],
+        smoke_test_passed: true,
+      }),
+    });
+    assert.equal(withoutHiddenCeiling.status, 'succeeded');
+    assert.equal(withoutHiddenCeiling.confirmed, true);
+  }
+
   const failedProcess = await runAuth({
     spawnProcess: async () => ({ exit_code: 1 }),
     persistState: async () => {},

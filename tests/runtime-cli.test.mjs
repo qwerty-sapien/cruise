@@ -7,19 +7,25 @@ import {
   readFile,
   symlink,
   truncate,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
+import { runRuntimeCli } from '../scripts/cruise-runtime.mjs';
 import { MODEL_IDS } from '../scripts/lib/model-policy.mjs';
+import {
+  foreignDiffAuthorityPath,
+} from '../scripts/lib/foreign-diff-guard.mjs';
 import { validateOriginRecord } from '../scripts/lib/origin.mjs';
 import {
   deterministicProbeDigest,
   QUICK_HARD_GATE_SIGNALS,
   repositoryBaselineDigest,
 } from '../scripts/lib/routing.mjs';
+import { assertSemanticMappingPacket } from '../scripts/lib/semantic-mapping-packet.mjs';
 import {
   createTaskTrace,
   createTraceabilityRecord,
@@ -103,7 +109,12 @@ function run(args, options = {}) {
   });
 }
 
-async function begin({ root, runDirectory, skill = 'quick', prompt }) {
+async function begin({
+  root,
+  runDirectory,
+  skill = 'quick',
+  prompt,
+}) {
   const result = run(
     ['begin', '--skill', skill, '--root', root, '--run-dir', runDirectory, '--stdin'],
     { input: prompt },
@@ -127,7 +138,7 @@ async function completeProbe({ runDirectory, facts = [] }) {
     })),
     id: `PF-${String(index + 1).padStart(2, '0')}`,
   }));
-  const path = join(runDirectory, 'probe-enrichment-input.yaml');
+  const path = join(runDirectory, 'semantic-facts.yaml');
   await writeYamlFile(path, {
     schema_version: 1,
     prompt_sha256: origin.origin.prompt_sha256,
@@ -181,7 +192,12 @@ test('begin preserves stdin whitespace and line endings exactly in atomic YAML s
   const probe = await readYamlFile(join(runDirectory, 'probe.yaml'));
   const state = await readYamlFile(join(runDirectory, 'state.yaml'));
   const evidence = await readYamlFile(join(runDirectory, 'evidence.yaml'));
+  const guard = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
   validateOriginRecord(origin);
+  assert.match(
+    result.stdout,
+    new RegExp(`repository baseline ${repositoryBaselineDigest(origin.repository_baseline)}\\n`, 'u'),
+  );
   assert.equal(origin.origin.raw_prompt, prompt);
   assert.equal(
     origin.origin.prompt_sha256,
@@ -196,6 +212,258 @@ test('begin preserves stdin whitespace and line endings exactly in atomic YAML s
   assert.equal(state.status, 'routing_pending');
   assert.equal(state.selected_skill, 'quick');
   assert.equal(evidence.outcome, 'active');
+  assert.equal(guard.schema_version, 2);
+  assert.equal(guard.status, 'monitoring');
+  assert.equal(Object.hasOwn(guard, 'permission'), false);
+
+  const mappingPacket = await readYamlFile(join(runDirectory, 'semantic-mapping-packet.yaml'));
+  assert.deepEqual(assertSemanticMappingPacket(mappingPacket), mappingPacket);
+  assert.equal(mappingPacket.enrichment_template.prompt_sha256, origin.origin.prompt_sha256);
+  assert.equal(
+    mappingPacket.enrichment_template.repository_baseline_digest,
+    repositoryBaselineDigest(origin.repository_baseline),
+  );
+  await writeYamlFile(
+    join(runDirectory, 'semantic-facts.yaml'),
+    mappingPacket.enrichment_template,
+  );
+  const enriched = run([
+    'enrich-probe',
+    '--run-dir', runDirectory,
+    '--facts', join(runDirectory, 'semantic-facts.yaml'),
+  ]);
+  assert.equal(enriched.status, 0, enriched.stderr);
+  assert.equal((await readYamlFile(join(runDirectory, 'probe.yaml'))).acquisition.status, 'complete');
+});
+
+test('begin activates foreign-diff monitoring without a permission ceremony', async () => {
+  const { base, root } = await fixture();
+  const runDirectory = join(base, 'run-monitoring');
+  const began = run(
+    ['begin', '--skill', 'quick', '--root', root, '--run-dir', runDirectory, '--stdin'],
+    { input: 'Make a bounded change.\n' },
+  );
+  assert.equal(began.status, 0, began.stderr);
+  assert.match(began.stdout, /foreign-diff monitoring active/u);
+  assert.doesNotMatch(began.stdout, /permission/u);
+  const guard = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
+  assert.equal(guard.status, 'monitoring');
+  assert.equal(Object.hasOwn(guard, 'permission'), false);
+
+  const checked = run(['foreign-diff-check', '--run-dir', runDirectory]);
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.match(checked.stdout, /inventory clean/u);
+
+  const retired = run([
+    'foreign-diff-permission',
+    '--run-dir', runDirectory,
+  ]);
+  assert.equal(retired.status, 1);
+  assert.match(retired.stderr, /unknown internal runtime command/u);
+});
+
+test('runtime persists a foreign-diff incident, pauses, and preserves intentional bytes on resolution', async () => {
+  const { base, root } = await fixture();
+  const runDirectory = join(base, 'run-foreign-diff');
+  await begin({ root, runDirectory, prompt: 'Make a bounded change.\n' });
+  await writeFile(join(root, 'app.txt'), 'user changed this\n');
+
+  const checked = run(['foreign-diff-check', '--run-dir', runDirectory]);
+  assert.equal(checked.status, 1);
+  assert.match(checked.stderr, /foreign diff FD-001 detected/u);
+  const paused = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
+  assert.equal(paused.status, 'waiting_user');
+  assert.deepEqual(paused.active_incident.foreign_paths, ['app.txt']);
+  assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'user changed this\n');
+
+  const resolutionPath = join(runDirectory, 'foreign-diff-resolution.yaml');
+  await writeYamlFile(resolutionPath, {
+    schema_version: 1,
+    kind: 'cruise_foreign_diff_resolution',
+    incident_id: paused.active_incident.incident_id,
+    decision_id: 'D-02',
+    selection: 'preserve_and_continue',
+  });
+  const resolved = run([
+    'foreign-diff-resolve',
+    '--run-dir', runDirectory,
+    '--resolution', resolutionPath,
+  ]);
+  assert.equal(resolved.status, 0, resolved.stderr);
+  assert.match(resolved.stdout, /preserved/u);
+  assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'user changed this\n');
+  assert.equal((await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'))).status, 'monitoring');
+
+  const originPath = join(runDirectory, 'origin.yaml');
+  const immutableOrigin = await readFile(originPath, 'utf8');
+  const mappingPacket = await readYamlFile(join(runDirectory, 'semantic-mapping-packet.yaml'));
+  const factsPath = join(runDirectory, 'semantic-facts.yaml');
+  await writeYamlFile(factsPath, mappingPacket.enrichment_template);
+  const staleRun = run([
+    'enrich-probe',
+    '--run-dir', runDirectory,
+    '--facts', factsPath,
+  ]);
+  assert.equal(staleRun.status, 1);
+  assert.match(
+    staleRun.stderr,
+    /intentional foreign-diff bytes were preserved[\s\S]*immutable Origin baseline is now stale[\s\S]*fresh Cruise run with a fresh Origin/u,
+  );
+  assert.equal(await readFile(originPath, 'utf8'), immutableOrigin);
+  assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'user changed this\n');
+
+  const classifierPath = join(runDirectory, 'classifier-after-preserve.yaml');
+  await writeYamlFile(classifierPath, classifier());
+  const staleRoute = run([
+    'route',
+    '--skill', 'quick',
+    '--run-dir', runDirectory,
+    '--classifier', classifierPath,
+  ]);
+  assert.equal(staleRoute.status, 1);
+  assert.match(staleRoute.stderr, /immutable Origin baseline is now stale[\s\S]*fresh Cruise run with a fresh Origin/u);
+  await assert.rejects(readFile(join(runDirectory, 'route.yaml')), /ENOENT/u);
+});
+
+test('enrichment and routing serialize guard checks and control writes under the foreign-diff lock', async () => {
+  const { base, root } = await fixture();
+  const runDirectory = join(base, 'run-guard-lock');
+  await begin({ root, runDirectory, prompt: 'Make a bounded change.\n' });
+  const mappingPacket = await readYamlFile(join(runDirectory, 'semantic-mapping-packet.yaml'));
+  const factsPath = join(runDirectory, 'semantic-facts.yaml');
+  await writeYamlFile(factsPath, mappingPacket.enrichment_template);
+  const guardLock = join(
+    dirname(foreignDiffAuthorityPath(root, 'run-guard-lock')),
+    'foreign-diff-guard.lock',
+  );
+  await writeFile(guardLock, 'held by concurrent guard operation\n');
+
+  const blockedEnrichment = run([
+    'enrich-probe',
+    '--run-dir', runDirectory,
+    '--facts', factsPath,
+  ]);
+  assert.equal(blockedEnrichment.status, 1);
+  assert.match(blockedEnrichment.stderr, /foreign-diff-guard is already running/u);
+  assert.equal((await readYamlFile(join(runDirectory, 'probe.yaml'))).acquisition.status, 'pending');
+
+  await unlink(guardLock);
+  const enriched = run([
+    'enrich-probe',
+    '--run-dir', runDirectory,
+    '--facts', factsPath,
+  ]);
+  assert.equal(enriched.status, 0, enriched.stderr);
+  const classifierPath = join(runDirectory, 'classifier.yaml');
+  await writeYamlFile(classifierPath, classifier());
+  await writeFile(guardLock, 'held by concurrent guard operation\n');
+  const blockedRoute = run([
+    'route',
+    '--skill', 'quick',
+    '--run-dir', runDirectory,
+    '--classifier', classifierPath,
+  ]);
+  assert.equal(blockedRoute.status, 1);
+  assert.match(blockedRoute.stderr, /foreign-diff-guard is already running/u);
+  assert.equal((await readYamlFile(join(runDirectory, 'state.yaml'))).status, 'routing_pending');
+  await assert.rejects(readFile(join(runDirectory, 'route.yaml')), /ENOENT/u);
+  await unlink(guardLock);
+});
+
+test('runtime purely projects then brackets an attributed write with an exact action and receipt', async () => {
+  const { base, root } = await fixture();
+  const runDirectory = join(base, 'run-action');
+  await begin({ root, runDirectory, prompt: 'Make a bounded change.\n' });
+  const contentPath = join(runDirectory, 'foreign-diff-action-content.bin');
+  await writeFile(contentPath, 'agent changed this\n');
+  const intentPath = join(runDirectory, 'foreign-diff-projection-intent.yaml');
+  const intent = {
+    schema_version: 1,
+    kind: 'cruise_change_projection_intent',
+    action_id: 'A-01',
+    changes: [{
+      path: 'app.txt',
+      kind: 'file',
+      mode: 0o644,
+      content_file: contentPath,
+    }],
+  };
+  const invalidIntentPath = join(runDirectory, 'projection-intent.yaml');
+  await writeYamlFile(invalidIntentPath, intent);
+  const rejectedName = run([
+    'foreign-diff-project',
+    '--run-dir', runDirectory,
+    '--intent', invalidIntentPath,
+    '--output', join(runDirectory, 'foreign-diff-rejected-action.yaml'),
+  ]);
+  assert.equal(rejectedName.status, 1);
+  assert.match(rejectedName.stderr, /foreign-diff-\* control filename/u);
+  await writeYamlFile(intentPath, intent);
+  const actionPath = join(runDirectory, 'foreign-diff-action.yaml');
+  const projected = run([
+    'foreign-diff-project',
+    '--run-dir', runDirectory,
+    '--intent', intentPath,
+    '--output', actionPath,
+  ]);
+  assert.equal(projected.status, 0, projected.stderr);
+  assert.match(projected.stdout, /action A-01 projected/u);
+  assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'stable\n');
+  const action = await readYamlFile(actionPath);
+  assert.equal(action.kind, 'cruise_change_action');
+  assert.equal(action.expected_changes[0].after_size, Buffer.byteLength('agent changed this\n'));
+  const opened = run([
+    'foreign-diff-open',
+    '--run-dir', runDirectory,
+    '--action', actionPath,
+  ]);
+  assert.equal(opened.status, 0, opened.stderr);
+  await writeFile(join(root, 'app.txt'), 'agent changed this\n');
+  const receiptPath = join(runDirectory, 'foreign-diff-receipt.yaml');
+  await writeYamlFile(receiptPath, {
+    schema_version: 1,
+    kind: 'cruise_change_receipt',
+    action_id: 'A-01',
+    changes: [{
+      path: 'app.txt',
+      before_sha256: null,
+      after_sha256: action.expected_changes[0].after_inventory_sha256,
+    }],
+  });
+  const closed = run([
+    'foreign-diff-close',
+    '--run-dir', runDirectory,
+    '--receipt', receiptPath,
+  ]);
+  assert.equal(closed.status, 0, closed.stderr);
+  assert.match(closed.stdout, /action A-01 accepted/u);
+  assert.equal(run(['foreign-diff-check', '--run-dir', runDirectory]).status, 0);
+  const cleanGuard = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const finalized = run([
+    'foreign-diff-finalize',
+    '--run-dir', runDirectory,
+    '--expected-inventory-sha256', cleanGuard.checkpoint.inventory.sha256,
+  ]);
+  assert.equal(finalized.status, 0, finalized.stderr);
+  assert.match(finalized.stdout, /guard finalized/u);
+  assert.equal((await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'))).status, 'stopped');
+});
+
+test('enrich-probe accepts only the packet-declared semantic-facts path inside the run', async () => {
+  const { base, root } = await fixture();
+  const runDirectory = join(base, 'run-external-facts');
+  await begin({ root, runDirectory, prompt: 'Assess this bounded change.\n' });
+  const outsideFacts = join(base, 'outside-facts.yaml');
+  await writeFile(outsideFacts, 'schema_version: 1\n', 'utf8');
+
+  const result = run([
+    'enrich-probe',
+    '--run-dir', runDirectory,
+    '--facts', outsideFacts,
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /runtime packet-declared semantic-facts\.yaml/u);
 });
 
 test('begin commits valid blocked artifacts for an oversized untracked file', async () => {
@@ -204,7 +472,11 @@ test('begin commits valid blocked artifacts for an oversized untracked file', as
   await writeFile(oversizedPath, '');
   await truncate(oversizedPath, 2 * 1024 * 1024 * 1024 + 1);
   const runDirectory = join(base, 'blocked-run');
-  const result = await begin({ root, runDirectory, prompt: 'Capture this repository safely.\n' });
+  const result = await begin({
+    root,
+    runDirectory,
+    prompt: 'Capture this repository safely.\n',
+  });
   assert.match(result.stdout, /created/);
   const origin = await readYamlFile(join(runDirectory, 'origin.yaml'));
   const state = await readYamlFile(join(runDirectory, 'state.yaml'));
@@ -216,6 +488,41 @@ test('begin commits valid blocked artifacts for an oversized untracked file', as
   assert.equal(state.status, 'blocked');
   assert.equal(probe.schema_version, 2);
   assert.equal(evidence.schema_version, 1);
+});
+
+test('begin blocks a staged run when repository bytes change across guard initialization', async () => {
+  const { base, root } = await fixture();
+  const runDirectory = join(base, 'run-initialization-race');
+  const promptPath = join(base, 'race-prompt.txt');
+  await writeFile(promptPath, 'Capture a stable Origin.\n');
+  let stdout = '';
+
+  await runRuntimeCli([
+    'begin',
+    '--skill', 'quick',
+    '--root', root,
+    '--run-dir', runDirectory,
+    '--prompt-file', promptPath,
+  ], {
+    output: { write(value) { stdout += value; } },
+    runtimeHooks: {
+      async afterForeignDiffGuardInitialized() {
+        await writeFile(join(root, 'app.txt'), 'changed during guard initialization\n');
+      },
+    },
+  });
+
+  const state = await readYamlFile(join(runDirectory, 'state.yaml'));
+  const guard = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const origin = await readYamlFile(join(runDirectory, 'origin.yaml'));
+  validateOriginRecord(origin);
+  assert.equal(state.status, 'blocked');
+  assert.match(state.history.at(-1).reason, /repository_changed_during_guard_initialization/u);
+  assert.equal(guard.status, 'blocked');
+  assert.equal(guard.block.code, 'repository_changed_during_guard_initialization');
+  assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'changed during guard initialization\n');
+  assert.match(stdout, /bytes were left untouched; ask whether the change was intentional[\s\S]*fresh Cruise run/u);
+  await assert.rejects(readFile(join(runDirectory, 'semantic-mapping-packet.yaml')), /ENOENT/u);
 });
 
 test('begin accepts a regular prompt file but rejects prompt positionals and symlinks', async () => {
@@ -312,10 +619,10 @@ test('runtime requires an evidence-bound assessment and overrides a false-negati
   validateOriginRecord(origin);
 });
 
-test('runtime persists and enforces all 18 hard Quick signals from one bounded assessment', async () => {
+test('runtime persists all 18 Quick assessment signals but promotes only on the 17 semantic gates', async () => {
   const { base, root, catalogPath } = await fixture();
   const runDirectory = join(base, 'run-all-gates');
-  const prompt = 'Assess every hard gate before accepting this as Quick.\n';
+  const prompt = 'Assess every Quick signal before accepting this as Quick.\n';
   await begin({ root, runDirectory, prompt });
   await completeProbe({
     runDirectory,
@@ -342,7 +649,7 @@ test('runtime persists and enforces all 18 hard Quick signals from one bounded a
   assert.equal(probe.semantic_facts.length, 18);
   assert.deepEqual(
     [...route.promotion_reasons].sort(),
-    [...QUICK_HARD_GATE_SIGNALS].sort(),
+    QUICK_HARD_GATE_SIGNALS.filter((signal) => signal !== 'failed_quick_repairs').sort(),
   );
   assert.equal(route.selected_route, 'debug');
 });
@@ -431,7 +738,11 @@ test('route fails closed on repository drift and never writes route.yaml', async
     '--classifier', classifierPath,
   ]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /repository baseline changed after begin/);
+  assert.match(result.stderr, /foreign diff FD-001 detected/);
+  const guard = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
+  assert.equal(guard.status, 'waiting_user');
+  assert.deepEqual(guard.active_incident.foreign_paths, ['app.txt']);
+  assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'drifted after begin\n');
   await assert.rejects(readFile(join(runDirectory, 'route.yaml')), /ENOENT/);
 });
 
@@ -513,12 +824,12 @@ test('resolve-model consumes only app-server JSON and atomically records request
     '--output', output,
   ]);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `resolved ${MODEL_IDS.terra} high\n`);
+  assert.equal(result.stdout, `resolved ${MODEL_IDS.terra} xhigh\n`);
   const record = await readYamlFile(output);
   assert.equal(record.requested.tier, 'terra');
-  assert.equal(record.requested.reasoning_effort, 'high');
+  assert.equal(record.requested.reasoning_effort, 'xhigh');
   assert.equal(record.resolved.model_id, MODEL_IDS.terra);
-  assert.equal(record.resolved.reasoning_effort, 'high');
+  assert.equal(record.resolved.reasoning_effort, 'xhigh');
 
   const yamlCatalog = join(base, 'models.yaml');
   await writeFile(yamlCatalog, stringifyYaml(catalog()), 'utf8');
