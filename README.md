@@ -43,11 +43,14 @@ Cruise keeps these lanes mutually exclusive by primary intent and by what is alr
 - Node.js `20` or newer
 - An authenticated Codex configuration
 
-### Set up the plugin and terminal client
+### Set up the plugin
 
 ```sh
-codex plugin remove cruise@agent-local
 codex plugin add cruise@agent-local
+```
+### Set up Cruise TUI
+
+```sh
 mkdir -p ~/.local/bin
 ln -sfn "$PWD/scripts/cruise.mjs" ~/.local/bin/cruise
 cruise agents install
@@ -58,8 +61,14 @@ Restart already-open Codex tasks after reinstalling; active tasks retain the ski
 
 ### Verify the installation
 
+Cruise Codex Plugin:
+
 ```sh
 codex plugin list
+```
+
+Cruise TUI:
+```sh
 cruise agents install --json
 cruise doctor
 ```
