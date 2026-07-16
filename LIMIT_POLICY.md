@@ -1,52 +1,68 @@
 # Cruise limit policy
 
-Cruise does not use hidden numeric ceilings to decide whether legitimate work may continue. A
-task continues or stops according to its explicit reviewed stop conditions, current evidence,
-permissions, ownership, resource policy, and host capability. Retry and repair history remains
-append-only and may not be erased to manufacture a fresh budget.
+Cruise does not use hidden numeric ceilings to decide whether legitimate work may continue.
 
-Every executable limit belongs to one of these classes:
+A task continues or stops according to:
 
-1. **Host or protocol constraint.** The limit is advertised or enforced by Codex, the operating
-   system, a file format, or an external API. Cruise must report it truthfully and must not present
-   it as a Cruise preference. Service account quotas and Codex host-action usage limits are in
-   this class and cannot be changed by this repository.
-2. **Safety or authority boundary.** The limit prevents scope escape, permission expansion,
-   unsafe path traversal, secret persistence, untrusted installation, or unauthorized effects.
-   These limits remain fail-closed.
-3. **Resource containment.** Byte, node, depth, file-count, and diagnostic-retention limits bound
-   untrusted or repository-controlled input before memory, disk, parser, or log use. They must be
-   recorded with truncation/overflow evidence and may be configurable only without weakening the
-   fail-closed boundary.
-4. **Liveness and recovery.** Deadlines, cancellation, process termination, and bounded lock-race
-   recovery prevent a dead child or continuously replaced lock from hanging the coordinator.
-   Defaults may be overridden by explicit trusted authority where supported; cancellation remains
-   available. Rapid Deep Doctor has one fixed 60000 ms liveness deadline per read-only skill probe
-   and targets less than 15000 ms by reusing one warm conversation. Manual `--troubleshoot` has no
-   workflow liveness deadline; cancellation and bounded process cleanup remain available. Automatic Git
-   update hooks wait for active Cruise workers without an attempt ceiling and coalesce through one
-   stale-owner-aware lock. Plugin-install readiness likewise has no poll-count ceiling; its
-   configurable wall-clock liveness deadline prevents a completed Git operation from hanging
-   forever when Codex registry state never converges.
-5. **Semantic or consistency cardinality.** Exact Plan/Start approvals, one integration owner,
-   one active controller phase, and host-advertised worker levels encode protocol meaning rather
-   than workload budgets. Routing's one optional Terra classification retry also ends in an
-   explicit uncertainty result that preserves the user's selected skill; it does not stop work.
-   Build accepts either its exact digest-echoing structured selection or an explicit immutable
-   request-header `--auto-approve` authority bound to the same later displayed review digest.
-   Missing Plan-only UI is not a work limit and must not be promoted into a blocked native Goal.
+- its reviewed stop conditions;
+- current evidence;
+- permissions and ownership;
+- resource policy; and
+- actual host capability.
 
-A hard-coded count is prohibited when it merely limits useful behavior. In particular:
+Retry and repair history is append-only. It cannot be erased to manufacture a fresh budget.
 
-- model and worker escalation histories have no universal attempt maximum;
-- Quick repair history is telemetry, not an automatic two-attempt cutoff;
-- disjoint read-only Research concurrency has no Cruise-defined numeric ceiling;
-- provision retries have no hidden default attempt count, and persisted attempt history is
-  governed by optional explicit scheduler policy plus the existing state byte boundary rather
-  than a redundant 64-entry ceiling; and
-- structured authentication accepts any explicit positive timeout and also an explicit `null`
-  timeout, while retaining a finite default and cancellation support.
+## Allowed limit classes
 
-New hard limits require a nearby comment or shared documentation naming their class, protected
-resource or invariant, overflow behavior, and test. Limits without that rationale should be
-replaced by explicit per-task authority or removed.
+Every executable limit must belong to one of these classes.
+
+| Class | Purpose | Required behavior |
+| --- | --- | --- |
+| Host or protocol | Respect a limit imposed by Codex, the OS, a file format, or an external API | Name the external source truthfully; do not present it as a Cruise preference |
+| Safety or authority | Prevent scope escape, permission expansion, unsafe paths, secret persistence, untrusted installation, or unauthorized effects | Remain fail-closed |
+| Resource containment | Bound untrusted bytes, nodes, depth, files, logs, or parser input | Record overflow/truncation evidence; configuration must not weaken the boundary |
+| Liveness and recovery | Prevent a dead child, stuck registry, or continuously replaced lock from hanging the coordinator | Keep cancellation available; allow trusted deadline overrides only where supported |
+| Semantic consistency | Encode protocol meaning such as one active phase or one exact approval | Explain the invariant rather than treating it as a workload budget |
+
+Service quotas and Codex host-action limits are host/protocol constraints. This repository cannot change them.
+
+## Current liveness rules
+
+| Operation | Rule |
+| --- | --- |
+| Deep Doctor skill probe | Fixed `60000 ms` deadline; performance target below `15000 ms` |
+| Troubleshoot workflow | No workflow deadline; cancellation and bounded process cleanup remain available |
+| Automatic update hook | Waits for active Cruise processes without an attempt ceiling; concurrent hooks coalesce behind a stale-owner-aware lock |
+| Plugin readiness | No poll-count ceiling; configurable wall-clock deadline prevents a completed Git operation from hanging forever |
+
+## Current semantic cardinalities
+
+- Exact Plan and Start approvals are separate events.
+- Build accepts either its exact digest-echoing structured selection or an immutable request-header `--auto-approve` directive bound to the later review digest.
+- There is one integration owner and one active controller phase.
+- Worker levels come from the host-advertised catalog.
+- Routing may perform one optional Terra classification retry, then records uncertainty and preserves the user-selected skill.
+- A missing Plan-only UI is not a workload limit and must not be promoted into a blocked native Goal.
+
+## Prohibited arbitrary ceilings
+
+The following histories have no universal Cruise-defined attempt maximum:
+
+| Area | Governing rule |
+| --- | --- |
+| Model and worker escalation | Reviewed workflow stops, evidence, resource policy, and strongest advertised pair |
+| Quick repair | Repair history is telemetry; evidence determines promotion, re-planning, or continuation |
+| Disjoint read-only Research | Dependencies, ownership, and actual host scheduling |
+| Capability provisioning | Optional explicit scheduler policy plus the persisted state-size boundary |
+| Structured authentication | Any explicit positive timeout or explicit `null`; finite default and cancellation remain supported |
+
+## Adding a limit
+
+A new hard limit needs a nearby comment or shared document that names:
+
+1. its allowed class;
+2. the protected resource or invariant;
+3. overflow or timeout behavior; and
+4. the proving test.
+
+Replace limits without that rationale with explicit per-task authority or remove them.
