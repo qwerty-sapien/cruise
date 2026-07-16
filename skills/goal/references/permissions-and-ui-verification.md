@@ -4,7 +4,7 @@ Front-load a truthful permission envelope and use localhost, browser control, or
 
 ## Table of contents
 
-- [1. Two approval layers](#1-two-approval-layers)
+- [1. Contract and runtime layers](#1-contract-and-runtime-layers)
 - [2. Permission envelope](#2-permission-envelope)
 - [3. Lock permissions precisely](#3-lock-permissions-precisely)
 - [4. Discovery previews](#4-discovery-previews)
@@ -15,23 +15,23 @@ Front-load a truthful permission envelope and use localhost, browser control, or
 - [9. Evidence quality](#9-evidence-quality)
 - [10. Cleanup and interruption](#10-cleanup-and-interruption)
 
-## 1. Two approval layers
+## 1. Contract and runtime layers
 
 Keep these distinct:
 
-1. **Contract approval** — the user locks a permission boundary in `DECISIONS.md` and chooses Start.
+1. **Contract approval** — the user resolves the Goal-specific needs envelope, reviews the captured revisions in the combined Plan-and-Goal presentation, and chooses **Approve both**.
 2. **Runtime approval** — Codex, the sandbox, managed policy, a tool, an OS dialog, or a service may still require approval at action time.
 
 Contract approval never overrides runtime enforcement. Runtime approval for one command never expands the contract. Require both when both apply.
 
 ## 2. Permission envelope
 
-Classify expected capabilities before Start:
+Classify expected capabilities before the needs question:
 
 | Capability | Example | Default without locked permission |
 | --- | --- | --- |
-| Repository writes | Edit source/tests/docs in declared ownership | Allowed only after Start and within node scope |
-| Planning writes | Write `.cruise/goal/` artifacts | Allowed before Start |
+| Repository writes | Edit source/tests/docs in declared ownership | Allowed only after activation and within node scope |
+| Planning writes | Write `.cruise/goal/` artifacts | Allowed before combined approval |
 | Tests/builds | Unit tests, compiler, local build | Inspect side effects; stay in owned/temp paths |
 | Dependency install | npm/pip/cargo downloads or lock changes | Ask up front; runtime approval may follow |
 | Network read | Fetch docs, packages, remote metadata | Ask when material or restricted |
@@ -43,7 +43,16 @@ Classify expected capabilities before Start:
 | External mutation | Deploy, migrate, send message, change SaaS state | Separate locked decision with exact target |
 | High-risk effect | Destructive action, credentials, intrusive test, paid compute, production data | Never defer or infer; exact locked approval required |
 
-Use `None approved` for capabilities not granted. Do not bundle a high-risk effect into a broad “all permissions” choice.
+Use `None approved` for capabilities not granted. The high-level Goal-specific needs selector may bundle only the concrete bounded ordinary needs displayed in its card. **Approve all** never includes credentials, secrets, sensitive-data access, purchases, destructive operations, publication, production mutations, or another high-risk effect; those keep exact just-in-time gates.
+
+The needs card has four exact choices:
+
+- **Approve all** — record every displayed bounded install, named-site authentication checkpoint, routine mini-plan autonomy preference, and ordinary tool-permission preference.
+- **Select some** — open one compact checklist and record only the selected entries.
+- **Reject all** — record interactive mode; pause when a required mini-plan or runtime permission is encountered.
+- **Discuss** — ask one focused question before recording the envelope.
+
+“Auto-approve” is a workflow preference, not a way around host policy. It applies only after the initial combined contract approval, to routine JIT mini-plans and ordinary tool requests inside the locked envelope. It never approves the initial contract or a destructive, credential-bearing, sensitive-data, publication, purchase, production, or scope-changing request. If the host cannot honor it, the Goal pauses at the real runtime gate. Authentication always pauses for the user to authenticate; Cruise may request and detect that checkpoint but never enters or exposes credentials on the user's behalf.
 
 ## 3. Lock permissions precisely
 
@@ -88,7 +97,7 @@ Use one of:
 
 Never merge, ship, or treat a disposable preview as implementation evidence. Record what it demonstrated and which decision it informed. If the preview would require production data, an external mutation, credentials, destructive setup, or paid resources, obtain a separate locked permission or do not run it.
 
-The target repository remains implementation-inactive before Start unless the user explicitly creates and approves a narrowly scoped discovery exception. Prefer temporary isolation.
+The target repository remains implementation-inactive before native activation unless the user explicitly creates and approves a narrowly scoped discovery exception. Prefer temporary isolation.
 
 ## 5. Tool selection
 

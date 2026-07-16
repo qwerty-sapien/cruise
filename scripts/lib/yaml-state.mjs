@@ -1,6 +1,5 @@
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 
 const DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_DEPTH = 64;
@@ -660,7 +659,7 @@ export async function writeYamlFile(
   if (schema) assertYamlSchema(value, schema, { name: path });
   const source = stringifyYaml(value, stringifyOptions);
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  const temporary = join(dirname(path), '.yaml-stage');
   let handle;
   try {
     handle = await open(temporary, 'wx', mode);

@@ -1084,10 +1084,10 @@ test('workflow queue derives a deterministic DAG and excludes recursive Build, r
     produces: ['root-cause-diagnosis'],
     acceptance_criteria: [],
   })]).items[0].mode, 'reactive');
-  assert.throws(() => queue([queueItem('QI-01', 'goal', { status: 'running' })]), /QUEUE-STATE\.yaml/);
-  assert.throws(() => queue([queueItem('QI-01', 'goal', { blockers: ['waiting'] })]), /QUEUE-STATE\.yaml/);
-  assert.throws(() => queue([queueItem('QI-01', 'goal', { attempts: [{}] })]), /QUEUE-STATE\.yaml/);
-  assert.throws(() => queue([queueItem('QI-01', 'goal', { result: {} })]), /QUEUE-STATE\.yaml/);
+  assert.throws(() => queue([queueItem('QI-01', 'goal', { status: 'running' })]), /queue-run\.yaml/);
+  assert.throws(() => queue([queueItem('QI-01', 'goal', { blockers: ['waiting'] })]), /queue-run\.yaml/);
+  assert.throws(() => queue([queueItem('QI-01', 'goal', { attempts: [{}] })]), /queue-run\.yaml/);
+  assert.throws(() => queue([queueItem('QI-01', 'goal', { result: {} })]), /queue-run\.yaml/);
   assert.throws(() => queue([
     queueItem('QI-01', 'goal', { requires: ['QI-02'] }),
     queueItem('QI-02', 'research', { requires: ['QI-01'] }),
@@ -1529,7 +1529,7 @@ test('Build approval requires host-structured provenance and returns an opaque v
   }), /changed after the displayed approval review|build_contract_digest does not match computed contract bytes|requires a non-empty Identity section/);
 
   await writeFile(join(directory, 'STATE.yaml'), 'status: active\n');
-  await writeFile(join(directory, 'QUEUE-STATE.yaml'), 'status: running\n');
+  await writeFile(join(directory, 'queue-run.yaml'), 'status: running\n');
   const runtimeArtifactSnapshot = await verifyBuildApprovalArtifacts({
     root,
     verifiedBuildApproval: receipt,

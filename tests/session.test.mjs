@@ -31,7 +31,7 @@ class MemoryOutput {
 
 class FakeAppServer extends EventEmitter {
   constructor({
-    labels = ['Approve Plan', 'Start Cruise'],
+    labels = ['Reject all', 'Approve both'],
     onResponse = null,
     onTurnStart = null,
     autoCompleteGoalTurn = true,
@@ -47,6 +47,7 @@ class FakeAppServer extends EventEmitter {
     delayGoalGetNumber = null,
     goalGetGate = null,
     replaceGoalOnGetNumber = null,
+    approvalReason = 'Test approval',
   } = {}) {
     super();
     this.labels = labels;
@@ -65,6 +66,7 @@ class FakeAppServer extends EventEmitter {
     this.delayGoalGetNumber = delayGoalGetNumber;
     this.goalGetGate = goalGetGate;
     this.replaceGoalOnGetNumber = replaceGoalOnGetNumber;
+    this.approvalReason = approvalReason;
     this.calls = [];
     this.responses = [];
     this.errors = [];
@@ -72,6 +74,7 @@ class FakeAppServer extends EventEmitter {
     this.stopped = false;
     this._approvalResponses = 0;
     this._goalGetCount = 0;
+    this._settingsUpdateCount = 0;
   }
 
   async start() {
@@ -121,8 +124,11 @@ class FakeAppServer extends EventEmitter {
     }
     if (method === 'thread/settings/update') {
       if (params.collaborationMode?.mode === 'default') {
-        this.emit('settings-requested');
-        if (this.settingsGate) await this.settingsGate.promise;
+        this._settingsUpdateCount += 1;
+        if (this.settingsGate && this._settingsUpdateCount === 2) {
+          this.emit('settings-requested');
+          await this.settingsGate.promise;
+        }
       }
       return {};
     }
@@ -229,6 +235,22 @@ class FakeAppServer extends EventEmitter {
 
   emitQuestion(index) {
     const label = this.labels[index];
+    const combined = ['Approve both', 'Refine', 'Reject both'].includes(label);
+    const needs = label === 'Reject all';
+    if (combined) {
+      this.emit('notification', {
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-test',
+          turnId: 'turn-prep',
+          item: {
+            type: 'plan',
+            id: `plan-${index}`,
+            text: '# Plan\n\nPrepared implementation plan.\n\n# Goal\n\nPrepared durable Goal.\n',
+          },
+        },
+      });
+    }
     this.emit('request', {
       method: 'item/tool/requestUserInput',
       id: `q${index}`,
@@ -240,14 +262,33 @@ class FakeAppServer extends EventEmitter {
         questions: [
           {
             id: `q${index}`,
-            header: label === 'Approve Plan' ? 'Plan review' : 'Goal review',
+            header: combined
+              ? 'Plan and Goal'
+              : needs
+                ? 'Goal needs'
+              : label === 'Approve Plan'
+                ? 'Plan review'
+                : 'Goal review',
             question: 'Continue?',
             isOther: true,
             isSecret: false,
-            options: [
-              { label, description: 'Use the reviewed artifact.' },
-              { label: 'Revise', description: 'Return to preparation.' },
-            ],
+            options: combined
+              ? [
+                  { label: 'Approve both', description: 'Activate the reviewed pair.' },
+                  { label: 'Refine', description: 'Revise the reviewed pair.' },
+                  { label: 'Reject both', description: 'Keep work inactive.' },
+                ]
+              : needs
+                ? [
+                    { label: 'Approve all', description: 'Approve displayed needs.' },
+                    { label: 'Select some', description: 'Choose a subset.' },
+                    { label: 'Reject all', description: 'Remain interactive.' },
+                    { label: 'Discuss', description: 'Discuss the envelope.' },
+                  ]
+              : [
+                  { label, description: 'Use the reviewed artifact.' },
+                  { label: 'Revise', description: 'Return to preparation.' },
+                ],
           },
         ],
       },
@@ -263,7 +304,7 @@ class FakeAppServer extends EventEmitter {
         turnId,
         itemId: `item-${id}`,
         command: `command-${id}`,
-        reason: 'Test approval',
+        reason: this.approvalReason,
         availableDecisions: ['accept', 'decline'],
       },
     });
@@ -353,7 +394,15 @@ function createSession(client, cwd, overrides = {}) {
       cwd,
       prompt: 'Ship the migration.',
       skillPath: '/plugin/skills/goal/SKILL.md',
-      pickOne: async () => ({ status: 'selected', index: 0, value: '', via: 'tty' }),
+      pickOne: async ({ options }) => {
+        const rejectAll = options.findIndex((option) => option.startsWith('Reject all'));
+        return {
+          status: 'selected',
+          index: rejectAll >= 0 ? rejectAll : 0,
+          value: '',
+          via: 'tty',
+        };
+      },
       readLine: async () => 'Other answer',
       input: {},
       output,
@@ -411,11 +460,11 @@ test('milestone controller selection rejects an unverified persisted Build appro
   );
 });
 
-test('exact controller option plus re-verified Build receipt preserves Plan and Start flow', async () => {
+test('exact controller option plus re-verified Build receipt preserves combined review flow', async () => {
   const { cwd } = await createContract();
   const fixture = await createMilestoneRuntimeFixture(cwd);
   const client = new FakeAppServer({
-    labels: ['Use Milestone Controller M-003', 'Approve Plan', 'Start Cruise'],
+    labels: ['Use Milestone Controller M-003', 'Reject all', 'Approve both'],
   });
   const { session, errorOutput } = createSession(client, cwd, {
     resolveBuildApproval: async () => ({
@@ -450,11 +499,11 @@ test('controller bootstrap failure pauses the just-activated Goal before the ses
     cwd,
     '.cruise',
     'milestones',
-    'M-003-safe-rollout',
+    'M-003-rollout',
     'STATE.yaml',
   );
   const client = new FakeAppServer({
-    labels: ['Use Milestone Controller M-003', 'Approve Plan', 'Start Cruise'],
+    labels: ['Use Milestone Controller M-003', 'Reject all', 'Approve both'],
     suppressTerminal: true,
     onResponse: async ({ index }) => {
       if (index === 2) {
@@ -489,11 +538,11 @@ test('controller bootstrap failure never pauses a concurrently replaced Goal', a
     cwd,
     '.cruise',
     'milestones',
-    'M-003-safe-rollout',
+    'M-003-rollout',
     'STATE.yaml',
   );
   const client = new FakeAppServer({
-    labels: ['Use Milestone Controller M-003', 'Approve Plan', 'Start Cruise'],
+    labels: ['Use Milestone Controller M-003', 'Reject all', 'Approve both'],
     suppressTerminal: true,
     replaceGoalOnGetNumber: 3,
     onResponse: async ({ index }) => {
@@ -530,7 +579,7 @@ test('controller bootstrap failure never pauses a concurrently replaced Goal', a
   assert.equal(client.stopped, true);
 });
 
-test('separate Plan and Start approvals activate native Goal exactly once', async () => {
+test('combined Plan-and-Goal approval activates native Goal exactly once', async () => {
   const { cwd } = await createContract();
   const client = new FakeAppServer();
   const { session, errorOutput } = createSession(client, cwd);
@@ -551,14 +600,14 @@ test('separate Plan and Start approvals activate native Goal exactly once', asyn
   assert.match(client.goal.objective, /ORIGIN\.yaml/);
   assert.match(client.goal.objective, /PLAN\.md/);
   assert.match(client.goal.objective, /GOAL\.md/);
-  assert.match(errorOutput.value, /Plan approval saved/);
-  assert.match(errorOutput.value, /Final approval saved/);
+  assert.match(errorOutput.value, /Combined Plan and Goal review is ready/);
+  assert.match(errorOutput.value, /Plan and Goal approval saved/);
   assert.doesNotMatch(errorOutput.value, /sha-?256|digest/iu);
   assert.match(errorOutput.value, /Work has started/);
   assert.equal(client.stopped, true);
 
   const turnStart = client.calls.find(({ method }) => method === 'turn/start');
-  assert.equal(turnStart.params.collaborationMode.mode, 'plan');
+  assert.equal(turnStart.params.collaborationMode.mode, 'default');
   assert.equal(turnStart.params.approvalPolicy, 'on-request');
   assert.deepEqual(turnStart.params.runtimeWorkspaceRoots, []);
   assert.equal(turnStart.params.cwd, join(canonicalCwd, '.cruise', 'goal'));
@@ -583,7 +632,7 @@ test('separate Plan and Start approvals activate native Goal exactly once', asyn
   assert.equal(turnStart.params.collaborationMode.settings.model, 'gpt-root');
   assert.equal(turnStart.params.collaborationMode.settings.reasoning_effort, 'medium');
   const settings = client.calls.filter(({ method }) => method === 'thread/settings/update');
-  assert.deepEqual(settings.map(({ params }) => params.collaborationMode.mode), ['plan', 'default']);
+  assert.deepEqual(settings.map(({ params }) => params.collaborationMode.mode), ['default', 'default']);
   assert.ok(client.calls.indexOf(settings[0]) < client.calls.indexOf(turnStart));
   assert.equal(settings[0].params.cwd, join(canonicalCwd, '.cruise', 'goal'));
   assert.equal(settings[0].params.approvalPolicy, 'on-request');
@@ -595,6 +644,153 @@ test('separate Plan and Start approvals activate native Goal exactly once', asyn
   const threadStart = client.calls.find(({ method }) => method === 'thread/start');
   assert.deepEqual(threadStart.params.runtimeWorkspaceRoots, []);
   assert.equal(Object.hasOwn(threadStart.params, 'model'), false);
+});
+
+test('one combined Plan-and-Goal approval activates native Goal without an intermediate write window', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer({ labels: ['Reject all', 'Approve both'] });
+  const { session, errorOutput } = createSession(client, cwd);
+
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  assert.match(errorOutput.value, /Combined Plan and Goal review is ready/);
+  assert.match(errorOutput.value, /Plan and Goal approval saved/);
+  assert.equal(client.responses.length, 2);
+  assert.deepEqual(
+    client.responses[1].result.answers.q1.answers,
+    ['Approve both'],
+  );
+  assert.equal(
+    client.calls.filter(({ method, params }) =>
+      method === 'thread/goal/set' && params.objective,
+    ).length,
+    1,
+  );
+});
+
+test('Refine and Reject both apply to the Plan-and-Goal pair and keep execution inactive', async (t) => {
+  for (const choice of ['Refine', 'Reject both']) {
+    await t.test(choice, async () => {
+      const { cwd } = await createContract();
+      const client = new FakeAppServer({ labels: ['Reject all', choice] });
+      const { session, errorOutput } = createSession(client, cwd, {
+        pickOne: async ({ options }) => {
+          const wanted = options.findIndex((option) => option.startsWith(choice));
+          const rejectAll = options.findIndex((option) => option.startsWith('Reject all'));
+          return {
+            status: 'selected',
+            index: wanted >= 0 ? wanted : rejectAll,
+            value: '',
+            via: 'tty',
+          };
+        },
+      });
+
+      const result = await session.run();
+
+      assert.equal(result.status, 'saved');
+      assert.deepEqual(client.responses[1].result.answers.q1.answers, [choice]);
+      assert.equal(client.calls.some(({ method }) => method === 'thread/goal/set'), false);
+      assert.match(
+        errorOutput.value,
+        choice === 'Refine' ? /Plan and Goal returned for refinement/ : /Plan and Goal rejected/,
+      );
+    });
+  }
+});
+
+test('combined approval falls back immediately when no native Plan item is observed', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer({ labels: ['Reject all', 'Approve both'] });
+  client.emitQuestion = function emitWithoutPlan(index) {
+    if (index === 0) {
+      return FakeAppServer.prototype.emitQuestion.call(this, index);
+    }
+    this.emit('request', {
+      method: 'item/tool/requestUserInput',
+      id: `q${index}`,
+      params: {
+        threadId: 'thread-test',
+        turnId: 'turn-prep',
+        itemId: `item-q${index}`,
+        autoResolutionMs: null,
+        questions: [{
+          id: `q${index}`,
+          header: 'Plan and Goal',
+          question: 'Approve the Plan and Goal?',
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: 'Approve both', description: 'Activate the pair.' },
+            { label: 'Refine', description: 'Revise the pair.' },
+            { label: 'Reject both', description: 'Keep work inactive.' },
+          ],
+        }],
+      },
+    });
+  };
+  const rendered = [];
+  const { session } = createSession(client, cwd, {
+    nativePlanPresentation: true,
+    renderPlan: (approval) => rendered.push(approval),
+  });
+
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(client.responses[1].result.answers.q1.answers, ['Approve both']);
+  assert.equal(rendered.length, 1);
+  assert.equal(
+    client.calls.find(({ method }) => method === 'turn/start').params.collaborationMode.mode,
+    'plan',
+  );
+});
+
+test('Cruise CLI renders its deterministic captured preview instead of arbitrary native item text', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer({ labels: ['Reject all', 'Approve both'] });
+  const rendered = [];
+  const { session } = createSession(client, cwd, {
+    renderPlan: (approval, output) => {
+      rendered.push(approval);
+      output.write('glow plan\n');
+    },
+  });
+  queueMicrotask(() => {
+    client.emit('notification', {
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-test',
+        turnId: 'turn-prep',
+        item: { type: 'plan', id: 'plan-1', text: '## Plan\n\n## Goal\n' },
+      },
+    });
+  });
+
+  await session.run();
+
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].stage, 'plan-goal');
+});
+
+test('GUI-capable host uses an actually observed native combined Plan item', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer();
+  const rendered = [];
+  const { session } = createSession(client, cwd, {
+    nativePlanPresentation: true,
+    renderPlan: (approval) => rendered.push(approval),
+  });
+
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  assert.equal(rendered.length, 0);
+  assert.equal(
+    client.calls.find(({ method }) => method === 'turn/start').params.collaborationMode.mode,
+    'plan',
+  );
 });
 
 test('native Goal sessions apply the Cruise class to preparation and execution host settings', async () => {
@@ -621,7 +817,7 @@ test('native Goal sessions apply the Cruise class to preparation and execution h
   assert.match(settings.at(-1).params.collaborationMode.settings.developer_instructions, /level 6/u);
 });
 
-test('Plan approval without Start Cruise leaves the contract inactive', async () => {
+test('retired Approve Plan label cannot activate a Goal', async () => {
   const { cwd } = await createContract();
   const client = new FakeAppServer({ labels: ['Approve Plan'] });
   const { session, errorOutput } = createSession(client, cwd);
@@ -629,10 +825,10 @@ test('Plan approval without Start Cruise leaves the contract inactive', async ()
 
   assert.equal(result.status, 'saved');
   assert.equal(client.calls.some(({ method }) => method === 'thread/goal/set'), false);
-  assert.match(errorOutput.value, /plan was saved/i);
+  assert.match(errorOutput.value, /Plan and Goal were saved/i);
 });
 
-test('Start Cruise as the first review is rejected and never activates', async () => {
+test('retired Start Cruise label cannot activate a Goal', async () => {
   const { cwd } = await createContract();
   const client = new FakeAppServer({ labels: ['Start Cruise'] });
   const { session, errorOutput } = createSession(client, cwd);
@@ -640,42 +836,33 @@ test('Start Cruise as the first review is rejected and never activates', async (
 
   assert.equal(result.status, 'saved');
   assert.equal(client.calls.some(({ method }) => method === 'thread/goal/set'), false);
-  assert.match(
-    client.responses[0].result.answers.q0.answers[0],
-    /approve the Plan in a separate earlier review/,
-  );
-  assert.match(errorOutput.value, /no separate Plan approval/);
+  assert.deepEqual(client.responses[0].result.answers.q0.answers, ['Start Cruise']);
+  assert.match(errorOutput.value, /Plan and Goal were saved/i);
 });
 
-test('artifact drift after Plan approval invalidates Start', async () => {
+test('artifact drift after combined selection prevents native activation', async () => {
   const { cwd, directory } = await createContract();
   const client = new FakeAppServer({
     onResponse: async ({ index }) => {
-      if (index === 0) await writeFile(join(directory, 'PLAN.md'), '# Drifted plan\n');
+      if (index === 1) await writeFile(join(directory, 'PLAN.md'), '# Drifted plan\n');
     },
   });
   const { session } = createSession(client, cwd);
-  const result = await session.run();
-
-  assert.equal(result.status, 'saved');
+  await assert.rejects(session.run(), /PLAN\.md changed after Plan and Goal approval/);
   assert.equal(client.calls.some(({ method }) => method === 'thread/goal/set'), false);
-  assert.match(
-    client.responses[1].result.answers.q1.answers[0],
-    /changed after Plan approval/,
-  );
 });
 
-test('an artifact write after Start selection prevents native activation', async () => {
+test('an artifact write after combined selection prevents native activation', async () => {
   const { cwd, directory } = await createContract();
   const client = new FakeAppServer({
     onResponse: async ({ index }) => {
       if (index === 1) {
-        await writeFile(join(directory, 'GOAL.md'), '# Post-Start write is forbidden\n');
+        await writeFile(join(directory, 'GOAL.md'), '# Post-approval write is forbidden\n');
       }
     },
   });
   const { session } = createSession(client, cwd);
-  await assert.rejects(session.run(), /changed after Goal approval/);
+  await assert.rejects(session.run(), /GOAL\.md changed after Plan and Goal approval/);
   assert.equal(
     client.calls.some(
       ({ method, params }) => method === 'thread/goal/set' && params.objective,
@@ -684,12 +871,12 @@ test('an artifact write after Start selection prevents native activation', async
   );
 });
 
-test('target drift during preparation prevents Plan approval', async () => {
+test('target drift during preparation prevents combined approval', async () => {
   const { cwd } = await createContract();
   const target = join(cwd, 'target.txt');
   await writeFile(target, 'before\n');
   const client = new FakeAppServer({
-    labels: ['Approve Plan'],
+    labels: ['Reject all', 'Approve both'],
     onTurnStart: async () => writeFile(target, 'after\n'),
   });
   const { session } = createSession(client, cwd);
@@ -697,25 +884,25 @@ test('target drift during preparation prevents Plan approval', async () => {
 
   assert.equal(result.status, 'saved');
   assert.match(
-    client.responses[0].result.answers.q0.answers[0],
+    client.responses[1].result.answers.q1.answers[0],
     /changed during Cruise preparation/,
   );
 });
 
-test('session refuses Plan approval when the model invents the Origin baseline', async () => {
+test('session refuses combined approval when the model invents the Origin baseline', async () => {
   const { cwd } = await createContract({
     mutateOrigin(record) {
       record.repository_baseline.dirty_state_digest = 'c'.repeat(64);
     },
   });
-  const client = new FakeAppServer({ labels: ['Approve Plan'] });
+  const client = new FakeAppServer({ labels: ['Reject all', 'Approve both'] });
   const { session } = createSession(client, cwd);
   const result = await session.run();
 
   assert.equal(result.status, 'saved');
   assert.equal(client.calls.some(({ method }) => method === 'thread/goal/set'), false);
   assert.match(
-    client.responses[0].result.answers.q0.answers[0],
+    client.responses[1].result.answers.q1.answers[0],
     /repository_baseline does not match a fresh independent capture/,
   );
 });
@@ -766,7 +953,7 @@ test('interactive server requests are serialized FIFO', async () => {
 test('preparation preserves native permission choices instead of auto-denying them', async () => {
   const { cwd } = await createContract();
   const client = new FakeAppServer({
-    labels: ['Approve Plan'],
+    labels: ['Reject all', 'Approve both'],
     concurrentApprovals: true,
   });
   let pickerCalls = 0;
@@ -778,13 +965,56 @@ test('preparation preserves native permission choices instead of auto-denying th
   });
   const result = await session.run();
 
-  assert.equal(result.status, 'saved');
-  assert.equal(pickerCalls, 3); // Two native approvals and Plan review
+  assert.equal(result.status, 'complete');
+  assert.equal(pickerCalls, 4); // Two runtime approvals, needs, and combined review
   assert.deepEqual(
     client.responses.slice(0, 2).map(({ result: response }) => response.decision),
     ['accept', 'accept'],
   );
   assert.doesNotMatch(errorOutput.value, /cannot widen permissions/);
+});
+
+test('Approve all auto-approves routine execution tool permissions but not preparation prompts', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer({ executionApprovals: true });
+  let pickerCalls = 0;
+  const { session, errorOutput } = createSession(client, cwd, {
+    pickOne: async () => {
+      pickerCalls += 1;
+      return { status: 'selected', index: 0, value: '', via: 'tty' };
+    },
+  });
+
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  assert.equal(pickerCalls, 2); // Needs and combined review only.
+  assert.deepEqual(
+    client.responses.filter(({ id }) => id.startsWith('approval-')).map(({ result: response }) => response.decision),
+    ['accept', 'accept'],
+  );
+  assert.match(errorOutput.value, /Routine tool permission auto-approved/);
+});
+
+test('Approve all still prompts for high-risk execution authorization', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer({
+    executionApprovals: true,
+    approvalReason: 'Deploy to production',
+  });
+  let pickerCalls = 0;
+  const { session, errorOutput } = createSession(client, cwd, {
+    pickOne: async () => {
+      pickerCalls += 1;
+      return { status: 'selected', index: 0, value: '', via: 'tty' };
+    },
+  });
+
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  assert.equal(pickerCalls, 4); // Needs, combined review, and both high-risk approvals.
+  assert.doesNotMatch(errorOutput.value, /Routine tool permission auto-approved/);
 });
 
 test('an externally resolved queued approval is never shown or answered', async () => {
@@ -795,16 +1025,17 @@ test('an externally resolved queued approval is never shown or answered', async 
   });
   let pickerCalls = 0;
   const { session } = createSession(client, cwd, {
-    pickOne: async () => {
+    pickOne: async ({ options }) => {
       pickerCalls += 1;
       await new Promise((resolve) => setTimeout(resolve, 5));
-      return { status: 'selected', index: 0, value: '', via: 'tty' };
+      const rejectAll = options.findIndex((option) => option.startsWith('Reject all'));
+      return { status: 'selected', index: rejectAll >= 0 ? rejectAll : 0, value: '', via: 'tty' };
     },
   });
   const result = await session.run();
 
   assert.equal(result.status, 'complete');
-  assert.equal(pickerCalls, 3); // Plan, Goal, approval A; never approval B
+  assert.equal(pickerCalls, 3); // Needs, combined review, and approval A; never approval B
   assert.equal(client.responses.some(({ id }) => id === 'approval-b'), false);
 });
 

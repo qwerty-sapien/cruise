@@ -48,7 +48,7 @@ For every mandatory result:
 
 Do not start with a generic phase list. A node should produce an inspectable result, not merely “work on backend.”
 
-For the blocked-preparation fast path, do not fabricate a full implementation DAG. Represent the unavailable mandatory prerequisite, any explicitly requested safe preparation output, and `T-01`'s blocking `E-XX` `NOT_RUN` judgment. Start remains ineligible.
+For the blocked-preparation fast path, do not fabricate a full implementation DAG. Represent the unavailable mandatory prerequisite, any explicitly requested safe preparation output, and `T-01`'s blocking `E-XX` `NOT_RUN` judgment. Activation remains ineligible.
 
 ## 3. Node schema
 

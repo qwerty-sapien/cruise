@@ -8,7 +8,7 @@ import {
   rename,
   rm,
 } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { canonicalJson, parseYaml, stringifyYaml } from './yaml-state.mjs';
 
@@ -241,7 +241,7 @@ async function readRegularLock(path, options) {
 async function prepareLock(options, parent) {
   const metadata = metadataFor(options);
   const bytes = Buffer.from(stringifyYaml(metadata), 'utf8');
-  const preparationPath = `${options.lockPath}.${metadata.pid}.${metadata.nonce}.prepare`;
+  const preparationPath = join(parent, '.lock-stage');
   let handle;
   try {
     handle = await open(preparationPath, 'wx', 0o600);
@@ -266,7 +266,7 @@ async function reclaimDeadLock(options, parent, stale) {
       'CRUISE_HOST_AUTHORITY_LOCK_CHANGED',
     );
   }
-  const quarantinePath = `${options.lockPath}.${stale.metadata.nonce}.stale-${randomUUID()}`;
+  const quarantinePath = join(parent, '.lock-stale');
   try {
     await rename(options.lockPath, quarantinePath);
   } catch (cause) {
@@ -297,7 +297,7 @@ async function reclaimDeadLock(options, parent, stale) {
   }
   await rm(quarantinePath);
   await rm(
-    `${options.lockPath}.${stale.metadata.pid}.${stale.metadata.nonce}.prepare`,
+    join(parent, '.lock-stage'),
     { force: true },
   );
   await syncDirectory(parent);
@@ -356,7 +356,7 @@ export async function releaseHostAuthorityLock(lock) {
       'CRUISE_HOST_AUTHORITY_LOCK_REPLACED',
     );
   }
-  const releasePath = `${options.lockPath}.${lock.metadata.nonce}.release-${randomUUID()}`;
+  const releasePath = join(parent, '.lock-release');
   await rename(options.lockPath, releasePath);
   await syncDirectory(parent);
   const released = await readRegularLock(releasePath, options);

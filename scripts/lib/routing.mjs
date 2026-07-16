@@ -20,11 +20,10 @@ export const PUBLIC_ROUTES = Object.freeze([
   'refine',
   'goal',
   'debug',
-  'research',
 ]);
 
 /** Persisted schema-v1 records may contain this retired public route. */
-export const LEGACY_PUBLIC_ROUTES = Object.freeze(['review']);
+export const LEGACY_PUBLIC_ROUTES = Object.freeze(['review', 'research']);
 
 export const ROUTE_CONFIDENCE_THRESHOLD = 0.85;
 

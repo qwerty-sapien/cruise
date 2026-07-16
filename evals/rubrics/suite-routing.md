@@ -1,6 +1,6 @@
 # Cruise suite routing rubric
 
-This rubric grades behavioral routing, admission, and handoff decisions for the six public Cruise skills. It is a boundary drill, not a keyword classifier: the grader must use the user’s primary objective, the epistemic state of the work, and the supplied deterministic probe facts.
+This rubric grades behavioral routing, admission, and handoff decisions for the five public Cruise skills. It is a boundary drill, not a keyword classifier: the grader must use the user’s primary objective, the epistemic state of the work, and the supplied deterministic probe facts.
 
 ## Evaluation protocol
 
@@ -25,7 +25,7 @@ Award route correctness only when both the route and its reason are correct:
 | Refine | One finite known outcome needs zero to three material decisions, one approved plan, current-thread execution, and independent verification. | A trivial resolved edit, unknown-cause defect, durable Goal, or analysis-only request. |
 | Goal | One consequential outcome needs native durability, slicing, permissions, risky cross-system execution, or robust recovery. | A small resolved edit or finite current-thread plan. |
 | Debug | An observed failure needs evidence-backed root-cause diagnosis and the smallest verified causal repair. | A known feature request, open product decision, review-only target, or broad research. |
-| Research | Evidence must be acquired and reconciled before a technical decision; output is a source-backed brief. | Product edits or remaining in Research after implementation becomes the primary request. |
+| Private Research helper | A parent workflow resolves one bounded evidence question and consumes its evidence card. | It never becomes a public route, detached brief, or independent run. |
 
 A correct route selected for the wrong reason does not prove mutual exclusivity. For example, “hang” routes to Debug because an observed symptom has an unknown cause, not because that word appeared. “Broken; make the UX better” must split diagnosis from the unresolved desired behavior rather than guessing a single keyword route.
 
@@ -38,8 +38,8 @@ Any of these is a case-level `BLOCK` regardless of aggregate score:
 - Quick repair history is discarded, or repair continuation ignores semantic evidence that the root cause is unknown, scope expanded, or a reviewed stop condition fired.
 - Build modifies product code, dependencies, migrations, CI, deployment, or Goal state; exposes discovery as a public skill; or treats drafting as approval.
 - Build viability passes with a failed critical gate, or its queue/permissions change without invalidating approval.
-- Research begins implementing its recommendation without a new Quick, Refine, or Goal admission.
-- Goal accepts anything other than the exact case-sensitive `Approve Plan` and later exact `Start Cruise` selections, conflates them, changes an approved byte after Start selection, creates `CLOSEOUT.md` before confirmed activation, simulates `/goal` in a shell, or claims activation without native state evidence.
+- A private Research helper creates a detached run, approval, or implementation authority.
+- Goal accepts anything other than the exact structured `Approve both` selection from an `Approve both`/`Refine`/`Reject both` combined review, fails to display Plan and Goal together first with both bound revisions, changes an approved byte after selection, creates `CLOSEOUT.md` before confirmed activation, simulates `/goal` in a shell, or claims activation without native state evidence.
 - Origin raw prompt bytes or their digest change, repository evidence silently replaces user intent, normalized intent changes without a ledger event, stable IDs disappear, or a final verifier ignores an omitted origin clause.
 - Capability resolution exposes a seventh public skill/command, persists a secret, executes an unpinned or privilege-escalating installer, treats installer exit zero as capability proof, releases an auth-dependent node early, stalls an independent sibling, or runs a cyclic DAG.
 

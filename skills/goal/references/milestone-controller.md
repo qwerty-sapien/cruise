@@ -36,7 +36,7 @@ opaque receipts to `establishMilestoneControllerAuthority`. Validate the returne
 the same session/run before inspecting or writing a controller descriptor. Raw event objects or
 copied fields cannot skip the broker.
 
-Before offering **Approve Plan**, prove all of the following:
+Before offering the combined **Approve both**, prove all of the following:
 
 - the selected `M-XX` directory and canonical project baseline exist;
 - a fresh branded Build-verification receipt proves exact **Approve Milestone**, the selected
@@ -54,7 +54,7 @@ milestone contract must change. A Goal plan cannot repair or silently reinterpre
 
 ## 2. Controller contract
 
-Write `.cruise/goal/MILESTONE-CONTROLLER.yaml` only for this mode. Use schema version 1:
+Write `.cruise/goal/ctrl.yaml` only for this mode. Use schema version 1:
 
 ```yaml
 schema_version: 1
@@ -67,7 +67,7 @@ selection:
 
 milestone:
   id: M-003
-  path: .cruise/milestones/M-003-safe-rollout
+  path: .cruise/milestones/M-003-rollout
   contract_digest: "<64 lowercase hex characters>"
   completion_fence: "<canonical JSON serialization of Build's approved completion_fence>"
 
@@ -106,13 +106,13 @@ The manifest must include project `ORIGIN.yaml`, `PROJECT.md`, `REQUIREMENTS.md`
 `QUESTIONS.yaml`, `AUTONOMY.yaml`, and `QUEUE.yaml`. It may include additional approved
 immutable files under those same roots.
 
-Never put `STATE.yaml`, `QUEUE-STATE.yaml`, discovery files, or `phases/` runtime files in
+Never put `STATE.yaml`, `queue-run.yaml`, discovery files, or `phases/` runtime files in
 the locked manifest. Compute `contract_digest` by sorting records by path, then hashing the
 domain string `cruise-milestone-contract-v1` and each NUL-delimited path/digest pair as the
 client validator does. Treat the controller file and every manifest entry as Plan-locked
 bytes. Goal approval adds `GOAL.md` without changing them.
 
-`MILESTONE-CONTROLLER.yaml` is a locked audit descriptor, not an authority source. Its
+`ctrl.yaml` is a locked audit descriptor, not an authority source. Its
 milestone ID/path/digest, Build approval label/time/contract digest, session selection record,
 full phase graph (`id`, dependencies, mandatory flag, and acceptance criteria), Build-derived
 completion fence, and manifest must equal the opaque runtime authority and its branded Build
@@ -128,14 +128,14 @@ activating or revoking it never rewrites the descriptor or any locked Build byte
 
 ## 3. Preparation and approvals
 
-Run the same inactive Q&A and the same two exact, separate Goal reviews used by a
-single-slice Goal. The labels remain **Approve Plan** and, later, **Start Cruise**. Build's
-earlier **Approve Milestone** is evidence of source-contract approval; it is neither Goal
-Plan approval nor activation.
+Run the same inactive needs-envelope flow and the same one combined review used by a
+single-slice Goal. The labels remain **Approve both**, **Refine**, and **Reject both** over one
+combined Plan-and-Goal presentation. Build's earlier **Approve Milestone** is evidence of source-contract
+approval; it is neither combined Goal approval nor activation.
 
 Before Goal planning, establish and inspect the opaque controller authority described above.
-Before both reviews and activation, revalidate that authority, the descriptor equality, and
-the locked Build manifest. Plan/Start approvals cannot create missing controller authority.
+Before the combined review and activation, revalidate that authority, the descriptor equality,
+and the locked Build manifest. Combined approval cannot create missing controller authority.
 
 The top-level `PLAN.md` describes controller duties, phase readiness, reconciliation,
 runtime state ownership, phase-plan validation, closeout gates, and final aggregation. It
@@ -151,14 +151,14 @@ Build-approval resolver; use ordinary Codex for milestone-controller execution. 
 may expose the terminal controller path only when it supplies that opaque resolver explicitly.
 
 The production in-process path is exported as `cruise-codex-plugin/session`. A resolver-capable
-`CruiseSession` re-verifies the persisted Build approval, preserves the separate Plan and Start
-reviews, and only after app-server confirms the native Goal exchanges the broker's opaque
+`CruiseSession` re-verifies the persisted Build approval, preserves the combined Plan-and-Goal
+review, and only after app-server confirms the native Goal exchanges the broker's opaque
 activation receipt through `cruise-codex-plugin/milestone-controller-host`. It then freshly
 inspects the controller and passes the same opaque verified Build receipt used to establish
 controller authority. It creates controller runtime state only over an exact-key canonical Build
 draft `STATE.yaml` whose project, milestone, current baseline, readiness, Origin, Build-contract,
 queue-definition, open-question, and approved-phase identities all match that receipt and the
-locked artifacts. If durable `CONTROLLER-STATE-HISTORY/` already exists, load and reconcile it
+locked artifacts. If durable `ctrl-hist/` already exists, load and reconcile it
 before interpreting a stale Build-draft canonical mirror; this recovers an interruption after the
 history append but before mirror roll-forward. Otherwise strictly load an existing controller
 state, persist all projections, and emit/return a live driver. The driver retains opaque authority
@@ -175,7 +175,7 @@ activation artifact manifest. Exchange its opaque receipt through
 `establishMilestoneControllerGoalActivation`, which freshly rereads the controller and locked
 Build artifacts and proves the repository still matches the pre-activation Goal baseline. Every
 controller state/reducer, phase attester, and persist/load operation requires that exact opaque
-Goal-activation authority. Serialized activation fields, a copied result, or Plan/Start approval
+Goal-activation authority. Serialized activation fields, a copied result, or combined Plan-and-Goal approval
 without confirmed native activation cannot create controller runtime state.
 
 ## 4. Runtime phase loop
@@ -184,7 +184,7 @@ After confirmed native activation and establishment of its opaque authority, cre
 persisted controller state. Canonical state lives in the selected milestone's `STATE.yaml`; each
 `phases/<P-XX>/STATE.yaml` and `phases/<P-XX>/QUESTIONS.yaml` is a projection of the same
 controller revision. Before changing any mutable mirror, append one immutable 0400
-`CONTROLLER-STATE-HISTORY/REV-XXXXXXXXXXXX.yaml` record containing the exact canonical and
+`ctrl-hist/step-N.yaml` record containing the exact canonical and
 projection bytes, the prior-entry digest, compare-and-swap parent, reducer lineage, and baseline-
 attestation classification. The private 0700 history directory is the durable commit record.
 After an interruption, load accepts each mirror only when it is the exact predecessor or exact
@@ -244,12 +244,12 @@ activation authority and after it proves the immutable exact-byte history chain,
 single committed state/question projection set, freshly inspects the controller/locked manifest,
 and matches the current repository baseline. It rereads
 PLAN for every active/completed/blocked/failed phase and rereads PLAN, CLOSEOUT, and EVIDENCE for
-every completed phase. A completed milestone also requires a current `MILESTONE-EVIDENCE.yaml`
+every completed phase. A completed milestone also requires a current `mile-evid.yaml`
 whose aggregate IDs include every mandatory phase evidence ID. Stale bytes or evidence block
 resume; conversation history cannot repair them.
 
-The mutable runtime allowlist is milestone `STATE.yaml`, `QUEUE-STATE.yaml`,
-`MILESTONE-EVIDENCE.yaml`, and its append-only `CONTROLLER-STATE-HISTORY/`, plus current-phase
+The mutable runtime allowlist is milestone `STATE.yaml`, `queue-run.yaml`,
+`mile-evid.yaml`, and its append-only `ctrl-hist/`, plus current-phase
 `ORIGIN.yaml`, `PLAN.md`, `QUESTIONS.yaml`,
 `ATTEMPTS.yaml`, `EVIDENCE.yaml`, and `CLOSEOUT.md`. These record runtime progress; they do not
 amend Build's locked contract. Do not write another runtime path merely because it is below the
@@ -268,7 +268,7 @@ evidence is unavailable, or the next phase is invalid. Persist the question and 
 stable IDs and resume the same controller run.
 
 Use `pauseMilestoneControllerForQuestion` to allocate the next stable `Q-XX` strictly above both
-the locked project `ID-REGISTRY.yaml` Q high-water mark and every ID in the locked milestone
+the locked project `ids.yaml` Q high-water mark and every ID in the locked milestone
 `QUESTIONS.yaml`, append its `opened` event, and move the activated controller to `paused`.
 Superseded or no-longer-listed Build IDs remain permanently unavailable. Only one question may be open. Use
 `answerMilestoneControllerQuestion` to append the answer and source, clear the cursor, and restore
@@ -352,7 +352,7 @@ revalidate the controller digest, locked source files, every mandatory phase clo
 cross-phase acceptance evidence, protected behavior, approved effects, rollback/release
 requirements, and the exact milestone completion fence. It then issues a separate aggregate
 completion-fence attestation bound to the current controller state revision and containing all
-mandatory phase evidence IDs. The attester rereads `MILESTONE-EVIDENCE.yaml`, requires an
+mandatory phase evidence IDs. The attester rereads `mile-evid.yaml`, requires an
 unqualified completed outcome and performed mandatory PASS items, and evaluates the exact
 Build-derived fence. Only that current opaque attestation may transition provenance-branded
 persisted state to complete. An active phase, mandatory non-completion, reduced scope, skipped

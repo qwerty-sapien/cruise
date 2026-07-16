@@ -111,7 +111,7 @@ export async function installManagedGitHook(path, event) {
     await rename(path, chainedPath);
   }
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.cruise-new-${process.pid}`;
+  const temporary = join(dirname(path), '.git-stage');
   await writeFile(temporary, content, { encoding: 'utf8', mode: 0o755, flag: 'wx' });
   await rename(temporary, path);
   await chmod(path, 0o755);

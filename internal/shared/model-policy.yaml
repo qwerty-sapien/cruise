@@ -75,6 +75,11 @@ stages:
     recommended_level: 1
     coordinator_only: true
     deterministic_tools_only: true
+  artifact_naming:
+    recommended_level: 1
+    naming_only: true
+    maximum_component_characters: 15
+    random_material_forbidden: true
   semantic_repository_mapping:
     recommended_level: 2
   capability_inventory:

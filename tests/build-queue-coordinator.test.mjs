@@ -235,7 +235,7 @@ async function writeFiles(directory, files) {
 async function approvedFixture({ researchBeforeGoal = false, extraResearchCount = 0 } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-queue-coordinator-')));
   const projectPath = '.cruise/project';
-  const milestonePath = '.cruise/milestones/M-003-coordinator';
+  const milestonePath = '.cruise/milestones/M-003-coord';
   const projectDirectory = join(root, projectPath);
   const milestoneDirectory = join(root, milestonePath);
   const projectCapture = origin(root, 'bootstrap');

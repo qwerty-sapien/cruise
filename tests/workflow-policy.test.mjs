@@ -67,6 +67,19 @@ function startApproval(overrides = {}) {
   };
 }
 
+function planGoalApproval(overrides = {}) {
+  return {
+    selectedLabel: 'Approve both',
+    planDigest: DIGEST_A,
+    currentPlanDigest: DIGEST_A,
+    goalDigest: DIGEST_A,
+    currentGoalDigest: DIGEST_A,
+    repositoryBaselineDigest: DIGEST_A,
+    currentRepositoryBaselineDigest: DIGEST_A,
+    ...overrides,
+  };
+}
+
 function fallbackApproval(overrides = {}) {
   return {
     selectedLabel: 'Execute in Current Thread',
@@ -84,7 +97,7 @@ function fallbackApproval(overrides = {}) {
 }
 
 function milestoneControllerContext({
-  milestonePath = '.cruise/milestones/M-003-safe-rollout',
+  milestonePath = '.cruise/milestones/M-003-rollout',
   milestoneId = 'M-003',
   currentPhaseId = 'P-01',
   currentPhaseStatus = 'active',
@@ -98,7 +111,7 @@ function milestoneControllerContext({
     'ARCHITECTURE.md',
     'ROADMAP.md',
     'DECISIONS.md',
-    'ID-REGISTRY.yaml',
+    'ids.yaml',
     'QUEUE.yaml',
   ];
   const milestoneFiles = [
@@ -189,13 +202,13 @@ function quick(root, overrides = {}) {
   };
 }
 
-test('the policy exposes exactly the six public skills and rejects the private provisioner', async () => {
-  assert.deepEqual(PUBLIC_SKILLS, ['build', 'quick', 'refine', 'goal', 'debug', 'research']);
+test('the policy exposes exactly the five public skills and rejects the private provisioner', async () => {
+  assert.deepEqual(PUBLIC_SKILLS, ['build', 'quick', 'refine', 'goal', 'debug']);
   const root = await repository();
   const result = decidePath({
     skill: '_provision',
     repositoryRoot: root,
-    path: '.cruise/internal/capabilities.yaml',
+    path: '.cruise/internal/caps.yaml',
     writeClass: 'machine',
   });
   assert.equal(result.allowed, false);
@@ -359,7 +372,7 @@ test('Build writes only exact post-approval repository Markdown displayed in the
   }).code, REASON_CODES.DENY_BUILD_DOCUMENTATION_APPROVAL);
 
   await writeFile(
-    join(root, '.cruise', 'milestones', 'M-003-safe-rollout', 'MILESTONE.md'),
+    join(root, '.cruise', 'milestones', 'M-003-rollout', 'MILESTONE.md'),
     '# drifted locked milestone\n',
   );
   assert.equal(
@@ -553,15 +566,15 @@ test('Goal writes require native activation or explicit fallback plus exact owne
     path: origin,
     writeClass: 'machine',
     approvedInternalPaths: [origin],
-    planLocked: true,
-  }).code, REASON_CODES.DENY_GOAL_ARTIFACT);
+    planGoalApproval: planGoalApproval(),
+  }).code, REASON_CODES.DENY_GOAL_POST_START_WRITE);
   assert.equal(decidePath({
     skill: 'goal',
     repositoryRoot: root,
     path: '.cruise/goal/GOAL.md',
     writeClass: 'report',
     approvedInternalPaths: ['.cruise/goal/GOAL.md'],
-    startApproval: startApproval(),
+    planGoalApproval: planGoalApproval(),
   }).code, REASON_CODES.DENY_GOAL_POST_START_WRITE);
   assert.equal(decidePath({
     skill: 'goal',
@@ -599,7 +612,7 @@ test('milestone-controller writes are limited to selected mutable state and the 
 
   for (const path of [
     `${milestonePath}/STATE.yaml`,
-    `${milestonePath}/QUEUE-STATE.yaml`,
+    `${milestonePath}/queue-run.yaml`,
     `${milestonePath}/phases/P-01/QUESTIONS.yaml`,
     `${milestonePath}/phases/P-01/ATTEMPTS.yaml`,
     `${milestonePath}/phases/P-01/EVIDENCE.yaml`,
@@ -713,7 +726,7 @@ test('milestone-controller denies locked Build artifacts and unauthorized milest
 
 test('milestone-controller requires current exact controller, Build, and phase context', async () => {
   const root = await repository();
-  const path = '.cruise/milestones/M-003-safe-rollout/STATE.yaml';
+  const path = '.cruise/milestones/M-003-rollout/STATE.yaml';
   const base = {
     skill: 'goal',
     goalMode: 'milestone-controller',
@@ -781,7 +794,7 @@ test('milestone-controller requires current exact controller, Build, and phase c
     milestoneController: controller,
   }).code, REASON_CODES.DENY_GOAL_CONTROLLER_CONTEXT);
 
-  const descriptor = '.cruise/goal/MILESTONE-CONTROLLER.yaml';
+  const descriptor = '.cruise/goal/ctrl.yaml';
   assert.equal(decidePath({
     skill: 'goal',
     goalMode: 'milestone-controller',
@@ -870,45 +883,34 @@ test('phase decisions enforce each workflow gate and reject planning-only execut
   assert.equal(decidePhase({ skill: 'build', from: 'draft', to: 'execute' }).code, REASON_CODES.DENY_UNKNOWN_PHASE);
   assert.equal(decidePhase({
     skill: 'goal',
-    from: 'plan_approval',
+    from: 'plan_goal',
     to: 'activation',
   }).code, REASON_CODES.DENY_PHASE_TRANSITION);
   assert.equal(decidePhase({
     skill: 'goal',
-    from: 'plan_approval',
-    to: 'goal_contract',
-  }).code, REASON_CODES.DENY_GOAL_PLAN_UNAPPROVED);
-  assert.equal(decidePhase({
-    skill: 'goal',
-    from: 'plan_approval',
-    to: 'goal_contract',
-    planApproval: planApproval(),
+    from: 'plan_goal',
+    to: 'combined_approval',
   }).allowed, true);
   assert.equal(decidePhase({
     skill: 'goal',
-    from: 'goal_contract',
-    to: 'start_approval',
-  }).allowed, true);
-  assert.equal(decidePhase({
-    skill: 'goal',
-    from: 'start_approval',
+    from: 'combined_approval',
     to: 'activation',
   }).code, REASON_CODES.DENY_GOAL_START_UNAPPROVED);
   assert.equal(decidePhase({
     skill: 'goal',
-    from: 'start_approval',
+    from: 'combined_approval',
     to: 'activation',
-    startApproval: startApproval(),
+    planGoalApproval: planGoalApproval(),
   }).allowed, true);
   assert.equal(decidePhase({
     skill: 'goal',
-    from: 'start_approval',
+    from: 'combined_approval',
     to: 'activation',
-    startApproval: startApproval({ currentGoalDigest: 'b'.repeat(64) }),
+    planGoalApproval: planGoalApproval({ currentGoalDigest: 'b'.repeat(64) }),
   }).code, REASON_CODES.DENY_GOAL_START_UNAPPROVED);
   assert.equal(decidePhase({
     skill: 'goal',
-    from: 'goal_contract',
+    from: 'combined_approval',
     to: 'fallback_approval',
   }).allowed, true);
   assert.equal(decidePhase({

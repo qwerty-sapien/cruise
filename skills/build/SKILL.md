@@ -1,6 +1,6 @@
 ---
 name: build
-description: "Establish a durable Cruise project foundation in an empty or minimal repository, or define the next coherent milestone in an established codebase. Produces approved project or milestone contracts, an approved workflow queue, and a phase roadmap for later cruise:goal execution. Does not implement product code or activate Goal mode. Do not use for a known edit, finite implementation plan, unknown failure, evidence-only research, or direct milestone execution; hand those to Quick, Refine, Debug, Research, or Goal."
+description: "Establish a durable Cruise project foundation in an empty or minimal repository, or define the next coherent milestone in an established codebase. Produces approved project or milestone contracts, an approved workflow queue, and a phase roadmap for later cruise:goal execution. Does not implement product code or activate Goal mode. Do not use for a known edit, finite implementation plan, unknown failure, evidence-only review, or direct milestone execution; hand those to Quick, Refine, Debug, native review, or Goal."
 ---
 
 # Cruise Build
@@ -85,6 +85,15 @@ blocking user decision or research blocker remains; or feasibility evidence need
 responsible approval is absent. Do not brainstorm because incidental supporting details are
 absent.
 
+For one bounded repository or feasibility uncertainty, discovery may first read the
+[Research Cell procedure](../../internal/research/WORKFLOW.md#use-a-research-cell) and launch that private worker
+phase. It remains Build-owned: inherit this Origin, baseline, evidence IDs, permissions, and stop
+conditions; publish the question and first check; and return one evidence card to the readiness
+matrix. It is not a recursive public invocation and does not create a separate
+Doctor/run/approval/brief. A material external, conflicting, benchmark, authentication, or durable
+prerequisite stays an approved pre-approval Research edge and follows the discovery reference
+exactly.
+
 In discovery, inspect prior answers, select the highest-impact unresolved category, state
 why it matters, recommend a practical path when justified, and ask exactly one concise
 question. Record each answer under a stable `Q-XX`, update readiness, preserve rejected
@@ -97,17 +106,17 @@ Persist the discovery Origin byte-for-byte with `CONCEPTS.yaml`, `QUESTIONS.yaml
 directory. Enforce stable monotonic `C-XX`, `Q-XX`, `E-XX`, and `D-XX` lineage, no more than one
 open material question, evidence-cited answers/readiness, and explicit selected/rejected reasons
 and tradeoffs. Keep the event-sourced resume envelope outside those human discovery artifacts at
-`.cruise/runs/<run-id>/BUILD-DISCOVERY.yaml`. It is inert serialized state: replay every reducer
+`.cruise/runs/<run-id>/discover.yaml`. It is inert serialized state: replay every reducer
 event and require a fresh opaque host resume attestation bound to its state digest, immutable
 Origin digest, and unchanged product baseline before continuing. An in-flight or reconciled
 pre-approval Research edge additionally requires its matching opaque approval/result history.
 Persist that envelope as the atomic head of immutable, exact-byte generations in the adjacent
-`BUILD-DISCOVERY-HISTORY/`. A pending generation must name the exact prior head; readers reclaim
+`disc-hist/`. A pending generation must name the exact prior head; readers reclaim
 only a dead writer and roll that complete generation forward before exposing canonical discovery
 files. Reject stale or forked run authorities, missing history, symlinks, and unrelated directory
 entries instead of overwriting newer discovery state. Bind every persistence/read operation to the
 exact canonical `repository_baseline.root` preserved in the discovery Origin. Maintain the separate
-durable `BUILD-DISCOVERY-LINEAGE.yaml` anchor under the same write-ahead transaction: it binds the
+durable `disc-line.yaml` anchor under the same write-ahead transaction: it binds the
 latest revision, generation, and head plus its predecessor anchor. A surviving anchor with a missing
 head or history is evidence of erasure and must fail closed; it can never authorize a fresh revision
 zero, including after process restart and opaque rehydration.
@@ -130,7 +139,7 @@ phase-local question text remains attached to a generated phase; each implementa
 prerequisite appears in exactly one Research queue item; and the scanned identifiers retain
 their active registry source paths. Reject a syntactically valid artifact that reuses an ID for
 another meaning. Require exactly nine project files
-(`ORIGIN.yaml`, `ID-REGISTRY.yaml`, `PROJECT.md`, `REQUIREMENTS.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `DECISIONS.md`,
+(`ORIGIN.yaml`, `ids.yaml`, `PROJECT.md`, `REQUIREMENTS.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `DECISIONS.md`,
 `STATE.yaml`, `QUEUE.yaml`) and nine files for exactly one first/target milestone (`ORIGIN.yaml`,
 `MILESTONE.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `DECISIONS.md`, `QUESTIONS.yaml`,
 `AUTONOMY.yaml`, `STATE.yaml`, `QUEUE.yaml`). Require the mode's target Origin to be the discovery
@@ -175,7 +184,7 @@ phase, and an incomplete milestone fence.
 
 Before approval, Build may write only planning state under `.cruise/project/` and
 `.cruise/milestones/`, plus the exact inert discovery checkpoint
-`.cruise/runs/<run-id>/BUILD-DISCOVERY.yaml`. It must not modify product source, dependencies, fixtures,
+`.cruise/runs/<run-id>/discover.yaml`. It must not modify product source, dependencies, fixtures,
 migrations, CI, deployment, documentation outside `.cruise/`, or `.cruise/goal/`; it must
 not create `CLOSEOUT.md` or perform external effects. After exact project or milestone approval,
 Build may write a repository Markdown documentation path outside `.cruise/` only when that exact
@@ -200,7 +209,7 @@ Treat approval as an executable trust boundary, not a prose convention:
 2. Mint the opaque `attestBuildApprovalReadiness` result described above. Its repository root,
    product baseline, target IDs, and project/milestone Origin hashes must match the exact draft.
 3. Retain each opaque `captureInitialBuildOrigin` authority, bind the exact project/milestone
-   bytes with `attestBuildOriginPair`, and create/reconcile `.cruise/project/ID-REGISTRY.yaml`.
+   bytes with `attestBuildOriginPair`, and create/reconcile `.cruise/project/ids.yaml`.
    Allocate IDs only through its monotonic allocator; mint `attestValidatedBuildIdHistory`
    against the exact predecessor, superseded records, and current locked artifact bytes. Persist
    only through `writeBuildIdRegistry` with the exact prior snapshot; its managed immutable
@@ -250,13 +259,13 @@ approved queue definition in place. Project and milestone `STATE.yaml` are seman
 validated and snapshot-bound through review, capture, and initial verification, but remain
 outside the immutable artifact manifest. After verification they may advance as valid runtime
 state without revoking Build authority; fresh runtime artifact verification intentionally
-rereads only the locked Build/queue bytes. Mutable `QUEUE-STATE.yaml` is owned exclusively by the
+rereads only the locked Build/queue bytes. Mutable `queue-run.yaml` is owned exclusively by the
 private evidence-aware queue coordinator, which requires current opaque Build/queue authority,
 legal state transitions, append-only attempts, narrowed child Origin, and verified child
 closeout evidence. Create it through `createBuildQueueCoordinator`; initialize new state at
 revision zero, then persist each exact one-revision successor atomically with
 `persistBuildQueueState` and the opaque prior-write/read snapshot. Before state advances, append
-the synchronized read-only exact-state entry to the adjacent `QUEUE-STATE-HISTORY/` hash chain.
+the synchronized read-only exact-state entry to the adjacent `queue-hist/` hash chain.
 Recover reducer authority only when a one-use `attestBuildQueueStateResume` authority matches
 the current state path/queue/revision/digests and the history path/head/aggregate digest, and
 `readPersistedBuildQueueState` replays the complete chain—including unchanged attempt/evidence

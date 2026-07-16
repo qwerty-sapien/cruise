@@ -43,7 +43,7 @@ import {
 const NOW = '2026-07-13T00:00:00.000Z';
 const DIGEST_A = 'a'.repeat(64);
 const DIGEST_B = 'b'.repeat(64);
-const MILESTONE_PATH = '.cruise/milestones/M-003-safe-rollout';
+const MILESTONE_PATH = '.cruise/milestones/M-003-rollout';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -338,7 +338,7 @@ export async function createMilestoneRuntimeFixture(
   };
   const descriptorBytes = stringifyYaml(descriptor);
   await writeFile(
-    join(root, '.cruise', 'goal', 'MILESTONE-CONTROLLER.yaml'),
+    join(root, '.cruise', 'goal', 'ctrl.yaml'),
     descriptorBytes,
   );
   const broker = createMilestoneControllerInteractionBroker({
@@ -357,7 +357,7 @@ export async function createMilestoneRuntimeFixture(
   });
   const inspection = await inspectMilestoneController(root, { authority });
   const activationArtifacts = [{
-    path: '.cruise/goal/MILESTONE-CONTROLLER.yaml',
+    path: '.cruise/goal/ctrl.yaml',
     sha256: sha256(descriptorBytes),
   }];
   const approvedSnapshot = {

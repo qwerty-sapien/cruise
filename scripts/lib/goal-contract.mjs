@@ -167,6 +167,31 @@ export function isStartCruiseChoice(value) {
   return String(value ?? '') === 'Start Cruise';
 }
 
+export function isApprovePlanGoalChoice(value) {
+  return String(value ?? '') === 'Approve both';
+}
+
+export function isPlanGoalReviewOptions(options) {
+  const labels = (options ?? []).map(({ label } = {}) => String(label ?? ''));
+  return (
+    labels.length === 3 &&
+    labels[0] === 'Approve both' &&
+    labels[1] === 'Refine' &&
+    labels[2] === 'Reject both'
+  );
+}
+
+export function isGoalNeedsOptions(options) {
+  const labels = (options ?? []).map(({ label } = {}) => String(label ?? ''));
+  return (
+    labels.length === 4 &&
+    labels[0] === 'Approve all' &&
+    labels[1] === 'Select some' &&
+    labels[2] === 'Reject all' &&
+    labels[3] === 'Discuss'
+  );
+}
+
 export function extractAlignmentStem(markdown) {
   const match = String(markdown).match(
     /^##\s+Stem\s*$\r?\n([\s\S]*?)(?=^##\s+|\s*$)/im,
@@ -424,7 +449,61 @@ export async function captureGoalApproval(cwd, planApproval) {
   );
 }
 
+/**
+ * Capture one approval over the complete Plan + Goal suite.
+ *
+ * GOAL.md is finalized before this snapshot, so there is no legitimate
+ * contract write between review and native Goal activation. This is the
+ * ordinary Goal path; capturePlanApproval/captureGoalApproval remain exported
+ * only for reading and safely resuming legacy two-review sessions.
+ */
+export async function capturePlanGoalApproval(
+  cwd,
+  {
+    expectedBaseline = null,
+    expectedRawPrompt = null,
+    controllerAuthority = null,
+  } = {},
+) {
+  await assertCloseoutInactive(cwd);
+  const artifacts = await inspectApprovedArtifacts(cwd, {
+    stage: 'goal',
+    controllerAuthority,
+  });
+  assertOriginMatchesPrompt(artifacts, expectedRawPrompt);
+  const baseline = captureRepositoryBaseline(cwd);
+  if (baseline.kind === 'blocked') {
+    throw new Error(`Repository baseline capture is blocked: ${baseline.block.code}`);
+  }
+  if (expectedBaseline) {
+    assertBaseline(
+      expectedBaseline,
+      baseline,
+      'The target repository changed during Cruise preparation.',
+    );
+  }
+  assertOriginMatchesRepository(artifacts, cwd);
+  return snapshot('plan-goal', artifacts, baseline, controllerAuthority);
+}
+
+export async function verifyPlanGoalApproval(cwd, approval) {
+  if (approval?.stage !== 'plan-goal') {
+    throw new Error('No combined Plan and Goal review snapshot is available.');
+  }
+  await assertCloseoutInactive(cwd);
+  const artifacts = await inspectApprovedArtifacts(cwd, {
+    stage: 'goal',
+    controllerAuthority: approval.controllerAuthority ?? null,
+  });
+  assertArtifactDigests(approval.artifacts, artifacts, 'Plan and Goal');
+  assertBaseline(approval.baseline, captureRepositoryBaseline(cwd));
+  return artifacts;
+}
+
 export async function verifyGoalApproval(cwd, goalApproval) {
+  if (goalApproval?.stage === 'plan-goal') {
+    return verifyPlanGoalApproval(cwd, goalApproval);
+  }
   if (goalApproval?.stage !== 'goal') {
     throw new Error('No approved Goal artifact snapshot is available.');
   }

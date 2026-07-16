@@ -171,13 +171,13 @@ Do not draw cyclic `T-01 → T-03 → T-01` edges. The static DAG defines depend
 
 ## 9. CLOSEOUT.md
 
-Create only after Start:
+Create only after confirmed activation:
 
 ```markdown
 # Closeout: G-XX — [Title]
 
 - Execution state: Active | Completed | Completed (waiver-qualified) | Blocked
-- Approval and Start record: [artifact digests, permission envelope, user context]
+- Combined approval and activation record: [Plan/Goal digests, permission envelope, user context]
 - Activation/fallback: [method, timestamp, returned native identity/state or truthful fallback]
 - Executed baseline: [repo and dirty/untracked identities]
 - Final source/output identity: [identity]

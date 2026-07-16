@@ -24,8 +24,8 @@ import { canonicalJson, parseYaml, stringifyYaml } from './yaml-state.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const EVIDENCE_ID = /^E-\d{2,}$/u;
-const QUEUE_STATE_HISTORY_ENTRY = /^REV-(\d{12})\.yaml$/u;
-const QUEUE_STATE_COMMITMENT_ENTRY = /^REV-(\d{12})\.yaml$/u;
+const QUEUE_STATE_HISTORY_ENTRY = /^q-(\d{1,6})\.yaml$/u;
+const QUEUE_STATE_COMMITMENT_ENTRY = /^q-(\d{1,6})\.yaml$/u;
 const QUEUE_STATE_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const COORDINATORS = new WeakSet();
@@ -59,6 +59,13 @@ const ISSUED_QUEUE_STATE_RESUME_INTERACTIONS = new Set();
 const PERSISTED_QUEUE_STATE_HEADS = new WeakMap();
 const COMMITTED_QUEUE_IDS_BY_BUILD_APPROVAL = new WeakMap();
 const FAILED_DEPENDENCY_STATUSES = new Set(['blocked', 'failed', 'skipped', 'cancelled']);
+
+function queueEntryName(revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0 || revision > 999_999) {
+    throw new Error('queue revision exceeds the informative filename range');
+  }
+  return `q-${revision}.yaml`;
+}
 
 export const LEGAL_QUEUE_STATUS_TRANSITIONS = Object.freeze({
   queued: Object.freeze([]),
@@ -1437,13 +1444,13 @@ export function initializeBuildQueueState(coordinatorInput, { now = () => new Da
 
 /**
  * Direct object rehydration is intentionally forbidden. Persisted authority is
- * recovered only from the exact adjacent QUEUE-STATE.yaml bytes and its full
+ * recovered only from the exact adjacent queue-run.yaml bytes and its full
  * immutable history chain through readPersistedBuildQueueState and a one-use
  * host observation.
  */
 export function rehydrateBuildQueueState() {
   throw new Error(
-    'plain queue state cannot be rehydrated; use the CAS-protected persisted QUEUE-STATE.yaml resume path',
+    'plain queue state cannot be rehydrated; use the CAS-protected persisted queue-run.yaml resume path',
   );
 }
 
@@ -1453,12 +1460,12 @@ function portable(path) {
 
 function queueStateRelativePath(coordinator) {
   const directory = portable(dirname(coordinator.queue_approval.queue_path));
-  return directory === '.' ? 'QUEUE-STATE.yaml' : `${directory}/QUEUE-STATE.yaml`;
+  return directory === '.' ? 'queue-run.yaml' : `${directory}/queue-run.yaml`;
 }
 
 function queueStateHistoryRelativePath(coordinator) {
   const directory = portable(dirname(queueStateRelativePath(coordinator)));
-  return directory === '.' ? 'QUEUE-STATE-HISTORY' : `${directory}/QUEUE-STATE-HISTORY`;
+  return directory === '.' ? 'queue-hist' : `${directory}/queue-hist`;
 }
 
 function stateSnapshotPayload(
@@ -1726,7 +1733,7 @@ async function queueStateLocation(root, coordinatorInput) {
     throw new Error('approved queue state directory must not traverse a symbolic link');
   }
   if (
-    historyAbsolute !== resolve(expectedDirectory, 'QUEUE-STATE-HISTORY') ||
+    historyAbsolute !== resolve(expectedDirectory, 'queue-hist') ||
     portable(relative(canonicalRoot, historyAbsolute)) !== historyRelativePath
   ) {
     throw new Error('approved queue state history path is not exactly adjacent to QUEUE.yaml');
@@ -1764,17 +1771,17 @@ function queueGenesisCommitmentPayload(location, history) {
 }
 
 function queueGenesisCommitmentLocation(location) {
-  const directory = resolve(location.root, '.cruise', 'QUEUE-STATE-COMMITMENTS');
-  const key = fileDigest(Buffer.from(
-    `${location.coordinator.build_approval_digest}\0${location.coordinator.queue_id}`,
-    'utf8',
-  ));
+  const directory = resolve(location.root, '.cruise', 'queue-locks');
+  const key = location.coordinator.queue_id.toLowerCase().replace(/^queue-/u, 'q-');
+  if (key.length > 15 || !/^q-(?:prj|m)-[a-z0-9-]+$/u.test(key)) {
+    throw new Error('queue commitment namespace must be informative and at most 15 characters');
+  }
   return {
     directory,
     path: resolve(directory, `${key}.yaml`),
-    relative_path: `.cruise/QUEUE-STATE-COMMITMENTS/${key}.yaml`,
+    relative_path: `.cruise/queue-locks/${key}.yaml`,
     lineage_directory: resolve(directory, key),
-    lineage_relative_path: `.cruise/QUEUE-STATE-COMMITMENTS/${key}`,
+    lineage_relative_path: `.cruise/queue-locks/${key}`,
   };
 }
 
@@ -1951,7 +1958,7 @@ async function readQueueRevisionCommitments(location, { allowMissing = false } =
 
 function assertQueueRevisionCommitmentsMatchHistory(location, commitments, history) {
   if (commitments.length > history.entries.length) {
-    throw new Error('QUEUE-STATE-HISTORY rolled back behind its durable revision commitments');
+    throw new Error('queue-hist rolled back behind its durable revision commitments');
   }
   for (const [revision, entry] of commitments.entries()) {
     const expected = queueRevisionCommitmentPayload(
@@ -1964,7 +1971,7 @@ function assertQueueRevisionCommitmentsMatchHistory(location, commitments, histo
     void ignored;
     if (canonicalJson(payload) !== canonicalJson(expected)) {
       throw new Error(
-        `QUEUE-STATE-HISTORY revision ${revision} differs from its durable commitment`,
+        `queue-hist revision ${revision} differs from its durable commitment`,
       );
     }
   }
@@ -2015,9 +2022,9 @@ async function ensureQueueRevisionCommitments(location, history) {
       revision === 0 ? null : commitments[revision - 1],
     );
     const entry = deepFreeze({ ...payload, commitment_sha256: digest(payload) });
-    const name = `REV-${String(revision).padStart(12, '0')}.yaml`;
+    const name = queueEntryName(revision);
     const finalPath = resolve(commitmentLocation.lineage_directory, name);
-    const temporaryPath = `${commitmentLocation.lineage_directory}.${process.pid}.${randomUUID()}.${name}.tmp`;
+    const temporaryPath = resolve(commitmentLocation.directory, '.q-rev-stage');
     try {
       const handle = await open(temporaryPath, 'wx', 0o400);
       try {
@@ -2089,9 +2096,9 @@ async function materializeCommittedQueueHistoryTail(location, history, commitmen
     throw new Error('durable queue revision does not bind its embedded local history entry');
   }
   const directoryMetadata = await ensureQueueStateHistoryDirectory(location);
-  const name = `REV-${String(revision).padStart(12, '0')}.yaml`;
+  const name = queueEntryName(revision);
   const finalPath = resolve(location.history_absolute, name);
-  const temporaryPath = `${location.history_absolute}.${process.pid}.${randomUUID()}.${name}.recovery.tmp`;
+  const temporaryPath = resolve(dirname(location.history_absolute), '.q-hist-stage');
   try {
     const handle = await open(temporaryPath, 'wx', 0o400);
     try {
@@ -2108,7 +2115,7 @@ async function materializeCommittedQueueHistoryTail(location, history, commitmen
       currentDirectoryMetadata.ino !== directoryMetadata.ino ||
       await realpath(location.history_absolute) !== location.history_absolute
     ) {
-      throw new Error('QUEUE-STATE-HISTORY changed before durable-tail recovery');
+      throw new Error('queue-hist changed before durable-tail recovery');
     }
     await link(temporaryPath, finalPath);
     await syncParentDirectory(finalPath);
@@ -2235,7 +2242,7 @@ async function ensureQueueGenesisCommitment(location, history) {
     validateQueueGenesisCommitment(location, existing, history);
     committedMarker = existing;
   } else {
-    const temporaryPath = `${commitmentLocation.path}.${process.pid}.${randomUUID()}.tmp`;
+    const temporaryPath = resolve(commitmentLocation.directory, '.q-gen-stage');
     const bytes = Buffer.from(stringifyYaml(marker), 'utf8');
     try {
       const handle = await open(temporaryPath, 'wx', 0o400);
@@ -2269,7 +2276,7 @@ async function ensureQueueGenesisCommitment(location, history) {
   return committedMarker;
 }
 
-async function readExactRegularFile(path, label = 'QUEUE-STATE.yaml') {
+async function readExactRegularFile(path, label = 'queue-run.yaml') {
   const before = await lstat(path);
   if (before.isSymbolicLink() || !before.isFile()) {
     throw new Error(`${label} must be a regular no-follow file`);
@@ -2314,7 +2321,7 @@ async function readExactRegularFile(path, label = 'QUEUE-STATE.yaml') {
 
 function parsePersistedQueueState(bytes) {
   const parsed = parseYaml(bytes.toString('utf8'));
-  if (!isPlainObject(parsed)) throw new Error('QUEUE-STATE.yaml must contain one mapping');
+  if (!isPlainObject(parsed)) throw new Error('queue-run.yaml must contain one mapping');
   return parsed;
 }
 
@@ -2367,7 +2374,7 @@ function validateQueueStateHistoryEntry(
     'state_yaml_base64',
     'previous_entry_sha256',
     'entry_sha256',
-  ], `QUEUE-STATE-HISTORY revision ${revision}`);
+  ], `queue-hist revision ${revision}`);
   if (
     entry.schema_version !== 1 ||
     entry.kind !== 'cruise_build_queue_state_history_entry' ||
@@ -2377,31 +2384,31 @@ function validateQueueStateHistoryEntry(
     entry.revision !== revision ||
     entry.previous_entry_sha256 !== (previousEntry?.entry_sha256 ?? null)
   ) {
-    throw new Error(`QUEUE-STATE-HISTORY revision ${revision} breaks its approved chain`);
+    throw new Error(`queue-hist revision ${revision} breaks its approved chain`);
   }
-  assertDigest(entry.state_sha256, `QUEUE-STATE-HISTORY revision ${revision} state_sha256`);
+  assertDigest(entry.state_sha256, `queue-hist revision ${revision} state_sha256`);
   assertDigest(
     entry.state_file_sha256,
-    `QUEUE-STATE-HISTORY revision ${revision} state_file_sha256`,
+    `queue-hist revision ${revision} state_file_sha256`,
   );
-  assertDigest(entry.entry_sha256, `QUEUE-STATE-HISTORY revision ${revision} entry_sha256`);
+  assertDigest(entry.entry_sha256, `queue-hist revision ${revision} entry_sha256`);
   if (entry.entry_sha256 !== digest(historyEntryPayload(entry))) {
-    throw new Error(`QUEUE-STATE-HISTORY revision ${revision} entry digest was rewritten`);
+    throw new Error(`queue-hist revision ${revision} entry digest was rewritten`);
   }
   const stateBytes = Buffer.from(
-    nonEmpty(entry.state_yaml_base64, `QUEUE-STATE-HISTORY revision ${revision} state_yaml_base64`),
+    nonEmpty(entry.state_yaml_base64, `queue-hist revision ${revision} state_yaml_base64`),
     'base64',
   );
   if (stateBytes.toString('base64') !== entry.state_yaml_base64) {
-    throw new Error(`QUEUE-STATE-HISTORY revision ${revision} state bytes are not canonical base64`);
+    throw new Error(`queue-hist revision ${revision} state bytes are not canonical base64`);
   }
   if (fileDigest(stateBytes) !== entry.state_file_sha256) {
-    throw new Error(`QUEUE-STATE-HISTORY revision ${revision} state file digest changed`);
+    throw new Error(`queue-hist revision ${revision} state file digest changed`);
   }
   const state = parsePersistedQueueState(stateBytes);
   validateCoordinatorStateStructure(coordinator, state);
   if (state.revision !== revision || digest(state) !== entry.state_sha256) {
-    throw new Error(`QUEUE-STATE-HISTORY revision ${revision} does not match its exact state bytes`);
+    throw new Error(`queue-hist revision ${revision} does not match its exact state bytes`);
   }
   if (previousState == null) {
     const genesisTimestamp = nowIso(state.updated_at);
@@ -2410,7 +2417,7 @@ function validateQueueStateHistoryEntry(
       canonicalJson(createInitialCoordinatorState(coordinator, genesisTimestamp)) !==
         canonicalJson(state)
     ) {
-      throw new Error('QUEUE-STATE-HISTORY revision 0 is not the exact coordinator genesis');
+      throw new Error('queue-hist revision 0 is not the exact coordinator genesis');
     }
   } else {
     assertQueueStateSuccessor(coordinator, previousState, state);
@@ -2447,17 +2454,17 @@ async function readQueueStateHistory(
     throw error;
   }
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-    throw new Error('QUEUE-STATE-HISTORY must be a regular no-follow directory');
+    throw new Error('queue-hist must be a regular no-follow directory');
   }
   if (await realpath(location.history_absolute) !== location.history_absolute) {
-    throw new Error('QUEUE-STATE-HISTORY must not traverse a symbolic link');
+    throw new Error('queue-hist must not traverse a symbolic link');
   }
   const directoryEntries = await readdir(location.history_absolute, { withFileTypes: true });
   const names = directoryEntries.map(({ name }) => name).sort((left, right) =>
     left.localeCompare(right, 'en'));
   if (names.length === 0) {
     if (allowEmpty) return null;
-    throw new Error('QUEUE-STATE-HISTORY cannot be empty');
+    throw new Error('queue-hist cannot be empty');
   }
   const entries = [];
   const files = [];
@@ -2468,7 +2475,7 @@ async function readQueueStateHistory(
   for (const [index, name] of names.entries()) {
     const match = QUEUE_STATE_HISTORY_ENTRY.exec(name);
     if (!match || Number(match[1]) !== index) {
-      throw new Error('QUEUE-STATE-HISTORY must contain one contiguous immutable file per revision');
+      throw new Error('queue-hist must contain one contiguous immutable file per revision');
     }
     const directoryEntry = directoryEntries.find((candidate) => candidate.name === name);
     if (!directoryEntry?.isFile() || directoryEntry.isSymbolicLink()) {
@@ -2476,7 +2483,7 @@ async function readQueueStateHistory(
     }
     const file = await readExactRegularFile(
       resolve(location.history_absolute, name),
-      `QUEUE-STATE-HISTORY/${name}`,
+      `queue-hist/${name}`,
     );
     const parsed = parseYaml(file.bytes.toString('utf8'), {
       maxBytes: QUEUE_STATE_HISTORY_MAX_BYTES,
@@ -2504,7 +2511,7 @@ async function readQueueStateHistory(
     after.ino !== metadata.ino ||
     await realpath(location.history_absolute) !== location.history_absolute
   ) {
-    throw new Error('QUEUE-STATE-HISTORY changed while its exact chain was read');
+    throw new Error('queue-hist changed while its exact chain was read');
   }
   return queueStateHistorySummary(location, entries, files, states, stateBytes);
 }
@@ -2512,9 +2519,9 @@ async function readQueueStateHistory(
 function inspectStateHistoryRelation(coordinator, stateFile, history) {
   const { state, file_sha256: stateFileSha256 } = stateFile;
   const head = history?.head;
-  if (!head) throw new Error('QUEUE-STATE.yaml has no persistent history head');
+  if (!head) throw new Error('queue-run.yaml has no persistent history head');
   if (state.revision > head.revision) {
-    throw new Error('QUEUE-STATE.yaml advanced without a persistent history entry');
+    throw new Error('queue-run.yaml advanced without a persistent history entry');
   }
   if (state.revision === head.revision) {
     if (
@@ -2522,12 +2529,12 @@ function inspectStateHistoryRelation(coordinator, stateFile, history) {
       head.state_file_sha256 !== stateFileSha256 ||
       !stateFile.bytes.equals(history.state_bytes.at(-1))
     ) {
-      throw new Error('QUEUE-STATE.yaml forked from its persistent exact-hash history head');
+      throw new Error('queue-run.yaml forked from its persistent exact-hash history head');
     }
     return { status: 'current', head, successor_state: null, successor_bytes: null };
   }
   if (head.revision !== state.revision + 1) {
-    throw new Error('QUEUE-STATE-HISTORY is more than one revision ahead of QUEUE-STATE.yaml');
+    throw new Error('queue-hist is more than one revision ahead of queue-run.yaml');
   }
   const predecessor = history.entries[state.revision];
   const predecessorBytes = history.state_bytes[state.revision];
@@ -2537,7 +2544,7 @@ function inspectStateHistoryRelation(coordinator, stateFile, history) {
     predecessor.state_file_sha256 !== stateFileSha256 ||
     !stateFile.bytes.equals(predecessorBytes)
   ) {
-    throw new Error('QUEUE-STATE.yaml is not the exact predecessor of its pending history head');
+    throw new Error('queue-run.yaml is not the exact predecessor of its pending history head');
   }
   const successorState = history.states.at(-1);
   const successorBytes = history.state_bytes.at(-1);
@@ -2560,7 +2567,7 @@ function inspectStateHistoryRelation(coordinator, stateFile, history) {
 function assertStateMatchesHistory(coordinator, stateFile, history) {
   const relation = inspectStateHistoryRelation(coordinator, stateFile, history);
   if (relation.status !== 'current') {
-    throw new Error('QUEUE-STATE.yaml rolled back behind its persistent history head');
+    throw new Error('queue-run.yaml rolled back behind its persistent history head');
   }
   return relation.head;
 }
@@ -2583,10 +2590,10 @@ async function ensureQueueStateHistoryDirectory(location) {
   }
   const metadata = await lstat(location.history_absolute);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-    throw new Error('QUEUE-STATE-HISTORY must be a regular no-follow directory');
+    throw new Error('queue-hist must be a regular no-follow directory');
   }
   if (await realpath(location.history_absolute) !== location.history_absolute) {
-    throw new Error('QUEUE-STATE-HISTORY must not traverse a symbolic link');
+    throw new Error('queue-hist must not traverse a symbolic link');
   }
   return metadata;
 }
@@ -2601,16 +2608,16 @@ async function cleanupAbandonedGenesisQueueStateStaging(location) {
   }
   if (historyMetadata !== null) {
     if (historyMetadata.isSymbolicLink() || !historyMetadata.isDirectory()) {
-      throw new Error('QUEUE-STATE-HISTORY must be a regular no-follow directory');
+      throw new Error('queue-hist must be a regular no-follow directory');
     }
     if (await realpath(location.history_absolute) !== location.history_absolute) {
-      throw new Error('QUEUE-STATE-HISTORY must not traverse a symbolic link');
+      throw new Error('queue-hist must not traverse a symbolic link');
     }
     if ((await readdir(location.history_absolute)).length !== 0) {
       throw new Error('empty queue genesis staging changed before recovery');
     }
   }
-  const stagingName = /^(?:QUEUE-STATE\.yaml\.\d+\.[0-9a-f-]{36}\.tmp|QUEUE-STATE-HISTORY\.\d+\.[0-9a-f-]{36}\.REV-000000000000\.yaml\.tmp)$/u;
+  const stagingName = /^\.q-(?:hist|state)-stage$/u;
   const parent = dirname(location.history_absolute);
   const entries = await readdir(parent, { withFileTypes: true });
   let removed = false;
@@ -2622,7 +2629,7 @@ async function cleanupAbandonedGenesisQueueStateStaging(location) {
     await rm(resolve(parent, entry.name), { force: true });
     removed = true;
   }
-  if (removed) await syncParentDirectory(resolve(parent, 'QUEUE-STATE.yaml'));
+  if (removed) await syncParentDirectory(resolve(parent, 'queue-run.yaml'));
 }
 
 async function appendQueueStateHistoryEntry(
@@ -2646,9 +2653,9 @@ async function appendQueueStateHistoryEntry(
     stateBytes,
     previousHistory?.head ?? null,
   );
-  const name = `REV-${String(state.revision).padStart(12, '0')}.yaml`;
+  const name = queueEntryName(state.revision);
   const finalPath = resolve(location.history_absolute, name);
-  const temporaryPath = `${location.history_absolute}.${process.pid}.${randomUUID()}.${name}.tmp`;
+  const temporaryPath = resolve(dirname(location.history_absolute), '.q-hist-stage');
   const bytes = Buffer.from(stringifyYaml(entry), 'utf8');
   try {
     const handle = await open(temporaryPath, 'wx', 0o400);
@@ -2669,7 +2676,7 @@ async function appendQueueStateHistoryEntry(
       currentDirectoryMetadata.ino !== directoryMetadata.ino ||
       await realpath(location.history_absolute) !== location.history_absolute
     ) {
-      throw new Error('QUEUE-STATE-HISTORY changed before its immutable append');
+      throw new Error('queue-hist changed before its immutable append');
     }
     await link(temporaryPath, finalPath);
     await syncParentDirectory(finalPath);
@@ -2678,7 +2685,7 @@ async function appendQueueStateHistoryEntry(
     }
   } catch (error) {
     if (error?.code === 'EEXIST') {
-      throw new Error(`QUEUE-STATE-HISTORY revision ${state.revision} already exists`);
+      throw new Error(`queue-hist revision ${state.revision} already exists`);
     }
     throw error;
   } finally {
@@ -2691,12 +2698,12 @@ async function appendQueueStateHistoryEntry(
     history.head.state_file_sha256 !== fileDigest(stateBytes) ||
     history.entries.length !== (previousHistory?.entries.length ?? 0) + 1
   ) {
-    throw new Error('QUEUE-STATE-HISTORY append did not produce the exact chained head');
+    throw new Error('queue-hist append did not produce the exact chained head');
   }
   if (previousHistory != null) {
     const previousFiles = history.files.slice(0, previousHistory.files.length);
     if (canonicalJson(previousFiles) !== canonicalJson(previousHistory.files)) {
-      throw new Error('QUEUE-STATE-HISTORY rewrote an immutable prior entry');
+      throw new Error('queue-hist rewrote an immutable prior entry');
     }
   }
   return history;
@@ -2708,7 +2715,7 @@ async function assertQueueStateFileUnchanged(location, previous) {
     current.file_sha256 !== previous.file_sha256 ||
     !current.bytes.equals(previous.bytes)
   ) {
-    throw new Error('QUEUE-STATE.yaml changed across the compare-and-swap boundary');
+    throw new Error('queue-run.yaml changed across the compare-and-swap boundary');
   }
 }
 
@@ -2719,7 +2726,7 @@ async function assertQueueStateFileStillAbsent(path) {
     if (error?.code === 'ENOENT') return;
     throw error;
   }
-  throw new Error('QUEUE-STATE.yaml appeared across the compare-and-swap boundary');
+  throw new Error('queue-run.yaml appeared across the compare-and-swap boundary');
 }
 
 async function syncParentDirectory(path) {
@@ -2801,7 +2808,7 @@ async function acquireQueueStateWriterLock(
 ) {
   const create = async () => {
     const metadata = queueStateLockMetadata(coordinator, purpose);
-    const preparationPath = `${lockPath}.${metadata.pid}.${metadata.nonce}.prepare`;
+    const preparationPath = resolve(dirname(lockPath), '.q-lock-stage');
     let handle;
     try {
       handle = await open(preparationPath, 'wx', 0o600);
@@ -2824,19 +2831,19 @@ async function acquireQueueStateWriterLock(
   } catch (error) {
     if (error?.code !== 'EEXIST') throw error;
   }
-  if (!reclaimDeadWriter) throw new Error('QUEUE-STATE.yaml is locked by another writer');
+  if (!reclaimDeadWriter) throw new Error('queue-run.yaml is locked by another writer');
   const stale = await readQueueStateWriterLock(lockPath, coordinator);
   if (processIsAlive(stale.pid)) {
-    throw new Error('QUEUE-STATE.yaml recovery is blocked by an active writer lock');
+    throw new Error('queue-run.yaml recovery is blocked by an active writer lock');
   }
-  const quarantinePath = `${lockPath}.${stale.nonce}.stale`;
+  const quarantinePath = resolve(dirname(lockPath), '.q-lock-stale');
   await rename(lockPath, quarantinePath);
   await rm(quarantinePath, { force: true });
   try {
     return await create();
   } catch (error) {
     if (error?.code === 'EEXIST') {
-      throw new Error('QUEUE-STATE.yaml lock changed while reclaiming a dead writer');
+      throw new Error('queue-run.yaml lock changed while reclaiming a dead writer');
     }
     throw error;
   }
@@ -2940,7 +2947,7 @@ export async function persistBuildQueueState({
             'recovered pre-link queue genesis differs from the supplied opaque candidate',
           );
         }
-        temporaryPath = `${location.absolute}.${process.pid}.${randomUUID()}.genesis-commit.tmp`;
+        temporaryPath = resolve(dirname(location.absolute), '.q-state-stage');
         const recoveryHandle = await open(temporaryPath, 'wx', 0o600);
         try {
           await recoveryHandle.writeFile(history.state_bytes[0]);
@@ -2986,7 +2993,7 @@ export async function persistBuildQueueState({
         );
       }
       if (expectedSnapshot !== null) {
-        throw new Error('QUEUE-STATE.yaml does not exist for the supplied prior snapshot');
+        throw new Error('queue-run.yaml does not exist for the supplied prior snapshot');
       }
       if (state.revision !== 0) {
         throw new Error('the first persisted queue state must be revision zero');
@@ -3009,7 +3016,7 @@ export async function persistBuildQueueState({
       }
       await cleanupAbandonedGenesisQueueStateStaging(location);
     } else if (current === null || history === null) {
-      throw new Error('QUEUE-STATE.yaml and QUEUE-STATE-HISTORY must exist or initialize together');
+      throw new Error('queue-run.yaml and queue-hist must exist or initialize together');
     } else {
       assertStateMatchesHistory(coordinator, current, history);
       assertCurrentQueueStateHead(coordinator, current.state, current.file_sha256, history);
@@ -3068,7 +3075,7 @@ export async function persistBuildQueueState({
       }
     }
 
-    temporaryPath = `${location.absolute}.${process.pid}.${randomUUID()}.tmp`;
+    temporaryPath = resolve(dirname(location.absolute), '.q-state-stage');
     const handle = await open(temporaryPath, 'wx', 0o600);
     try {
       await handle.writeFile(serializedBytes);
@@ -3111,7 +3118,7 @@ export async function persistBuildQueueState({
       checkedHistory.history_sha256 !== nextHistory.history_sha256 ||
       checkedHistory.head.entry_sha256 !== nextHistory.head.entry_sha256
     ) {
-      throw new Error('QUEUE-STATE-HISTORY changed before the state commit');
+      throw new Error('queue-hist changed before the state commit');
     }
     if (current === null) {
       await assertQueueStateFileStillAbsent(location.absolute);
@@ -3127,7 +3134,7 @@ export async function persistBuildQueueState({
       !written.bytes.equals(serializedBytes) ||
       canonicalJson(written.state) !== canonicalJson(state)
     ) {
-      throw new Error('atomic QUEUE-STATE.yaml write did not preserve the exact candidate bytes');
+      throw new Error('atomic queue-run.yaml write did not preserve the exact candidate bytes');
     }
     const writtenHistory = await readQueueStateHistory(location);
     assertStateMatchesHistory(coordinator, written, writtenHistory);
@@ -3135,7 +3142,7 @@ export async function persistBuildQueueState({
       writtenHistory.history_sha256 !== nextHistory.history_sha256 ||
       writtenHistory.head.entry_sha256 !== nextHistory.head.entry_sha256
     ) {
-      throw new Error('QUEUE-STATE-HISTORY changed across the atomic state commit');
+      throw new Error('queue-hist changed across the atomic state commit');
     }
     const snapshot = mintQueueStateSnapshot(coordinator, state, {
       statePath: location.relative_path,
@@ -3336,7 +3343,7 @@ async function rollForwardMissingGenesisQueueState({
       location,
     );
     const genesisBytes = history.state_bytes[0];
-    temporaryPath = `${location.absolute}.${process.pid}.${randomUUID()}.genesis-recovery.tmp`;
+    temporaryPath = resolve(dirname(location.absolute), '.q-state-stage');
     const handle = await open(temporaryPath, 'wx', 0o600);
     try {
       await handle.writeFile(genesisBytes);
@@ -3420,7 +3427,7 @@ async function rollForwardPendingQueueState({
       location,
     );
     const successorBytes = relation.successor_bytes;
-    temporaryPath = `${location.absolute}.${process.pid}.${randomUUID()}.recovery.tmp`;
+    temporaryPath = resolve(dirname(location.absolute), '.q-state-stage');
     const handle = await open(temporaryPath, 'wx', 0o600);
     try {
       await handle.writeFile(successorBytes);
@@ -3537,7 +3544,7 @@ export async function readPersistedBuildQueueState({
     }
   }
   if (history === null) {
-    throw new Error('QUEUE-STATE-HISTORY is missing and has no exact durable recovery tail');
+    throw new Error('queue-hist is missing and has no exact durable recovery tail');
   }
   if (
     durableRevisionCommitments === null ||

@@ -1,13 +1,20 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { cp, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, open, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AppServerClient } from './app-server-client.mjs';
 import { createIsolatedAppServerRuntime } from './app-server-runtime.mjs';
+
+async function createDoctorTemp(name) {
+  const path = join(tmpdir(), name);
+  await rm(path, { recursive: true, force: true });
+  await mkdir(path, { mode: 0o700 });
+  return path;
+}
 import { createDeadline, waitForCleanup } from './deadline.mjs';
 import { digestPluginRuntime, isPathInside } from './doctor-plugin-cache.mjs';
 import { validateEvidenceRecord } from './evidence.mjs';
@@ -53,24 +60,20 @@ export const DOCTOR_SKILL_CASES = Object.freeze([
   }),
   Object.freeze({
     skill: 'quick',
-    prompt: 'Create DOCTOR-QUICK.txt containing exactly "Cruise Doctor quick probe passed." followed by one newline, verify the bytes, and finish the normal Quick workflow. In the mapping packet, enumerate the shared contract\'s exact 18 schema-v1 enrichment gates; the two extra schema-v2 deterministic-probe routing signals are expected metadata and must be excluded from the schema-v1 gate list.',
+    prompt: 'Create doctor-ok.txt containing exactly "Cruise Doctor quick probe passed." followed by one newline, verify the bytes, and finish the normal Quick workflow. In the mapping packet, enumerate the shared contract\'s exact 18 schema-v1 enrichment gates; the two extra schema-v2 deterministic-probe routing signals are expected metadata and must be excluded from the schema-v1 gate list.',
   }),
   Object.freeze({
     skill: 'refine',
-    prompt: 'Plan and implement docs/DOCTOR-REFINE.md for this spatiomics skill. The target document is intentionally absent at baseline. Resolve the material documentation decision between structural format triage and semantic fixture validation, state both failure boundaries, and use the normal Refine approval and independent verification. The fixture evidence is at repository-root paths data/format-markers.json, workflow/Snakefile, tests/spatiomics-fixture.test.mjs, and .agents/skills/spatiomics-skill/scripts/inspect_spatial_inputs.py.',
+    prompt: 'Plan and implement docs/refine-ok.md for this spatiomics skill. The target document is intentionally absent at baseline. Resolve the material documentation decision between structural format triage and semantic fixture validation, state both failure boundaries, and use the normal Refine approval and independent verification. The fixture evidence is at repository-root paths data/format-markers.json, workflow/Snakefile, tests/spatiomics-fixture.test.mjs, and .agents/skills/spatiomics-skill/scripts/inspect_spatial_inputs.py.',
   }),
   Object.freeze({
     skill: 'goal',
-    prompt: 'Prepare and durably execute docs/DOCTOR-GOAL.md as an interruption-safe validation runbook for the spatiomics fixture, with checkpoints for the inspector, semantic test, and provenance review. This is the native Goal durability canary: use the normal separate Plan and Goal reviews and Goal activation; no external effects.',
+    prompt: 'Prepare and durably execute docs/DOCTOR-GOAL.md as an interruption-safe validation runbook for the spatiomics fixture, with checkpoints for the inspector, semantic test, and provenance review. This is the native Goal durability canary: use the normal combined Plan-and-Goal review and Goal activation; no external effects.',
   }),
   Object.freeze({
     skill: 'debug',
-    prompt: 'Run node --test tests/doctor-failure.test.mjs inside the bounded skill turn, determine the root cause of its intentional failure, and repair only that disposable test by changing the final expected value from 2 to 1 while preserving every other byte. Rerun it only inside the skill turn and preserve normal Debug evidence.',
+    prompt: 'Run node --test tests/fail.test.mjs inside the bounded skill turn, determine the root cause of its intentional failure, and repair only that disposable test by changing the final expected value from 2 to 1 while preserving every other byte. Rerun it only inside the skill turn and preserve normal Debug evidence.',
     prepare: 'failing-test',
-  }),
-  Object.freeze({
-    skill: 'research',
-    prompt: 'Determine the spatiomics skill\'s entry points, supported synthetic formats, GEF-versus-GEFF boundary, and strongest deterministic local validation. Persist the normal evidence-bound Markdown Research artifact at the exact canonical run path `.cruise/runs/<run-id>/RESEARCH.md`; it must cite the repository skill and inspect_spatial_inputs.py. Do not make product edits or use external access.',
   }),
 ]);
 
@@ -129,17 +132,17 @@ export const DEEP_DOCTOR_SMOKE_CASES = Object.freeze([
   }),
   Object.freeze({
     skill: 'goal',
-    question: 'Report the ordered exact native approval labels and whether they must occur in separate requests.',
+    question: 'Report the ordered exact labels in the combined Goal review and whether Plan and Goal are approved together.',
     expected: Object.freeze({
       skill: 'cruise:goal',
-      approval_labels: Object.freeze(['Approve Plan', 'Start Cruise']),
-      separate_requests: true,
+      approval_labels: Object.freeze(['Approve both', 'Refine', 'Reject both']),
+      plan_and_goal_together: true,
     }),
     tests: Object.freeze([
-      'separate Plan and Start approvals activate native Goal exactly once',
-      'artifact drift after Plan approval invalidates Start',
+      'one combined Plan-and-Goal approval activates native Goal without an intermediate write window',
+      'one combined snapshot binds Plan, Goal, alignment, and repository baseline',
     ]),
-    files: Object.freeze(['tests/session.test.mjs']),
+    files: Object.freeze(['tests/session.test.mjs', 'tests/goal-contract.test.mjs']),
   }),
   Object.freeze({
     skill: 'debug',
@@ -153,23 +156,6 @@ export const DEEP_DOCTOR_SMOKE_CASES = Object.freeze([
       'Debug product writes require performed causal evidence and exact causal scope',
     ]),
     files: Object.freeze(['tests/workflow-policy.test.mjs']),
-  }),
-  Object.freeze({
-    skill: 'research',
-    question: 'Report whether Research may modify product code and whether the root-authored canonical RESEARCH.md artifact is required.',
-    expected: Object.freeze({
-      skill: 'cruise:research',
-      product_code_writes_allowed: false,
-      canonical_research_artifact_required: true,
-    }),
-    tests: Object.freeze([
-      'disjoint read-only Research concurrency has no hidden numeric ceiling',
-      'Research outcome requires RESEARCH.md and cannot pass from a packet decoy',
-    ]),
-    files: Object.freeze([
-      'tests/build-queue-coordinator.test.mjs',
-      'tests/doctor-e2e.test.mjs',
-    ]),
   }),
 ]);
 
@@ -326,7 +312,7 @@ export function parseDoctorRuntimeInvocation(command, {
 
 const DOCTOR_HOST_RUNTIME_OPTIONS = Object.freeze({
   begin: Object.freeze({
-    required: Object.freeze(['skill', 'root', 'run-dir', 'prompt-file']),
+    required: Object.freeze(['skill', 'root', 'prompt-file']),
     optional: Object.freeze([]),
   }),
   'enrich-probe': Object.freeze({
@@ -405,7 +391,7 @@ function doctorRunDirectory(repositoryRoot, requestedPath, { allowMissingRunsRoo
   if (typeof requestedPath !== 'string' || requestedPath.length === 0) return null;
   const requested = resolve(repositoryRoot, requestedPath);
   const name = basename(requested);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)) return null;
+  if (!/^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(name)) return null;
   let parent;
   let runsRoot;
   try {
@@ -505,7 +491,7 @@ export function parseDoctorRuntimeHostInvocation(command, {
   if (invocation.subcommand === 'route' && options.skill !== skill) return null;
 
   const directFiles = {
-    'enrich-probe': [['facts', 'semantic-facts.yaml']],
+    'enrich-probe': [['facts', 'map-facts.yaml']],
     route: [['classifier', null], ['retry-classifier', null], ['catalog-json', null]],
     'validate-origin': [['file', null], ['expected-origin', null]],
     'validate-trace': [['file', null], ['origin', null], ['origin-mappings', null]],
@@ -881,7 +867,7 @@ function doctorClassifierOutput(skill) {
  */
 export async function stageDoctorRouteInputs({ root, skill, modelCatalog }) {
   const runDirectory = await realpath(join(root, '.cruise', 'runs', `doctor-${skill}`));
-  const guard = await readForeignDiffGuardState(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const guard = await readForeignDiffGuardState(join(runDirectory, 'drift.yaml'));
   if (guard.status !== 'monitoring') {
     throw new Error('Deep Doctor route inputs may be staged only after foreign-diff monitoring starts');
   }
@@ -935,7 +921,7 @@ export function createDoctorCanaryPrompt({
     'Use the repository-local $spatiomics-skill for domain methods and fixture validation.',
     'This is a bounded installed-skill inference canary in a disposable real repository.',
     ...(skill === 'debug'
-      ? ['The tracked tests/doctor-failure.test.mjs is an intentional failing canary input committed in the fixture baseline; its failing assertion is expected, and it is the only allowed repair target.']
+      ? ['The tracked tests/fail.test.mjs is an intentional failing canary input committed in the fixture baseline; its failing assertion is expected, and it is the only allowed repair target.']
       : [
           'The requested output is intentionally absent at baseline; that is expected.',
           'Because the requested output begins untracked, complete change-set evidence must include an untracked-aware inventory rather than relying only on `git diff`.',
@@ -946,7 +932,7 @@ export function createDoctorCanaryPrompt({
       ? carriesInitialInvocation
         ? [
             '`cruise-runtime` is not on PATH and a bare invocation will fail.',
-            `The first runtime attempt must be exactly \`${nodeExecutable} ${runtimeExecutable} begin --skill ${skill} --root ${repositoryRoot} --run-dir ${initialRunDirectory} --prompt-file ${runtimePromptFile}\`.`,
+            `The first runtime attempt must be exactly \`${nodeExecutable} ${runtimeExecutable} begin --skill ${skill} --root ${repositoryRoot} --prompt-file ${runtimePromptFile}\`. Level 1 must assign the reserved informative run name \`doctor-${skill}\`, producing \`${initialRunDirectory}\`.`,
             '`begin --help`, source probing through the runtime executable, a different run ID, a relative root, stdin, or any other earlier cruise-runtime attempt makes this canary fail even if a later retry succeeds.',
             'Set `sandbox_permissions` to `require_escalated` on that exact first command and every later installed-runtime command. Deep Doctor noninteractively accepts only one exact tokenized command item at a time for this installed executable and deterministic canary run. Omit `prefix_rule`, session-wide amendments, network requests, and extra writable roots. Never try a runtime command in the repository-only sandbox first.',
           ].join(' ')
@@ -957,8 +943,8 @@ export function createDoctorCanaryPrompt({
       : runtimeExecutable
         ? `\`cruise-runtime\` is not on PATH and a bare invocation will fail. On the first attempt, every root command must start with the exact \`node ${runtimeExecutable} <subcommand> ...\` invocation.`
       : '`cruise-runtime` is not on PATH and a bare invocation will fail. On the first attempt, every root command must spell the exact `node <verified-installed-plugin-root>/scripts/cruise-runtime.mjs <subcommand> ...` invocation.',
-    'The exact `semantic-mapping-packet.yaml` was generated atomically by `begin`. Pass that tagged packet unchanged to the first mapping worker; do not hand-write, replace, or repair it. Cruise preflights the executable packet and embedded 18-fact template before inference.',
-    'The semantic-mapping worker owns only the packet-declared `semantic-facts.yaml`. It copies the complete `enrichment_template` and may change only `facts[*].value` and `facts[*].basis`; it must not invoke `enrich-probe`, `route`, or mutate canonical run-control files. After the worker report and ownership audit, the root coordinator alone runs `enrich-probe` through the exact installed runtime path.',
+    'The exact `map-pkt.yaml` was generated atomically by `begin`. Pass that tagged packet unchanged to the first mapping worker; do not hand-write, replace, or repair it. Cruise preflights the executable packet and embedded 18-fact template before inference.',
+    'The semantic-mapping worker owns only the packet-declared `map-facts.yaml`. It copies the complete `enrichment_template` and may change only `facts[*].value` and `facts[*].basis`; it must not invoke `enrich-probe`, `route`, or mutate canonical run-control files. After the worker report and ownership audit, the root coordinator alone runs `enrich-probe` through the exact installed runtime path.',
     `When routing, never guess a shortened runtime command or inspect its implementation to infer arguments. The route invocation requires \`--skill ${skill} --run-dir ${initialRunDirectory ?? '<run-dir>'} --classifier ${join(initialRunDirectory ?? '<run-dir>', 'classifier.yaml')} --catalog-json ${join(initialRunDirectory ?? '<run-dir>', 'models.json')}\`; add \`--retry-classifier\` only when the persisted initial classifier requires the documented uncertainty retry.`,
     ...(!isCapturePhase && phase !== null
       ? ['Deep Doctor has already staged the immutable live app-server catalog at `models.json` and the deterministic canary classification at `classifier.yaml`. Treat both as harness-owned run inputs: read and use them, but do not create, replace, or edit them.']
@@ -1023,34 +1009,22 @@ export function createDoctorCanaryPrompt({
     goal: {
       'plan-draft': [
         '',
-        'Goal canary Plan-draft phase is a writable/default turn. Keep implementation inactive.',
-        'Create and validate the exact Goal planning suite through the real `cruise worker` host path, display the digest-bound Plan review, and request exactly **Approve Plan** with native structured input.',
+        'Goal canary combined-draft phase is a writable/default turn. Keep implementation inactive.',
+        'Resolve the one Goal-specific needs envelope using **Reject all** for this no-external-effects fixture. Create and validate PLAN.md and GOAL.md together through the real `cruise worker` host path, present their deterministic combined preview with full-file links and bound revisions, and request exactly **Approve both** with **Refine** and **Reject both** as the other options.',
         'For the planned new documentation file, make every sole-write evidence gate untracked-aware; `git diff` alone cannot prove the complete product change set.',
-        'Approve Plan locks planning bytes only. Do not ask **Start Cruise** in the same request, use MCP/free-text approval, activate Goal, or implement the target yet.',
+        'Approve both locks the complete suite and authorizes native Goal activation. Do not use MCP/free-text approval, edit a candidate byte after the review is offered, activate Goal yourself, or implement the target yet.',
       ],
       'plan-approval': [
         '',
-        'Goal canary Plan-approval phase is read-only. The preceding writable turn created the exact planning bytes.',
-        'Read and validate that suite, display the exact Plan review, and request only **Approve Plan** with the native structured input tool.',
-        'Do not edit files, ask **Start Cruise**, or substitute prose/MCP approval in this turn. Stop after the structured answer.',
-      ],
-      'goal-draft': [
-        '',
-        'Goal canary Goal-draft phase is a writable/default continuation after native **Approve Plan** on this same thread.',
-        'Revalidate and capture the Plan byte lock, compile and validate GOAL.md, display the separate digest-bound Goal card, and request exactly **Start Cruise** in a new native structured input request.',
-        'Keep implementation inactive after the selection, end this preparation turn without Goal activation, and do not substitute prose/MCP approval.',
-      ],
-      'goal-approval': [
-        '',
-        'Goal canary Start approval phase is read-only. The approved Plan and separately compiled GOAL.md already exist.',
-        'Read and validate their exact digests, display only the separate Goal card, and request exactly **Start Cruise** with native structured input.',
-        'Do not edit files, repeat **Approve Plan**, activate Goal, or substitute prose/MCP approval in this turn. Stop after the structured answer.',
+        'Goal canary combined-approval phase is read-only. The preceding writable turn created the exact complete suite.',
+        'Read and validate PLAN.md and GOAL.md, present their deterministic combined preview with full-file links and bound revisions, and request exactly **Approve both** with **Refine** and **Reject both** as the other options.',
+        'Do not edit files, request a second approval, or substitute prose/MCP approval in this turn. Stop after the structured answer.',
       ],
       execute: [
         '',
-        'Goal canary execution phase is a writable/default continuation after separate native **Approve Plan** and **Start Cruise** selections on this same thread.',
-        'Revalidate both approval snapshots, use the native Goal control plane exposed by this host exactly once, confirm the Goal is active, execute the approved current slice through bounded workers, and finish strict closeout evidence.',
-        'Do not reroute, repeat either approval, recursively invoke Goal, or invoke any Doctor command.',
+        'Goal canary execution phase is a writable/default continuation after one exact combined **Approve both** selection on this same thread.',
+        'Revalidate the complete-suite approval snapshot, use the native Goal control plane exposed by this host exactly once, confirm the Goal is active, execute the approved current slice through bounded workers, and finish strict closeout evidence.',
+        'Do not reroute, repeat approval, recursively invoke Goal, or invoke any Doctor command.',
       ],
     },
   };
@@ -1069,7 +1043,9 @@ function nativeRecordHasExactApproval({ method, answers } = {}, label) {
     return false;
   }
   return Object.values(answers).some((answer) => (
-    Array.isArray(answer?.answers) && answer.answers.includes(label)
+    Array.isArray(answer?.answers) &&
+    answer.answers.length === 1 &&
+    answer.answers[0] === label
   ));
 }
 
@@ -1108,16 +1084,9 @@ export function hasNativeRefineApproval(approvals) {
 }
 
 export function hasNativeGoalApprovals(approvals) {
-  const records = approvals ?? [];
-  const planRecord = records.findIndex((record) => (
+  return (approvals ?? []).some((record) => (
     ['plan-draft', 'plan-approval'].includes(record?.phase)
-    && nativeRecordHasExactApproval(record, 'Approve Plan')
-  ));
-  if (planRecord < 0) return false;
-  return records.some((record, index) => (
-    index > planRecord
-    && ['goal-draft', 'goal-approval'].includes(record?.phase)
-    && nativeRecordHasExactApproval(record, 'Start Cruise')
+    && nativeRecordHasExactApproval(record, 'Approve both')
   ));
 }
 
@@ -1193,23 +1162,13 @@ function doctorScenarioArtifactPaths(root, skill) {
       if (error?.code !== 'ENOENT') throw error;
     }
   } else if (skill === 'quick') {
-    add(join(root, 'DOCTOR-QUICK.txt'));
+    add(join(root, 'doctor-ok.txt'));
   } else if (skill === 'refine') {
-    add(join(root, 'docs', 'DOCTOR-REFINE.md'));
+    add(join(root, 'docs', 'refine-ok.md'));
   } else if (skill === 'goal') {
     add(join(root, 'docs', 'DOCTOR-GOAL.md'));
   } else if (skill === 'debug') {
-    add(join(root, 'tests', 'doctor-failure.test.mjs'));
-  } else if (skill === 'research') {
-    const runs = join(root, '.cruise', 'runs');
-    try {
-      for (const entry of readdirSync(runs, { withFileTypes: true })) {
-        if (entry.isSymbolicLink()) throw new Error(`Doctor run cannot be a symlink: ${entry.name}`);
-        if (entry.isDirectory()) add(join(runs, entry.name, 'RESEARCH.md'));
-      }
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
+    add(join(root, 'tests', 'fail.test.mjs'));
   }
   return paths.sort((left, right) => left.localeCompare(right, 'en'));
 }
@@ -1240,8 +1199,8 @@ export function captureDoctorWorkerCompletionEvidence({
     report_sha256: sha256Bytes(report),
     scenario_artifacts: snapshotDoctorScenarioArtifacts(root, skill),
   };
-  if (basename(resolve(root, invocation.packet)) === 'semantic-mapping-packet.yaml') {
-    const semanticFactsPath = join(dirname(resolve(root, invocation.packet)), 'semantic-facts.yaml');
+  if (basename(resolve(root, invocation.packet)) === 'map-pkt.yaml') {
+    const semanticFactsPath = join(dirname(resolve(root, invocation.packet)), 'map-facts.yaml');
     evidence.semantic_facts_sha256 = sha256Bytes(
       readDoctorCompletionArtifact(root, semanticFactsPath, 'semantic mapping facts'),
     );
@@ -1334,10 +1293,7 @@ function expectedDoctorReviewLabels(skill, phase) {
     return Object.freeze(['Approve Plan']);
   }
   if (skill === 'goal' && ['plan-draft', 'plan-approval'].includes(phase)) {
-    return Object.freeze(['Approve Plan']);
-  }
-  if (skill === 'goal' && ['goal-draft', 'goal-approval'].includes(phase)) {
-    return Object.freeze(['Start Cruise']);
+    return Object.freeze(['Approve both']);
   }
   return Object.freeze([]);
 }
@@ -1348,6 +1304,17 @@ function exactDoctorReviewAnswer({ questions, skill, phase }) {
   const [question] = questions;
   if (typeof question?.id !== 'string' || !question.id.trim()) return null;
   const options = Array.isArray(question.options) ? question.options : [];
+  if (skill === 'goal') {
+    const labels = options.map(({ label }) => String(label ?? ''));
+    if (
+      labels.length !== 3 ||
+      labels[0] !== 'Approve both' ||
+      labels[1] !== 'Refine' ||
+      labels[2] !== 'Reject both'
+    ) {
+      return null;
+    }
+  }
   const matches = options
     .map(({ label }) => String(label ?? '').trim())
     .filter((label) => expected.includes(label));
@@ -1357,11 +1324,31 @@ function exactDoctorReviewAnswer({ questions, skill, phase }) {
     ? /\bfoundation\b/iu
     : matches[0] === 'Approve Milestone'
       ? /\bmilestone\b/iu
-      : matches[0] === 'Approve Plan'
+      : matches[0] === 'Approve Plan' || matches[0] === 'Approve both'
         ? /\bplan\b/iu
         : /\bstart\s+cruise\b|\bgoal\b/iu;
   if (!prompt || !expectedSubject.test(prompt)) return null;
   return Object.freeze({ id: question.id, label: matches[0] });
+}
+
+function exactDoctorGoalNeedsAnswer({ questions, skill, phase }) {
+  if (skill !== 'goal' || phase !== 'plan-draft' || questions?.length !== 1) {
+    return null;
+  }
+  const [question] = questions;
+  const labels = (question?.options ?? []).map(({ label }) => String(label ?? ''));
+  if (
+    typeof question?.id !== 'string' ||
+    !question.id.trim() ||
+    labels.length !== 4 ||
+    labels[0] !== 'Approve all' ||
+    labels[1] !== 'Select some' ||
+    labels[2] !== 'Reject all' ||
+    labels[3] !== 'Discuss'
+  ) {
+    return null;
+  }
+  return Object.freeze({ id: question.id, label: 'Reject all' });
 }
 
 export function answerDoctorServerRequest(message, {
@@ -1388,6 +1375,10 @@ export function answerDoctorServerRequest(message, {
       }
       const requestContext = context();
       const review = exactDoctorReviewAnswer({
+        questions,
+        skill,
+        phase: requestContext.phase,
+      }) ?? exactDoctorGoalNeedsAnswer({
         questions,
         skill,
         phase: requestContext.phase,
@@ -1745,7 +1736,7 @@ async function assertDoctorPhaseContinuationReady({
   const [origin, state, guard] = await Promise.all([
     readYamlFile(originPath),
     readYamlFile(statePath),
-    readForeignDiffGuardState(join(runDirectory, 'foreign-diff-guard.yaml')),
+    readForeignDiffGuardState(join(runDirectory, 'drift.yaml')),
   ]);
   validateOriginRecord(origin);
   validateRunState(state);
@@ -1913,6 +1904,7 @@ export async function runSkillTurn({
     runtimePromise = Promise.resolve().then(() => runtimeFactory({
       codexHome,
       extensionProfile: 'doctor-discovery',
+      runtimeRoot: join(root, '.cruise', 'app-run'),
     }));
     runtime = await deadline.run('isolated runtime setup', () => runtimePromise);
     client = clientFactory({
@@ -1955,7 +1947,7 @@ export async function runSkillTurn({
     );
     runtimePromptDirectory = await deadline.run(
       'host runtime prompt staging',
-      () => mkdtemp(join(tmpdir(), 'cruise-doctor-runtime-prompt-')),
+      () => createDoctorTemp('cruise-prompt'),
       { signals },
     );
     runtimePromptDirectory = await realpath(runtimePromptDirectory);
@@ -2141,23 +2133,12 @@ export async function runSkillTurn({
       }
     } else if (skill === 'goal') {
       await startTurn({ phase: 'plan-draft', mode: 'default' });
-      if (!hasNativeExactApproval(approvals, 'Approve Plan')) {
-        await assertContinuationReady();
-        await startTurn({ phase: 'plan-approval', mode: 'plan' });
-      }
-      if (!hasNativeExactApproval(approvals, 'Approve Plan')) {
-        throw new Error('Goal canary produced no native exact structured Approve Plan selection');
-      }
       if (!hasNativeGoalApprovals(approvals)) {
         await assertContinuationReady();
-        await startTurn({ phase: 'goal-draft', mode: 'default' });
+        await startTurn({ phase: 'plan-approval', mode: 'default' });
       }
       if (!hasNativeGoalApprovals(approvals)) {
-        await assertContinuationReady();
-        await startTurn({ phase: 'goal-approval', mode: 'plan' });
-      }
-      if (!hasNativeGoalApprovals(approvals)) {
-        throw new Error('Goal canary did not produce separate native Approve Plan then Start Cruise selections');
+        throw new Error('Goal canary produced no exact structured combined Approve both selection');
       }
       if (!await stagedCanaryIsComplete(root, skill) || !hasNativeGoalControlUpdate(goalUpdates)) {
         await assertContinuationReady();
@@ -2247,7 +2228,7 @@ async function prepareCase(source, workspace, scenario) {
   await rm(join(root, '.git'), { recursive: true, force: true });
   if (scenario.prepare === 'failing-test') {
     await writeFile(
-      join(root, 'tests', 'doctor-failure.test.mjs'),
+      join(root, 'tests', 'fail.test.mjs'),
       "import assert from 'node:assert/strict';\nimport test from 'node:test';\ntest('intentional Doctor symptom', () => assert.equal(1, 2));\n",
       'utf8',
     );
@@ -2264,7 +2245,7 @@ async function prepareCase(source, workspace, scenario) {
 
 async function prepareDoctorEvidenceRoot(workspace) {
   const canonicalWorkspace = await realpath(workspace);
-  const requested = join(canonicalWorkspace, '.doctor-evidence');
+  const requested = join(canonicalWorkspace, '.doc-evidence');
   await mkdir(requested, { recursive: false, mode: 0o700 });
   const metadata = await lstat(requested);
   const evidenceRoot = await realpath(requested);
@@ -2418,10 +2399,10 @@ export async function inspectDoctorWorkflowProof(root, skill) {
   }
   const requiredRunFiles = [
     'origin.yaml',
-    'foreign-diff-guard.yaml',
+    'drift.yaml',
     'probe.yaml',
-    'semantic-mapping-packet.yaml',
-    'semantic-facts.yaml',
+    'map-pkt.yaml',
+    'map-facts.yaml',
     'route.yaml',
     'evidence.yaml',
   ];
@@ -2439,7 +2420,7 @@ export async function inspectDoctorWorkflowProof(root, skill) {
   if (await realpath(origin.repository_baseline.root) !== await realpath(root)) {
     throw new Error('Origin repository baseline root does not match the Doctor case root');
   }
-  const foreignDiffGuardPath = join(root, '.cruise', runDirectory, 'foreign-diff-guard.yaml');
+  const foreignDiffGuardPath = join(root, '.cruise', runDirectory, 'drift.yaml');
   const foreignDiffGuard = await readForeignDiffGuardState(foreignDiffGuardPath);
   const terminalGuardFinalized = foreignDiffGuard.status === 'stopped'
     && foreignDiffGuard.history.at(-1)?.action === 'guard_finalized'
@@ -2467,7 +2448,7 @@ export async function inspectDoctorWorkflowProof(root, skill) {
     repositoryBaseline: origin.repository_baseline,
   });
 
-  const semanticFactsPath = join(root, '.cruise', runDirectory, 'semantic-facts.yaml');
+  const semanticFactsPath = join(root, '.cruise', runDirectory, 'map-facts.yaml');
   const semanticFacts = await readYamlFile(semanticFactsPath);
   const expectedFacts = {
     schema_version: 1,
@@ -2477,10 +2458,10 @@ export async function inspectDoctorWorkflowProof(root, skill) {
     facts: probe.semantic_facts,
   };
   if (canonicalJson(semanticFacts) !== canonicalJson(expectedFacts)) {
-    throw new Error('semantic-facts.yaml does not match the accepted canonical probe enrichment');
+    throw new Error('map-facts.yaml does not match the accepted canonical probe enrichment');
   }
 
-  const mappingPacketRelativePath = join(runDirectory, 'semantic-mapping-packet.yaml');
+  const mappingPacketRelativePath = join(runDirectory, 'map-pkt.yaml');
   const mappingPacketPath = join(root, '.cruise', mappingPacketRelativePath);
   const mappingPacket = await readYamlFile(mappingPacketPath);
   assertSemanticMappingPacket(mappingPacket, {
@@ -2554,7 +2535,7 @@ export async function inspectDoctorWorkflowProof(root, skill) {
   const packetDigests = {};
   for (const path of cruiseFiles.filter((candidate) => (
     candidate.startsWith(`${runDirectory}/`)
-    && /(?:^|\/)[^/]*packet[^/]*\.(?:md|ya?ml)$/iu.test(candidate)
+    && /(?:^|\/)[^/]*(?:pkt|packet)[^/]*\.(?:md|ya?ml)$/iu.test(candidate)
   ))) {
     const absolute = resolve(root, '.cruise', path);
     packetDigests[absolute] = createHash('sha256')
@@ -2676,7 +2657,7 @@ export async function inspectDoctorScenarioOutcome(root, skill) {
   } else if (skill === 'quick') {
     const content = readDoctorCompletionArtifact(
       root,
-      join(root, 'DOCTOR-QUICK.txt'),
+      join(root, 'doctor-ok.txt'),
       'Quick scenario artifact',
     ).toString('utf8');
     if (content !== 'Cruise Doctor quick probe passed.\n') {
@@ -2685,7 +2666,7 @@ export async function inspectDoctorScenarioOutcome(root, skill) {
   } else if (skill === 'refine') {
     const content = readDoctorCompletionArtifact(
       root,
-      join(root, 'docs', 'DOCTOR-REFINE.md'),
+      join(root, 'docs', 'refine-ok.md'),
       'Refine scenario artifact',
     ).toString('utf8');
     for (const term of ['inspect_spatial_inputs.py', 'structural', 'semantic']) {
@@ -2707,30 +2688,11 @@ export async function inspectDoctorScenarioOutcome(root, skill) {
   } else if (skill === 'debug') {
     const repaired = readDoctorCompletionArtifact(
       root,
-      join(root, 'tests', 'doctor-failure.test.mjs'),
+      join(root, 'tests', 'fail.test.mjs'),
       'Debug scenario artifact',
     ).toString('utf8');
     if (repaired !== DOCTOR_DEBUG_REPAIRED_TEST) {
       throw new Error('Debug did not leave the exact allowlisted one-byte fixture repair');
-    }
-  } else if (skill === 'research') {
-    const cruiseFiles = await walkFiles(join(root, '.cruise'));
-    const reports = cruiseFiles.filter((path) => /^runs\/[^/]+\/RESEARCH\.md$/u.test(path));
-    if (reports.length === 0) {
-      throw new Error('Research has no canonical run Markdown artifact');
-    }
-    if (reports.length > 1) {
-      throw new Error(`Research must produce exactly one canonical run Markdown artifact; found ${reports.length}`);
-    }
-    const content = reports.map((path) => readDoctorCompletionArtifact(
-      root,
-      join(root, '.cruise', path),
-      'Research scenario artifact',
-    ).toString('utf8')).join('\n');
-    for (const term of ['spatiomics-skill', 'inspect_spatial_inputs.py', 'GEF', 'GEFF']) {
-      if (!content.includes(term)) {
-        throw new Error(`Research artifact does not apply the repository skill (${term})`);
-      }
     }
   }
   return Object.freeze({
@@ -2953,7 +2915,7 @@ export function evaluateDoctorSkillResult({
       return Object.freeze({
         id: `skill-e2e-${skill}`,
         status: 'fail',
-        detail: 'goal did not produce separate native Approve Plan then Start Cruise selections',
+        detail: 'goal did not produce one combined Plan-and-Goal Approve both selection',
       });
     }
     if (!hasNativeGoalControlUpdate(result.goalUpdates)) {
@@ -2987,11 +2949,11 @@ export async function runTroubleshootDoctor({
     resolve(installedPluginRoot),
     'Installed Cruise plugin',
   );
-  const workspace = await mkdtemp(join(tmpdir(), 'cruise-doctor-deep-'));
+  const workspace = await createDoctorTemp('cruise-doctor');
   const evidenceRoot = await prepareDoctorEvidenceRoot(workspace);
   const installedPluginSnapshot = await copyInstalledPluginSurface(
     verifiedInstalledPluginRoot,
-    join(workspace, '.installed-plugin-snapshot', 'cruise'),
+    join(workspace, '.plugin-snap', 'cruise'),
   );
   await verifiedInstalledRuntimePath(installedPluginSnapshot);
   const installedPluginSnapshotDigest = await digestPluginRuntime(installedPluginSnapshot);
@@ -3113,7 +3075,7 @@ export async function runTroubleshootDoctor({
       id: 'installed-skill-inference-canary',
       status: canaryPassed ? 'pass' : 'fail',
       detail: canaryPassed
-        ? 'all six installed public skills completed real worker inference through the standing host path'
+        ? 'all five installed public skills completed real worker inference through the standing host path'
         : 'at least one installed public skill failed its real worker inference or host-path proof',
     }),
   ];
@@ -3213,6 +3175,20 @@ export function parseDeepDoctorSmokeResponse(value) {
     throw new Error('Deep Doctor smoke response must be one JSON object');
   }
   return parsed;
+}
+
+export function deepSmokeResponseMatches(actual, expected) {
+  if (!actual || typeof actual !== 'object' || Array.isArray(actual)) return false;
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
+  const normalized = { ...actual };
+  if (
+    expected.skill === 'cruise:build'
+    && expected.auto_approval_directive === '--auto-approve'
+    && actual.auto_approval_directive === '$cruise:build --auto-approve'
+  ) {
+    normalized.auto_approval_directive = '--auto-approve';
+  }
+  return canonicalJson(normalized) === canonicalJson(expected);
 }
 
 export function runInstalledSkillSmokeTests({
@@ -3357,7 +3333,11 @@ export async function runDeepSmokeConversation({
   try {
     runtime = await setupDeadline.run(
       'isolated runtime setup',
-      () => runtimeFactory({ codexHome, extensionProfile: 'doctor-discovery' }),
+      () => runtimeFactory({
+        codexHome,
+        extensionProfile: 'doctor-discovery',
+        runtimeRoot: join(repositoryRoot, '.cruise', 'app-run'),
+      }),
     );
     client = clientFactory({
       args: ['app-server', '--stdio', ...(runtime.appServerArgs ?? [])],
@@ -3458,7 +3438,7 @@ export async function runDeepSmokeConversation({
         const output = activeOutput.join('').trim();
         const skillInteractions = interactions.slice(interactionStart);
         const parsed = parseDeepDoctorSmokeResponse(output);
-        const semanticMatch = canonicalJson(parsed) === canonicalJson(scenario.expected);
+        const semanticMatch = deepSmokeResponseMatches(parsed, scenario.expected);
         const testTimeout = Math.max(1, Math.floor(deadline.remaining()));
         const testResult = runSmokeTests({
           installedPluginRoot: pinnedPluginRoot,
@@ -3534,11 +3514,11 @@ export async function runDeepDoctor({
     resolve(installedPluginRoot),
     'Installed Cruise plugin',
   );
-  const workspace = await mkdtemp(join(tmpdir(), 'cruise-doctor-deep-'));
+  const workspace = await createDoctorTemp('cruise-doctor');
   const evidenceRoot = await prepareDoctorEvidenceRoot(workspace);
   const installedPluginSnapshot = await copyInstalledPluginSurface(
     verifiedInstalledPluginRoot,
-    join(workspace, '.installed-plugin-snapshot', 'cruise'),
+    join(workspace, '.plugin-snap', 'cruise'),
   );
   const installedPluginSnapshotDigest = await digestPluginRuntime(installedPluginSnapshot);
   let conversation;
@@ -3593,7 +3573,7 @@ export async function runDeepDoctor({
     id: 'installed-skill-smoke-canary',
     status: canaryPassed ? 'pass' : 'fail',
     detail: canaryPassed
-      ? `all six installed public skills passed in one warm Luna Medium conversation with ${DEEP_DOCTOR_SKILL_TIMEOUT_MS}ms per skill`
+      ? `all five installed public skills passed in one warm Luna Medium conversation with ${DEEP_DOCTOR_SKILL_TIMEOUT_MS}ms per skill`
       : 'at least one installed public skill failed the shared-conversation semantic or deterministic smoke probe',
   }));
   return Object.freeze({

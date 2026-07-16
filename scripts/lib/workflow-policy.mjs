@@ -26,8 +26,8 @@ import {
 } from './milestone-controller.mjs';
 
 /**
- * The only actors accepted by this public-workflow policy. The private
- * provisioner has its own internal adapter and is deliberately absent here.
+ * The only public actors accepted by this workflow policy. Private helpers
+ * retain narrowly scoped policy support but never gain a command or route.
  */
 export const PUBLIC_SKILLS = Object.freeze([
   'build',
@@ -35,8 +35,9 @@ export const PUBLIC_SKILLS = Object.freeze([
   'refine',
   'goal',
   'debug',
-  'research',
 ]);
+
+const INTERNAL_HELPERS = Object.freeze(['research']);
 
 export const WRITE_CLASSES = Object.freeze([
   'product',
@@ -103,7 +104,7 @@ export const REASON_CODES = Object.freeze({
   DENY_WRITE_CLASS_PATH_MISMATCH: 'WP_DENY_WRITE_CLASS_PATH_MISMATCH',
 });
 
-const SKILL_SET = new Set(PUBLIC_SKILLS);
+const SKILL_SET = new Set([...PUBLIC_SKILLS, ...INTERNAL_HELPERS]);
 const WRITE_CLASS_SET = new Set(WRITE_CLASSES);
 const PRODUCT_WRITE_CLASSES = new Set([
   'product',
@@ -145,7 +146,7 @@ const EVIDENCE_ID = /^E-\d{2,}$/u;
 const HYPOTHESIS_ID = /^H-\d{2,}$/u;
 const CAPABILITY_ID = /^CAP-[A-Z0-9][A-Z0-9-]*$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const RUN_ID = /^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
 const GOAL_PREFIX = '.cruise/goal/';
 const CLOSEOUT_PATH = '.cruise/goal/CLOSEOUT.md';
@@ -161,8 +162,8 @@ const CONTROLLER_PHASE_MACHINE_FILES = new Set([
 const CONTROLLER_PHASE_REPORT_FILES = new Set(['PLAN.md', 'CLOSEOUT.md']);
 const CONTROLLER_MUTABLE_MILESTONE_FILES = new Set([
   'STATE.yaml',
-  'QUEUE-STATE.yaml',
-  'MILESTONE-EVIDENCE.yaml',
+  'queue-run.yaml',
+  'mile-evid.yaml',
 ]);
 const REQUIRED_PROJECT_CONTRACT_FILES = Object.freeze([
   'ORIGIN.yaml',
@@ -171,7 +172,7 @@ const REQUIRED_PROJECT_CONTRACT_FILES = Object.freeze([
   'ARCHITECTURE.md',
   'ROADMAP.md',
   'DECISIONS.md',
-  'ID-REGISTRY.yaml',
+  'ids.yaml',
   'QUEUE.yaml',
 ]);
 const REQUIRED_MILESTONE_CONTRACT_FILES = Object.freeze([
@@ -191,7 +192,7 @@ const GOAL_ARTIFACTS = new Set([
   '.cruise/goal/ALIGNMENT.md',
   '.cruise/goal/ROADMAP.md',
   '.cruise/goal/PLAN.md',
-  '.cruise/goal/MILESTONE-CONTROLLER.yaml',
+  '.cruise/goal/ctrl.yaml',
   '.cruise/goal/GOAL.md',
   CLOSEOUT_PATH,
 ]);
@@ -202,7 +203,7 @@ const PLAN_LOCKED_ARTIFACTS = new Set([
   '.cruise/goal/ALIGNMENT.md',
   '.cruise/goal/ROADMAP.md',
   '.cruise/goal/PLAN.md',
-  '.cruise/goal/MILESTONE-CONTROLLER.yaml',
+  '.cruise/goal/ctrl.yaml',
 ]);
 const READ_ONLY_FORBIDDEN_EFFECTS = new Set([
   'deploy',
@@ -252,14 +253,12 @@ const PHASE_TRANSITIONS = Object.freeze({
     '<start>': ['capture_origin'],
     capture_origin: ['probe'],
     probe: ['classify'],
-    classify: ['clarify', 'plan'],
-    clarify: ['clarify', 'plan'],
-    plan: ['plan_approval'],
-    plan_approval: ['goal_contract', 'reconcile'],
-    goal_contract: ['start_approval', 'fallback_approval', 'reconcile'],
-    start_approval: ['activation', 'reconcile'],
+    classify: ['needs'],
+    needs: ['needs', 'plan_goal'],
+    plan_goal: ['combined_approval'],
+    combined_approval: ['activation', 'fallback_approval', 'plan_goal'],
     fallback_approval: ['fallback_activation', 'reconcile'],
-    reconcile: ['plan', 'goal_contract'],
+    reconcile: ['needs', 'plan_goal'],
     activation: ['execute'],
     fallback_activation: ['execute'],
     execute: ['verify'],
@@ -555,6 +554,19 @@ function checkStartApproval(record) {
   });
 }
 
+function checkPlanGoalApproval(record) {
+  return validateApprovalSnapshot(record, {
+    label: 'Approve both',
+    digestPairs: [
+      ['planDigest', 'currentPlanDigest'],
+      ['goalDigest', 'currentGoalDigest'],
+      ['repositoryBaselineDigest', 'currentRepositoryBaselineDigest'],
+    ],
+    code: REASON_CODES.DENY_GOAL_START_UNAPPROVED,
+    subject: 'Combined Plan and Goal approval',
+  });
+}
+
 function checkFallbackApproval(record) {
   const snapshot = validateApprovalSnapshot(record, {
     label: 'Execute in Current Thread',
@@ -844,7 +856,7 @@ function checkMilestoneControllerContext(input, { requirePhasePlan = false } = {
       (!artifact.path.startsWith('.cruise/project/') &&
         !artifact.path.startsWith(`${milestonePath}/`)) ||
       artifact.path.endsWith('/STATE.yaml') ||
-      artifact.path.endsWith('/QUEUE-STATE.yaml') ||
+      artifact.path.endsWith('/queue-run.yaml') ||
       artifact.path.includes('/discovery/') ||
       artifact.path.startsWith(`${milestonePath}/phases/`)
     ) {
@@ -1334,7 +1346,7 @@ function writeClassFrom(input) {
 export function decidePhase(request = {}) {
   const { skill, from = null, to, phase, ...context } = request;
   if (!validSkill(skill)) {
-    return deny(REASON_CODES.DENY_UNKNOWN_SKILL, 'Only the six public Cruise skills are accepted.');
+    return deny(REASON_CODES.DENY_UNKNOWN_SKILL, 'Only the five public Cruise skills and bounded private helpers are accepted.');
   }
   const target = to ?? phase;
   const phases = PHASE_TRANSITIONS[skill];
@@ -1367,8 +1379,9 @@ export function decidePhase(request = {}) {
   let gate = null;
   if (skill === 'quick' && ['execute', 'repair'].includes(target)) gate = checkQuickContext(input);
   if (skill === 'refine' && target === 'execute') gate = checkRefineContext(input);
-  if (skill === 'goal' && target === 'goal_contract') gate = checkPlanApproval(context.planApproval, { goal: true });
-  if (skill === 'goal' && target === 'activation') gate = checkStartApproval(context.startApproval);
+  if (skill === 'goal' && target === 'activation') {
+    gate = checkPlanGoalApproval(context.planGoalApproval ?? context.combinedApproval);
+  }
   if (skill === 'goal' && target === 'fallback_activation') gate = checkFallbackApproval(context.fallbackApproval);
   if (skill === 'goal' && target === 'execute') gate = checkGoalContext(input);
   if (skill === 'goal' && ['verify', 'closeout'].includes(target)) gate = checkGoalExecutionAuthorization(input);
@@ -1390,7 +1403,7 @@ export function decidePhase(request = {}) {
  */
 export function decidePath({ skill, path, ...input } = {}) {
   if (!validSkill(skill)) {
-    return deny(REASON_CODES.DENY_UNKNOWN_SKILL, 'Only the six public Cruise skills are accepted.');
+    return deny(REASON_CODES.DENY_UNKNOWN_SKILL, 'Only the five public Cruise skills and bounded private helpers are accepted.');
   }
   const writeClass = writeClassFrom(input);
   if (!WRITE_CLASS_SET.has(writeClass)) {
@@ -1528,22 +1541,19 @@ export function decidePath({ skill, path, ...input } = {}) {
     if (!GOAL_ARTIFACTS.has(targetPath)) {
       return deny(REASON_CODES.DENY_GOAL_ARTIFACT, 'Goal writes are limited to the exact named contract artifacts.');
     }
-    const startWasSelected =
-      input.startSelected === true ||
-      input.startApproved === true ||
-      input.startApproval?.selectedLabel === 'Start Cruise';
-    if (startWasSelected && !goalExecution.allowed) {
-      return deny(REASON_CODES.DENY_GOAL_POST_START_WRITE, 'No Goal artifact may change after Start Cruise is selected and before activation.');
+    const combinedWasSelected =
+      input.planGoalApproved === true ||
+      input.combinedApproved === true ||
+      input.planGoalApproval?.selectedLabel === 'Approve both' ||
+      input.combinedApproval?.selectedLabel === 'Approve both';
+    if (combinedWasSelected && !goalExecution.allowed) {
+      return deny(REASON_CODES.DENY_GOAL_POST_START_WRITE, 'No Goal contract artifact may change after combined approval and before activation.');
     }
     if (goalExecution.allowed && targetPath !== CLOSEOUT_PATH) {
       return deny(REASON_CODES.DENY_GOAL_POST_START_WRITE, 'Approved Goal contract artifacts are immutable after activation; only CLOSEOUT may be written.');
     }
-    const planWasApproved =
-      input.planLocked === true ||
-      input.planApproved === true ||
-      input.planApproval?.selectedLabel === 'Approve Plan';
-    if (planWasApproved && PLAN_LOCKED_ARTIFACTS.has(targetPath)) {
-      return deny(REASON_CODES.DENY_GOAL_ARTIFACT, 'Plan-approved Goal artifact bytes are locked until explicit reconciliation invalidates approval.');
+    if (combinedWasSelected && targetPath !== CLOSEOUT_PATH) {
+      return deny(REASON_CODES.DENY_GOAL_ARTIFACT, 'Combined-approved Plan and Goal artifact bytes are locked until explicit reconciliation invalidates approval.');
     }
   }
 
@@ -1622,7 +1632,7 @@ export function decidePath({ skill, path, ...input } = {}) {
  */
 export function decideEffect({ skill, effect, permission, ...context } = {}) {
   if (!validSkill(skill)) {
-    return deny(REASON_CODES.DENY_UNKNOWN_SKILL, 'Only the six public Cruise skills are accepted.');
+    return deny(REASON_CODES.DENY_UNKNOWN_SKILL, 'Only the five public Cruise skills and bounded private helpers are accepted.');
   }
   if (!effect || typeof effect !== 'object' || Array.isArray(effect)) {
     return deny(REASON_CODES.DENY_INVALID_REQUEST, 'An effect record is required.');

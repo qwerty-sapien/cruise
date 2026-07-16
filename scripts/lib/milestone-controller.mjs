@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -16,7 +16,7 @@ import {
 export { milestoneContractDigest } from './milestone-contract-digest.mjs';
 
 export const MILESTONE_CONTROLLER_ARTIFACT =
-  '.cruise/goal/MILESTONE-CONTROLLER.yaml';
+  '.cruise/goal/ctrl.yaml';
 export const SINGLE_SLICE_MODE = 'single-slice';
 export const MILESTONE_CONTROLLER_MODE = 'milestone-controller';
 export const CONTROLLER_ARTIFACT = MILESTONE_CONTROLLER_ARTIFACT;
@@ -51,8 +51,8 @@ const SAFE_RELATIVE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\/\/)[A-Za-z0-
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 const EVIDENCE_ID = /^E-[0-9]{2,}$/u;
 const QUESTION_ID = /^Q-[0-9]{2,}$/u;
-const CONTROLLER_HISTORY_ENTRY = /^REV-([0-9]{12})\.yaml$/u;
-const CONTROLLER_HISTORY_DIRECTORY = 'CONTROLLER-STATE-HISTORY';
+const CONTROLLER_HISTORY_ENTRY = /^step-([0-9]{1,5})\.yaml$/u;
+const CONTROLLER_HISTORY_DIRECTORY = 'ctrl-hist';
 const QUESTION_MATERIALITIES = new Set([
   'phase_blocking',
   'product_or_architecture_fork',
@@ -69,7 +69,7 @@ const REQUIRED_PROJECT_FILES = Object.freeze([
   'ARCHITECTURE.md',
   'ROADMAP.md',
   'DECISIONS.md',
-  'ID-REGISTRY.yaml',
+  'ids.yaml',
   'QUEUE.yaml',
 ]);
 
@@ -255,8 +255,8 @@ export function createMilestoneControllerInteractionBroker({
       if (goal.status !== 'active' || goal.objective !== objective) {
         throw new Error('Native Goal activation must be confirmed active for the approved objective.');
       }
-      if (approvedSnapshot?.stage !== 'goal') {
-        throw new Error('Native Goal activation requires the separately approved Goal snapshot.');
+      if (!['goal', 'plan-goal'].includes(approvedSnapshot?.stage)) {
+        throw new Error('Native Goal activation requires the approved complete Goal snapshot.');
       }
       if (!Array.isArray(activationResult.artifacts) || activationResult.artifacts.length === 0) {
         throw new Error('Native Goal activation must identify the verified approved artifacts.');
@@ -324,7 +324,7 @@ function normalizeVerifiedControllerSnapshot(verification) {
     'controller_snapshot.milestone_path',
   );
   const pathMatch = milestonePath.match(MILESTONE_PATH);
-  if (!pathMatch || pathMatch[1] !== milestoneId) {
+  if (!pathMatch || pathMatch[1] !== milestoneId || milestonePath.split('/').at(-1).length > 15) {
     throw new Error('Verified Build controller_snapshot milestone path and ID do not match.');
   }
   const contractDigest = runtimeDigest(
@@ -539,7 +539,7 @@ export async function establishMilestoneControllerGoalActivation({
   }
   const approvedSnapshot = receipt.approvedSnapshot;
   if (
-    approvedSnapshot?.stage !== 'goal' ||
+    !['goal', 'plan-goal'].includes(approvedSnapshot?.stage) ||
     approvedSnapshot.controllerAuthority !== authority ||
     !approvedSnapshot.baseline ||
     !SHA256.test(String(approvedSnapshot.baseline.sha256 ?? ''))
@@ -744,7 +744,7 @@ function validateLockedPath(path, milestonePath) {
   }
   if (
     path.endsWith('/STATE.yaml') ||
-    path.endsWith('/QUEUE-STATE.yaml') ||
+    path.endsWith('/queue-run.yaml') ||
     path.includes('/discovery/') ||
     path.startsWith(`${milestonePrefix}phases/`)
   ) {
@@ -799,7 +799,7 @@ function parseController(source) {
   }
   const milestonePath = assertSafeRelativePath(milestone.path, 'milestone.path');
   const pathMatch = milestonePath.match(MILESTONE_PATH);
-  if (!pathMatch || pathMatch[1] !== milestoneId) {
+  if (!pathMatch || pathMatch[1] !== milestoneId || milestonePath.split('/').at(-1).length > 15) {
     throw new Error('milestone.path must name the selected .cruise/milestones/M-XX-slug directory.');
   }
   const contractDigest = requireString(
@@ -985,7 +985,7 @@ function assertNoMilestoneBlockers(artifacts, milestonePath) {
 function lockedQuestionIdentity(artifacts, milestonePath) {
   const milestoneQuestions = assertNoMilestoneBlockers(artifacts, milestonePath);
   const registryArtifact = artifacts.find(
-    ({ path }) => path === '.cruise/project/ID-REGISTRY.yaml',
+    ({ path }) => path === '.cruise/project/ids.yaml',
   );
   let registry;
   try {
@@ -2510,7 +2510,7 @@ export async function attestMilestoneCompletionFence({
     throw new Error('Completion fence cannot run before every mandatory phase closes.');
   }
   const root = await realpath(resolve(cwd));
-  const evidencePath = `${state.milestone_path}/MILESTONE-EVIDENCE.yaml`;
+  const evidencePath = `${state.milestone_path}/mile-evid.yaml`;
   const evidenceArtifact = await readRegularArtifact(root, evidencePath);
   let persistedEvidence;
   try {
@@ -3198,9 +3198,12 @@ async function appendControllerHistoryEntry(repositoryRoot, milestonePath, entry
   } finally {
     await milestoneDirectoryHandle.close();
   }
-  const name = `REV-${String(entry.sequence).padStart(12, '0')}.yaml`;
+  if (entry.sequence > 99_999) {
+    throw new Error('Controller sequence exceeds the informative filename range.');
+  }
+  const name = `step-${entry.sequence}.yaml`;
   const finalPath = join(absoluteDirectory, name);
-  const temporaryRelativePath = `${milestonePath}/.controller-history-${randomUUID()}.yaml`;
+  const temporaryRelativePath = `${milestonePath}/.ctrl-stage`;
   const temporaryPath = join(repositoryRoot, temporaryRelativePath);
   try {
     await writeYamlFile(temporaryPath, entry, { mode: 0o400 });
@@ -3451,7 +3454,7 @@ export async function loadMilestoneControllerState({
     }
   }
   if (state.status === 'complete') {
-    const evidencePath = `${state.milestone_path}/MILESTONE-EVIDENCE.yaml`;
+    const evidencePath = `${state.milestone_path}/mile-evid.yaml`;
     const evidenceArtifact = await readRegularArtifact(root, evidencePath);
     let record;
     try {

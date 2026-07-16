@@ -78,7 +78,7 @@ export const DISCOVERY_STATUSES = Object.freeze([
 ]);
 
 const SHA256 = /^[a-f0-9]{64}$/u;
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const RUN_ID = /^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const PROJECT_ID = /^PRJ-\d{2,}$/u;
 const MILESTONE_ID = /^M-\d{2,}$/u;
 const CONCEPT_ID = /^C-\d{2,}$/u;
@@ -1122,7 +1122,7 @@ function validateDraftManifest(manifest, snapshot) {
   }
   const projectNames = [
     'ORIGIN.yaml',
-    'ID-REGISTRY.yaml',
+    'ids.yaml',
     'PROJECT.md',
     'REQUIREMENTS.md',
     'ARCHITECTURE.md',
@@ -1151,6 +1151,9 @@ function validateDraftManifest(manifest, snapshot) {
     throw new Error('draft manifest must contain exactly one complete canonical milestone artifact set');
   }
   const milestoneRoot = [...milestoneRoots][0];
+  if (milestoneRoot.split('/').at(-1).length > 15) {
+    throw new Error('milestone draft directory must be informative and at most 15 characters');
+  }
   if (
     snapshot.mode_candidate === 'milestone' &&
     !milestoneRoot.startsWith(`.cruise/milestones/${snapshot.milestone_id}-`)
@@ -2534,7 +2537,7 @@ async function validateAutomaticDraftLineage({
     }
   }
 
-  const registryPath = '.cruise/project/ID-REGISTRY.yaml';
+  const registryPath = '.cruise/project/ids.yaml';
   const registry = parseYaml(bodies.get(registryPath).toString('utf8'));
   validateBuildIdRegistry(registry);
   const lockedPaths = new Set(semanticValidation.artifacts.map(({ path }) => path));
@@ -2553,13 +2556,13 @@ async function validateAutomaticDraftLineage({
         canonicalJson(record.source_paths) !== canonicalJson(occurrence.source_paths))
     ) {
       throw new Error(
-        `ID-REGISTRY.yaml does not preserve exact active source lineage for ${occurrence.id}`,
+        `ids.yaml does not preserve exact active source lineage for ${occurrence.id}`,
       );
     }
   }
   for (const conceptId of discoveryConceptIds) {
     if (!registryById.has(conceptId)) {
-      throw new Error(`ID-REGISTRY.yaml dropped discovery concept ${conceptId}`);
+      throw new Error(`ids.yaml dropped discovery concept ${conceptId}`);
     }
   }
   return deepFreeze({
@@ -2613,6 +2616,9 @@ export async function recordAutomaticBuildDrafts(run, {
     throw new Error('draft manifest must resolve one milestone root for semantic validation');
   }
   const milestoneRoot = [...milestoneRoots][0];
+  if (milestoneRoot.split('/').at(-1).length > 15) {
+    throw new Error('milestone draft directory must be informative and at most 15 characters');
+  }
   const semanticValidation = await validateBuildDraftSemantics({
     root: repositoryRoot,
     mode: state.snapshot.mode_candidate,
@@ -2741,12 +2747,12 @@ const DISCOVERY_ARTIFACT_NAMES = Object.freeze([
   'DECISIONS.md',
   'DISCOVERY.md',
 ]);
-const DISCOVERY_HEAD_NAME = 'BUILD-DISCOVERY.yaml';
-const DISCOVERY_HISTORY_NAME = 'BUILD-DISCOVERY-HISTORY';
-const DISCOVERY_PENDING_NAME = 'BUILD-DISCOVERY-PENDING.yaml';
-const DISCOVERY_LINEAGE_NAME = 'BUILD-DISCOVERY-LINEAGE.yaml';
-const DISCOVERY_LOCK_NAME = 'BUILD-DISCOVERY.lock';
-const DISCOVERY_GENERATION = /^REV-(\d{12})-([a-f0-9]{64})$/u;
+const DISCOVERY_HEAD_NAME = 'discover.yaml';
+const DISCOVERY_HISTORY_NAME = 'disc-hist';
+const DISCOVERY_PENDING_NAME = 'disc-pend.yaml';
+const DISCOVERY_LINEAGE_NAME = 'disc-line.yaml';
+const DISCOVERY_LOCK_NAME = 'disc.lock';
+const DISCOVERY_GENERATION = /^rev-(\d{1,11})$/u;
 
 async function syncDirectory(path) {
   const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0));
@@ -2848,9 +2854,9 @@ function checkpointLocations(repositoryRoot, runId) {
     history_directory: join(stateDirectory, DISCOVERY_HISTORY_NAME),
     head_path: join(stateDirectory, DISCOVERY_HEAD_NAME),
     pending_path: join(stateDirectory, DISCOVERY_PENDING_NAME),
-    pending_temp_path: join(stateDirectory, '.BUILD-DISCOVERY-PENDING.tmp'),
+    pending_temp_path: join(stateDirectory, '.pend-stage'),
     lineage_path: join(stateDirectory, DISCOVERY_LINEAGE_NAME),
-    lineage_temp_path: join(stateDirectory, '.BUILD-DISCOVERY-LINEAGE.tmp'),
+    lineage_temp_path: join(stateDirectory, '.line-stage'),
     lock_path: join(stateDirectory, DISCOVERY_LOCK_NAME),
   };
 }
@@ -2931,10 +2937,7 @@ async function acquireDiscoveryWriterLock(locations, runId) {
       acquired_at: new Date().toISOString(),
     };
     const bytes = Buffer.from(stringifyYaml(metadata), 'utf8');
-    const temporaryPath = join(
-      locations.state_directory,
-      `.BUILD-DISCOVERY.lock.${process.pid}.${nonce}.tmp`,
-    );
+    const temporaryPath = join(locations.state_directory, '.lock-stage');
     await writeNewFile(temporaryPath, bytes, 0o400);
     try {
       await assertDirectoryIdentity(
@@ -3015,7 +3018,7 @@ function discoveryArtifactDigests(contents) {
 }
 
 function generationName(revision, stateSha256) {
-  return `REV-${String(revision).padStart(12, '0')}-${stateSha256}`;
+  return `rev-${revision}`;
 }
 
 function persistedEnvelope({
@@ -3113,8 +3116,7 @@ function parsePersistedEnvelope(bytes, runId = null) {
   const match = DISCOVERY_GENERATION.exec(envelope.persistence.generation);
   if (
     match == null ||
-    Number(match[1]) !== revision ||
-    match[2] !== stateSha256
+    Number(match[1]) !== revision
   ) {
     throw new Error('persisted Build discovery generation does not bind its revision/state');
   }
@@ -3283,7 +3285,7 @@ async function readVersionTwoCheckpoint(
   }
   const head = await readGeneration(locations, parsed.envelope.persistence.generation);
   if (!head.envelope_bytes.equals(headBytes)) {
-    throw new Error('BUILD-DISCOVERY.yaml differs from its immutable generation head');
+    throw new Error('discover.yaml differs from its immutable generation head');
   }
   let child = head;
   while (child.envelope.persistence.revision > 0) {
@@ -3548,7 +3550,7 @@ async function readCommittedCheckpoint(
   const headBytes = await readRegularFileIfExists(locations.head_path);
   if (headBytes == null) {
     if (allowMissing) return null;
-    const error = new Error('BUILD-DISCOVERY.yaml does not exist');
+    const error = new Error('discover.yaml does not exist');
     error.code = 'ENOENT';
     throw error;
   }
@@ -3597,7 +3599,7 @@ async function publishGeneration(
     if (error?.code !== 'ENOENT') throw error;
   }
 
-  const temporaryDirectory = resolve(locations.history_directory, `.${name}.tmp`);
+  const temporaryDirectory = resolve(locations.history_directory, '.rev-stage');
   await rm(temporaryDirectory, { recursive: true, force: true });
   await mkdir(temporaryDirectory, { mode: 0o700 });
   try {
@@ -3702,18 +3704,18 @@ function parsePendingIntent(bytes, runId) {
   };
 }
 
-function canonicalTemporaryPath(artifactDirectory, generation, name) {
-  return join(artifactDirectory, `.BUILD-DISCOVERY.${generation}.${name}.tmp`);
+function canonicalTemporaryPath(artifactDirectory) {
+  return join(artifactDirectory, '.disc-stage');
 }
 
 async function removePendingTransactionTemps(locations, directory, generation) {
   const artifactDirectory = resolve(locations.repository_root, directory);
   for (const name of DISCOVERY_ARTIFACT_NAMES) {
-    await rm(canonicalTemporaryPath(artifactDirectory, generation, name), { force: true });
+    await rm(canonicalTemporaryPath(artifactDirectory), { force: true });
   }
   await rm(join(
     locations.state_directory,
-    `.BUILD-DISCOVERY.${generation}.head.tmp`,
+    '.head-stage',
   ), { force: true });
   await rm(locations.pending_temp_path, { force: true });
   await rm(locations.lineage_temp_path, { force: true });
@@ -3757,11 +3759,7 @@ async function materializeCanonicalArtifacts(
     await atomicReplace({
       path: join(artifactDirectory, name),
       bytes: checkpoint.contents[name],
-      temporaryPath: canonicalTemporaryPath(
-        artifactDirectory,
-        checkpoint.envelope.persistence.generation,
-        name,
-      ),
+      temporaryPath: canonicalTemporaryPath(artifactDirectory),
       parentIdentity: identity,
       label: `canonical discovery ${name}`,
       faultInjector,
@@ -3791,7 +3789,7 @@ async function commitCheckpointHead(locations, checkpoint, faultInjector = null)
     bytes: checkpoint.envelope_bytes,
     temporaryPath: join(
       locations.state_directory,
-      `.BUILD-DISCOVERY.${checkpoint.envelope.persistence.generation}.head.tmp`,
+      '.head-stage',
     ),
     parentIdentity: stateIdentity,
     label: 'Build discovery checkpoint head',
@@ -3805,12 +3803,12 @@ async function assertCommittedHeadUnchanged(locations, expected) {
   const currentBytes = await readRegularFileIfExists(locations.head_path);
   if (expected == null) {
     if (currentBytes != null) {
-      throw new Error('BUILD-DISCOVERY.yaml appeared across the compare-and-swap boundary');
+      throw new Error('discover.yaml appeared across the compare-and-swap boundary');
     }
     return;
   }
   if (currentBytes == null || !currentBytes.equals(expected.envelope_bytes)) {
-    throw new Error('BUILD-DISCOVERY.yaml changed across the compare-and-swap boundary');
+    throw new Error('discover.yaml changed across the compare-and-swap boundary');
   }
 }
 
@@ -4080,7 +4078,7 @@ export async function readPersistedBuildDiscovery({ root, directory, runId } = {
     const headBytes = await readRegularFileIfExists(locations.head_path);
     if (headBytes == null) {
       await ensureLineageAnchor(locations, null);
-      const error = new Error('BUILD-DISCOVERY.yaml does not exist');
+      const error = new Error('discover.yaml does not exist');
       error.code = 'ENOENT';
       throw error;
     }

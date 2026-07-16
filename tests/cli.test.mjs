@@ -286,6 +286,7 @@ test('static Doctor model probe bounds a never-resolving model/list and stops it
   assert.deepEqual(runtimeOptions, {
     codexHome: '/tmp/cruise-explicit-codex-home',
     extensionProfile: 'worker',
+    runtimeRoot: join(tmpdir(), 'cruise-model-catalog'),
   });
   assert.equal(Date.now() - startedAt < 500, true);
 });
@@ -343,7 +344,7 @@ test('help and version execute without starting app-server', () => {
   const cli = resolve('scripts/cruise.mjs');
   const help = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /separate confirmation before starting/);
+  assert.match(help.stdout, /revision-bound Plan-and-Goal preview.*Approve both\/Refine\/Reject both decision before starting/);
   assert.match(help.stdout, /Up\/Down/);
   for (const skill of PUBLIC_SKILLS) assert.match(help.stdout, new RegExp(`\\$cruise:${skill}`));
   assert.doesNotMatch(help.stdout, /provision/i);
@@ -404,7 +405,7 @@ test('every public skill blocks on the complete Doctor result and digest identit
     assert.match(contents, /`client-on-path`/u, skill);
     assert.match(contents, /every\s+other failed Doctor[\s\S]{0,80}blocking/u, skill);
     assert.match(contents, /absolute `workerExecutable`/u, skill);
-    assert.match(contents, /never\s+use the PATH[\s\S]{0,40}token `cruise`/u, skill);
+    assert.match(contents, /never\s+use the\s+PATH[\s\S]{0,40}token `cruise`/u, skill);
     assert.match(contents, /same\s+`\.cruise\/runs\/<run-id>` directory/u, skill);
   }
 });
@@ -412,7 +413,7 @@ test('every public skill blocks on the complete Doctor result and digest identit
 test('every public skill starts non-destructive monitoring without a speculative question', async () => {
   const shared = await readFile(resolve('internal/shared/invocation-contract.md'), 'utf8');
   assert.match(shared, /Start non-destructive foreign-diff monitoring automatically/u);
-  assert.match(shared, /`foreign-diff-guard\.yaml` in `monitoring` state/u);
+  assert.match(shared, /`drift\.yaml` in `monitoring` state/u);
   assert.match(shared, /does not ask a start[\s\S]{0,20}question/u);
   assert.match(shared, /pre-existing dirty path/u);
   assert.match(shared, /never ask a\s+speculative repository-change question when no incident exists/u);
@@ -426,7 +427,7 @@ test('every public skill starts non-destructive monitoring without a speculative
 
   for (const skill of PUBLIC_SKILLS) {
     const contents = await readFile(resolve('skills', skill, 'SKILL.md'), 'utf8');
-    assert.match(contents, /automatically establish shared\s+non-destructive foreign-diff monitoring/u, skill);
+    assert.match(contents, /automatically establish shared\s+non-destructive\s+foreign-diff monitoring/u, skill);
     assert.match(contents, /Do not ask a\s+speculative start question/u, skill);
     assert.match(contents, /root-owned\s+incident pause protocol/u, skill);
     assert.match(contents, /after the concrete incident is persisted/u, skill);
@@ -444,7 +445,7 @@ test('semantic mapping contract requires the runtime-generated preflighted packe
   const shared = await readFile(resolve('internal/shared/invocation-contract.md'), 'utf8');
   const quick = await readFile(resolve('skills/quick/SKILL.md'), 'utf8');
   for (const [label, contents] of [['shared contract', shared], ['Quick skill', quick]]) {
-    assert.match(contents, /runtime-generated `semantic-mapping-packet\.yaml`|exact `semantic-mapping-packet\.yaml` generated atomically/u, label);
+    assert.match(contents, /runtime-generated `map-pkt\.yaml`|exact `map-pkt\.yaml` generated atomically/u, label);
     assert.match(contents, /(?:do not|never) hand-write/iu, label);
     assert.match(contents, /enrichment_template/u, label);
     assert.match(contents, /facts\[\*\]\.value/u, label);

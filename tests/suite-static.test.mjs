@@ -349,7 +349,7 @@ test('routing fixture locks every minimum behavioral scenario and hard Quick gat
     ['mutual.admin_export_refine', ['refine']],
     ['mutual.intermittent_hang_debug', ['debug']],
     ['mutual.foundation_build', ['build']],
-    ['mutual.cell_tracking_research', ['research']],
+    ['mutual.cell_tracking_research', ['refine']],
     ['mutual.research_to_implementation_handoff', ['refine', 'goal']],
     ['mutual.phase_goal', ['goal']],
     ['mutual.broken_and_better_split', ['debug']],

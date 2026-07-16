@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
@@ -28,7 +27,7 @@ export const COMMUNICATION_STYLES = Object.freeze({
 });
 
 export function communicationStylePath({ codexHome = null } = {}) {
-  return join(resolveCodexHome(codexHome), 'cruise', 'communication-style.json');
+  return join(resolveCodexHome(codexHome), 'cruise', 'style.json');
 }
 
 function definition(style) {
@@ -88,7 +87,7 @@ export async function readCommunicationStyle({ codexHome = null } = {}) {
 }
 
 async function atomicWrite(path, bytes) {
-  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  const temporary = join(dirname(path), '.style-stage');
   try {
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
     await rename(temporary, path);

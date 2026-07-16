@@ -18,8 +18,8 @@ import {
 import { parseYaml, stringifyYaml } from '../scripts/lib/yaml-state.mjs';
 import { createMilestoneRuntimeFixture } from './helpers/milestone-runtime-fixture.mjs';
 
-const MILESTONE_PATH = '.cruise/milestones/M-003-safe-rollout';
-const CONTROLLER_PATH = '.cruise/goal/MILESTONE-CONTROLLER.yaml';
+const MILESTONE_PATH = '.cruise/milestones/M-003-rollout';
+const CONTROLLER_PATH = '.cruise/goal/ctrl.yaml';
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');

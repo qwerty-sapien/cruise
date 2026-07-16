@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import {
   lstat,
@@ -24,6 +24,7 @@ import {
   isNonProductRepositoryPath,
 } from './repository-scope.mjs';
 import { canonicalJson, parseYaml, stringifyYaml } from './yaml-state.mjs';
+import { assertInformativeName } from './artifact-naming.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const REPORT_COMMIT_CHILD = fileURLToPath(
@@ -120,21 +121,25 @@ async function createDurableRecord(path, value) {
 }
 
 async function assertNoActiveWorkerAttempt(directory) {
-  const names = await readdir(directory);
-  for (const name of names) {
-    const match = /^([a-f0-9]{64})\.admitted\.yaml$/u.exec(name);
-    if (!match) continue;
-    const admitted = await readAttemptRecord(join(directory, name), 'admitted worker attempt');
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const taskDirectory = join(directory, entry.name);
+    const admittedPath = join(taskDirectory, 'admit.yaml');
+    let admitted;
     try {
-      const terminal = await readAttemptRecord(
-        join(directory, `${match[1]}.terminal.yaml`),
-        'terminal worker attempt',
-      );
+      admitted = await readAttemptRecord(admittedPath, 'admitted worker attempt');
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    try {
+      const terminal = await readAttemptRecord(join(taskDirectory, 'done.yaml'), 'terminal worker attempt');
       assertAttemptRecordBinding(terminal, admitted.binding, 'terminal worker attempt');
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
       throw new Error(
-        `worker attempt ${admitted?.binding?.attempt_id ?? match[1]} is still active; concurrent inference is forbidden`,
+        `worker attempt ${admitted?.binding?.attempt_id ?? entry.name} is still active; concurrent inference is forbidden`,
       );
     }
   }
@@ -332,7 +337,7 @@ export async function assertWorkerControlSnapshot(admission, {
   if (!mapperGuardStayedImmutable(admission, guardState, cleanInventorySha256)) {
     const error = new Error('semantic mapper changed the host-owned foreign-diff action state');
     error.code = 'CRUISE_WORKER_CONTROL_MUTATION';
-    error.changedPaths = Object.freeze(['foreign-diff-guard.yaml']);
+    error.changedPaths = Object.freeze(['drift.yaml']);
     throw error;
   }
   const current = await captureControlTree(
@@ -474,7 +479,7 @@ export async function admitWorkerAttempt({
   await assertMissing(scope.reportPath, 'worker report');
 
   let normalizedMapperOutput = null;
-  const excludedPaths = new Set(['foreign-diff-guard.yaml', basename(scope.reportPath)]);
+  const excludedPaths = new Set(['drift.yaml', basename(scope.reportPath)]);
   if (mapperOutput !== null) {
     const outputPath = resolve(mapperOutput.path);
     if (dirname(outputPath) !== runDirectory) {
@@ -492,20 +497,22 @@ export async function admitWorkerAttempt({
   const binding = exactAttemptBinding({ scope, packetSha256, level, generation });
   const authorityDirectory = dirname(foreignDiffAuthorityPath(scope.cwd, scope.runId));
   await safeDirectory(authorityDirectory, 'foreign-diff authority', { requirePrivate: true });
-  const attemptsRoot = join(authorityDirectory, 'worker-attempts');
+  const attemptsRoot = join(authorityDirectory, 'attempts');
   await safeDirectory(attemptsRoot, 'worker-attempt authority', {
     create: true,
     requirePrivate: true,
   });
-  const generationDirectory = join(attemptsRoot, generation);
-  await safeDirectory(generationDirectory, 'worker-attempt generation', {
+  const taskName = basename(scope.packetPath).replace(/\.[^.]+$/u, '');
+  assertInformativeName(taskName, { label: 'worker task name' });
+  const attemptDirectory = join(attemptsRoot, taskName);
+  await safeDirectory(attemptDirectory, 'worker-attempt task', {
     create: true,
     requirePrivate: true,
   });
-  const admittedPath = join(generationDirectory, `${binding.attempt_id}.admitted.yaml`);
-  const terminalPath = join(generationDirectory, `${binding.attempt_id}.terminal.yaml`);
+  const admittedPath = join(attemptDirectory, 'admit.yaml');
+  const terminalPath = join(attemptDirectory, 'done.yaml');
 
-  await assertNoActiveWorkerAttempt(generationDirectory);
+  await assertNoActiveWorkerAttempt(attemptsRoot);
 
   for (const [path, label] of [[terminalPath, 'terminal worker attempt'], [admittedPath, 'admitted worker attempt']]) {
     try {
@@ -543,7 +550,7 @@ export async function admitWorkerAttempt({
     report_binding: reportBinding(binding),
     reportParent,
     runDirectory,
-    authorityDirectory: generationDirectory,
+    authorityDirectory: attemptDirectory,
     admittedPath,
     terminalPath,
     controlSnapshot,
@@ -573,10 +580,7 @@ export function bindWorkerAttemptReport(report, admission) {
 export async function commitWorkerReportNoClobber(admission, report) {
   await assertMissing(admission.binding.report_path, 'worker report');
   const source = stringifyYaml(report, { maxNodes: 250_000 });
-  const sourcePath = join(
-    admission.authorityDirectory,
-    `${admission.binding.attempt_id}.report-${randomUUID()}.yaml`,
-  );
+  const sourcePath = join(admission.authorityDirectory, 'rpt-stage.yaml');
   const handle = await open(sourcePath, 'wx', 0o600);
   try {
     await handle.writeFile(source, 'utf8');
@@ -584,7 +588,7 @@ export async function commitWorkerReportNoClobber(admission, report) {
   } finally {
     await handle.close();
   }
-  const temporaryName = `.cruise-worker-report-${randomUUID()}.tmp`;
+  const temporaryName = '.rpt-stage';
   try {
     const committed = spawnSync(process.execPath, [
       REPORT_COMMIT_CHILD,

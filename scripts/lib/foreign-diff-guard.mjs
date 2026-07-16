@@ -14,6 +14,7 @@ import {
   constants as fsConstants,
   fstatSync,
   openSync,
+  readFileSync,
   readSync,
   readlinkSync,
   readdirSync,
@@ -23,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { canonicalJson, parseYaml, writeYamlFile } from './yaml-state.mjs';
+import { assertInformativeName } from './artifact-naming.mjs';
 import {
   clearDisposableRepositoryArtifacts,
   isNonProductRepositoryPath,
@@ -30,12 +32,12 @@ import {
 } from './repository-scope.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const RUN_ID = /^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const DECISION_ID = /^D-\d{2,}$/u;
 const ACTION_ID = /^[A-Za-z][A-Za-z0-9._-]{1,127}$/u;
 const INCIDENT_ID = /^FD-\d{3,}$/u;
 const CONTROL_ROOT = '.cruise';
-const AUTHORITY_ROOT = 'cruise-foreign-diff-authority-v1';
+const AUTHORITY_ROOT = 'cruise-auth';
 const VIRTUAL_PATHS = Object.freeze({
   head: '/.cruise-meta/git/HEAD',
   branch: '/.cruise-meta/git/branch',
@@ -151,7 +153,7 @@ function canonicalRoot(repositoryRoot) {
 
 export function foreignDiffAuthorityPath(repositoryRoot, runId) {
   const root = canonicalRoot(repositoryRoot);
-  if (!RUN_ID.test(runId ?? '')) {
+  if (!RUN_ID.test(runId ?? '') || runId.length > 15) {
     guardError('foreign-diff authority run ID is invalid', 'CRUISE_FOREIGN_DIFF_INVALID');
   }
   const tempRoot = realpathSync(resolve(tmpdir()));
@@ -161,8 +163,27 @@ export function foreignDiffAuthorityPath(repositoryRoot, runId) {
       'CRUISE_FOREIGN_DIFF_AUTHORITY',
     );
   }
-  const repositoryKey = sha256(Buffer.from(root, 'utf8'));
-  return join(tempRoot, AUTHORITY_ROOT, repositoryKey, runId, 'foreign-diff-guard.yaml');
+  let naming;
+  try {
+    naming = parseYaml(readFileSync(join(root, '.cruise', 'repo.yaml'), 'utf8'));
+    assertInformativeName(naming?.name, { label: 'repository name' });
+  } catch (cause) {
+    guardError(
+      'foreign-diff authority requires the level-1 repo.yaml naming record',
+      'CRUISE_FOREIGN_DIFF_AUTHORITY',
+      { cause },
+    );
+  }
+  if (
+    naming.schema_version !== 1
+    || naming.kind !== 'cruise_repository_name'
+    || naming.repository_root !== root
+    || naming.assigned_by !== 'cruise_l1'
+    || naming.worker_level !== 1
+  ) {
+    guardError('foreign-diff repository name authority is invalid', 'CRUISE_FOREIGN_DIFF_AUTHORITY');
+  }
+  return join(tempRoot, AUTHORITY_ROOT, naming.name, runId, 'drift.yaml');
 }
 
 async function prepareAuthorityDirectory(repositoryRoot, runId) {

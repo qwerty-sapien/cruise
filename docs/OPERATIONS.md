@@ -37,7 +37,7 @@ cruise doctor
 | --- | --- | --- |
 | `cruise doctor` | Fast readiness check | Entrypoint, cache, catalog, agents, and host rule |
 | `cruise doctor --json` | Machine-readable readiness | Same checks as the default profile |
-| `cruise doctor --deep --install-worker-rule` | Rapid install/update verification | Six sequential read-only skill-contract probes in one warm task |
+| `cruise doctor --deep --install-worker-rule` | Rapid install/update verification | Five sequential read-only skill-contract probes in one warm task |
 | `cruise doctor --troubleshoot --install-worker-rule` | Exhaustive manual diagnosis | Real multi-turn canaries, workers, approvals, Goal activation, and disposable repositories |
 | `cruise doctor --troubleshoot --fixture <path>` | Diagnose a supplied fixture | Troubleshoot flow against that fixture |
 
@@ -47,14 +47,14 @@ cruise doctor
 
 - Starts one isolated app-server and one Luna Medium task.
 - Discovers installed skills once and reuses the warm conversation.
-- Runs six read-only contract probes plus high-signal tests from the pinned cache.
+- Runs five read-only contract probes plus high-signal tests from the pinned cache.
 - Performs no repository workflow, product write, worker launch, structured question, or permission expansion.
 - Targets less than `15000 ms` per skill.
 - Fails liveness only at the fixed `60000 ms` per-skill deadline.
 
 ### Troubleshoot
 
-- Exercises all six real skill workflows.
+- Exercises all five real skill workflows.
 - Retains evidence packets, workers, approvals, Goal activation, and disposable repositories.
 - Has no workflow liveness deadline; it ends on a semantic terminal result, host failure, or cancellation.
 - Prints a failed workspace path and returns it to JSON callers.

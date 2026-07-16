@@ -2,9 +2,9 @@ import { MODEL_IDS, resolveModelPolicy } from './model-policy.mjs';
 import { assertYamlSchema } from './yaml-state.mjs';
 
 /**
- * The root thread is always the coordinator. Work requiring a different model
- * is delegated to a named child agent; this table is the complete public
- * recommended-level mapping.
+ * The root thread is always the coordinator. Level 1 may be spawned only for
+ * naming or read-only coordination support; levels 2-7 handle substantive
+ * worker phases. This table is the complete recommended-level mapping.
  */
 export const WORKER_LEVEL_POLICY = Object.freeze({
   1: Object.freeze({ agent_type: 'cruise_l1', alias: 'luna-M', tier: 'luna', reasoning_effort: 'medium' }),

@@ -51,7 +51,6 @@ enums:
     - refine
     - goal
     - debug
-    - research
   consequence_level:
     - low
     - normal
@@ -1678,7 +1677,7 @@ records:
 
   provision_run_contract:
     kind: cruise_provision_run_contract
-    persisted_path: .cruise/internal/provision-runs/<run-id>.contract.yaml
+    persisted_path: .cruise/internal/provision-runs/<run-id>/contract.yaml
     immutable_atomic_first_write: true
     self_digest_is_authority: false
     live_authority:
@@ -2366,9 +2365,9 @@ records:
           - evaluated_at
 
 state_paths:
-  registry: .cruise/internal/capabilities.yaml
-  runs: .cruise/internal/provision-runs/<run-id>.yaml
-  rejected: .cruise/internal/rejected-capabilities.yaml
+  registry: .cruise/internal/caps.yaml
+  runs: .cruise/internal/provision-runs/<run-id>/state.yaml
+  rejected: .cruise/internal/rejected.yaml
   auth_job_transport_input: .cruise/internal/auth-jobs/<auth-id>.yaml
   auth_job_transport_input_immutable_after_first_write: true
   auth_job_state: .cruise/internal/auth-state/<auth-id>.yaml

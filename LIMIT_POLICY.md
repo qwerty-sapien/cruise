@@ -37,7 +37,7 @@ Service quotas and Codex host-action limits are host/protocol constraints. This 
 
 ## Current semantic cardinalities
 
-- Exact Plan and Start approvals are separate events.
+- Goal has one exact combined Plan-and-Goal approval event after its needs/autonomy envelope is resolved.
 - Build accepts either its exact digest-echoing structured selection or an immutable request-header `--auto-approve` directive bound to the later review digest.
 - There is one integration owner and one active controller phase.
 - Worker levels come from the host-advertised catalog.

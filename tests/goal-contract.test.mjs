@@ -9,13 +9,18 @@ import {
   activateApprovedGoal,
   buildGoalObjective,
   captureGoalApproval,
+  capturePlanGoalApproval,
   capturePlanApproval,
   captureRepositoryBaseline,
   extractAlignmentStem,
   inspectGoalOrigin,
   isApprovePlanChoice,
+  isApprovePlanGoalChoice,
+  isGoalNeedsOptions,
+  isPlanGoalReviewOptions,
   isStartCruiseChoice,
   verifyGoalApproval,
+  verifyPlanGoalApproval,
 } from '../scripts/lib/goal-contract.mjs';
 import { createOriginRecord } from '../scripts/lib/origin.mjs';
 import {
@@ -53,6 +58,28 @@ async function createPlanContract({ cwd: targetDirectory = null, mutateOrigin = 
 }
 
 test('recognizes exact approval tokens and rejects near misses', () => {
+  assert.equal(isApprovePlanGoalChoice('Approve both'), true);
+  assert.equal(isApprovePlanGoalChoice(' Approve both'), false);
+  assert.equal(isApprovePlanGoalChoice('Approve both '), false);
+  assert.equal(isApprovePlanGoalChoice('approve both'), false);
+  assert.equal(isApprovePlanGoalChoice('Approve'), false);
+  assert.equal(isApprovePlanGoalChoice('Approve Plan'), false);
+  assert.equal(isPlanGoalReviewOptions([
+    { label: 'Approve both' },
+    { label: 'Refine' },
+    { label: 'Reject both' },
+  ]), true);
+  assert.equal(isPlanGoalReviewOptions([
+    { label: 'Approve both' },
+    { label: 'Reject both' },
+    { label: 'Refine' },
+  ]), false);
+  assert.equal(isGoalNeedsOptions([
+    { label: 'Approve all' },
+    { label: 'Select some' },
+    { label: 'Reject all' },
+    { label: 'Discuss' },
+  ]), true);
   assert.equal(isApprovePlanChoice('Approve Plan'), true);
   assert.equal(isApprovePlanChoice(' Approve Plan'), false);
   assert.equal(isApprovePlanChoice('Approve Plan '), false);
@@ -69,6 +96,34 @@ test('recognizes exact approval tokens and rejects near misses', () => {
   assert.equal(isStartCruiseChoice('START CRUISE'), false);
   assert.equal(isStartCruiseChoice('start-cruise'), false);
   assert.equal(isStartCruiseChoice('Looks good'), false);
+});
+
+test('one combined snapshot binds Plan, Goal, alignment, and repository baseline', async () => {
+  const { cwd, goalDir } = await createPlanContract();
+  await writeFile(join(goalDir, 'GOAL.md'), '# Approved Goal\n');
+  const approval = await capturePlanGoalApproval(cwd, {
+    expectedRawPrompt: 'Ship it safely.',
+  });
+  assert.equal(approval.stage, 'plan-goal');
+  assert.deepEqual(
+    approval.artifacts.map(({ path }) => path),
+    [
+      '.cruise/goal/ORIGIN.yaml',
+      '.cruise/goal/SPEC.md',
+      '.cruise/goal/DECISIONS.md',
+      '.cruise/goal/ALIGNMENT.md',
+      '.cruise/goal/PLAN.md',
+      '.cruise/goal/GOAL.md',
+    ],
+  );
+  await verifyPlanGoalApproval(cwd, approval);
+  await verifyGoalApproval(cwd, approval);
+
+  await writeFile(join(goalDir, 'ALIGNMENT.md'), '# Alignment\n\n## Stem\n\nChanged.\n');
+  await assert.rejects(
+    verifyPlanGoalApproval(cwd, approval),
+    /ALIGNMENT\.md changed after Plan and Goal approval/,
+  );
 });
 
 test('extracts the compact alignment stem', () => {

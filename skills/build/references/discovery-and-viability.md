@@ -113,7 +113,7 @@ feasibility, alternatives/rejections, unresolved phase-local issues, research de
 and the recommended Build transition.
 
 Persist the reducer history and interruption cursor separately at
-`.cruise/runs/<run-id>/BUILD-DISCOVERY.yaml`, validated by
+`.cruise/runs/<run-id>/discover.yaml`, validated by
 `internal/schemas/build-discovery-state.schema.yaml`. The envelope is not a seventh discovery
 artifact and cannot authorize a transition. Replay must reproduce every snapshot digest. A fresh
 opaque host resume attestation must bind its exact state digest, run ID, immutable Origin digest,
@@ -121,12 +121,12 @@ and unchanged product baseline. Rehydrating Research states also requires the ma
 Research-scope approvals and result closeouts. Resume preserves the same run ID, `Q-XX` cursor,
 `DR-XX` return cursor, and prior answers.
 
-`BUILD-DISCOVERY.yaml` is one atomically replaced commit pointer. Each committed pointer has an
-identical immutable bundle under `BUILD-DISCOVERY-HISTORY/REV-<revision>-<state-sha256>/`
+`discover.yaml` is one atomically replaced commit pointer. Each committed pointer has an
+identical immutable bundle under `disc-hist/REV-<revision>-<state-sha256>/`
 containing the six canonical discovery artifacts and envelope bytes. Every revision binds the
 previous generation and exact previous-head digest. Before changing a canonical file, write a
 pending intent bound to that predecessor, its durable lineage-anchor digest, and the complete new
-generation. Commit `BUILD-DISCOVERY-LINEAGE.yaml` before clearing the intent; a reader or retry may
+generation. Commit `disc-line.yaml` before clearing the intent; a reader or retry may
 roll a complete head-before-anchor crash forward, while a crash before the durable intent leaves the
 old head and anchor authoritative. Every read and write must independently match the canonical
 repository root in `ORIGIN.yaml.repository_baseline.root`. Stale ancestors, forked event histories,
@@ -199,7 +199,7 @@ The draft verifier requires exactly 18 real files and no extras:
 
 ```text
 .cruise/project/
-  ORIGIN.yaml ID-REGISTRY.yaml PROJECT.md REQUIREMENTS.md ARCHITECTURE.md
+  ORIGIN.yaml ids.yaml PROJECT.md REQUIREMENTS.md ARCHITECTURE.md
   ROADMAP.md DECISIONS.md STATE.yaml QUEUE.yaml
 .cruise/milestones/<one-first-or-target-M-ID>-<slug>/
   ORIGIN.yaml MILESTONE.md REQUIREMENTS.md ROADMAP.md DECISIONS.md
@@ -221,7 +221,7 @@ mapped `R-XX`/`AC-XX`/`D-XX` IDs, phase-local questions, and research prerequisi
 requirement to cite an accepted discovery decision and acceptance criterion; match the final
 deferred phase-question text to its generated phase; map each remaining implementation-research
 question to exactly one Research queue item; and compare every scanned active identifier/source
-path with `ID-REGISTRY.yaml`. Consuming the authority once records only an unapproved draft transition; it
+path with `ids.yaml`. Consuming the authority once records only an unapproved draft transition; it
 does not mint review or approval authority.
 
 Readiness attestation also is not approval. It fails unless repository evidence closes the

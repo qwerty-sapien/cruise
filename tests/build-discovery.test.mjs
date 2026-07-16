@@ -517,7 +517,7 @@ async function materializeBootstrapDrafts(root, {
   omitMilestoneDecisionLink = false,
 } = {}) {
   const projectPath = '.cruise/project';
-  const milestonePath = '.cruise/milestones/M-01-first-value';
+  const milestonePath = '.cruise/milestones/M-01-first-val';
   const projectDirectory = join(root, projectPath);
   const milestoneDirectory = join(root, milestonePath);
   const questionIds = phaseQuestion == null ? [] : ['Q-01'];
@@ -625,7 +625,7 @@ async function materializeBootstrapDrafts(root, {
     reconciledAt: NOW,
   })));
   const paths = [
-    `${projectPath}/ORIGIN.yaml`, `${projectPath}/ID-REGISTRY.yaml`,
+    `${projectPath}/ORIGIN.yaml`, `${projectPath}/ids.yaml`,
     `${projectPath}/PROJECT.md`, `${projectPath}/REQUIREMENTS.md`,
     `${projectPath}/ARCHITECTURE.md`, `${projectPath}/ROADMAP.md`,
     `${projectPath}/DECISIONS.md`, `${projectPath}/STATE.yaml`, `${projectPath}/QUEUE.yaml`,
@@ -715,8 +715,8 @@ function discoveryPersistenceRuns(runId, root) {
 }
 
 test('failed viability hard gate persists discovery but cannot mint draft authority or final artifacts', async () => {
-  const runId = 'discovery-unviable';
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-unviable-')));
+  const runId = 'disc-no';
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-disc-no-')));
   const origin = discoveryOriginFixture(root);
   const evidenceDocument = evidence(runId, { originSha256: origin.sha256 });
   const readinessDocument = readiness(runId, {
@@ -767,7 +767,7 @@ test('failed viability hard gate persists discovery but cannot mint draft author
     'ORIGIN.yaml',
     'QUESTIONS.yaml',
   ]);
-  assert.equal(checkpoint.state_path, `.cruise/runs/${runId}/BUILD-DISCOVERY.yaml`);
+  assert.equal(checkpoint.state_path, `.cruise/runs/${runId}/discover.yaml`);
   await assert.rejects(access(join(root, '.cruise/project/PROJECT.md')));
 
   const persisted = await readPersistedBuildDiscovery({
@@ -811,7 +811,7 @@ test('failed viability hard gate persists discovery but cannot mint draft author
 });
 
 test('discovery persistence rejects stale ancestors and forked branded runs with immutable CAS history', async () => {
-  const runId = 'discovery-persistence-cas';
+  const runId = 'disc-cas';
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-cas-')));
   const { base, successor } = discoveryPersistenceRuns(runId, root);
   const fork = interruptBuildDiscovery(base, {
@@ -856,14 +856,14 @@ test('discovery persistence rejects stale ancestors and forked branded runs with
   assert.equal(persisted.state_sha256, buildDiscoveryStateDigest(successor));
   assert.equal(persisted.checkpoint_revision, 1);
   const generations = await readdir(
-    join(root, `.cruise/runs/${runId}/BUILD-DISCOVERY-HISTORY`),
+    join(root, `.cruise/runs/${runId}/disc-hist`),
   );
   assert.equal(generations.length, 2);
-  assert.ok(generations.every((name) => /^REV-\d{12}-[a-f0-9]{64}$/u.test(name)));
+  assert.ok(generations.every((name) => /^rev-\d{1,11}$/u.test(name)));
 });
 
 test('discovery persistence and reads are bound to Origin repository_baseline.root', async () => {
-  const runId = 'discovery-origin-root-binding';
+  const runId = 'disc-origin';
   const originRoot = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-origin-root-')));
   const otherRoot = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-other-root-')));
   const { base } = discoveryPersistenceRuns(runId, originRoot);
@@ -895,8 +895,8 @@ test('discovery persistence and reads are bound to Origin repository_baseline.ro
 });
 
 test('durable lineage rejects head/history deletion after fresh-process rehydration', async () => {
-  const runId = 'discovery-lineage-deletion';
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-lineage-delete-')));
+  const runId = 'disc-del';
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-disc-line-delete-')));
   const { base, successor } = discoveryPersistenceRuns(runId, root);
   await persistBuildDiscovery({
     root,
@@ -910,10 +910,10 @@ test('durable lineage rejects head/history deletion after fresh-process rehydrat
   });
 
   const stateDirectory = join(root, `.cruise/runs/${runId}`);
-  const lineagePath = join(stateDirectory, 'BUILD-DISCOVERY-LINEAGE.yaml');
+  const lineagePath = join(stateDirectory, 'disc-line.yaml');
   await access(lineagePath);
-  await rm(join(stateDirectory, 'BUILD-DISCOVERY.yaml'));
-  await rm(join(stateDirectory, 'BUILD-DISCOVERY-HISTORY'), { recursive: true });
+  await rm(join(stateDirectory, 'discover.yaml'));
+  await rm(join(stateDirectory, 'disc-hist'), { recursive: true });
   const serializedPath = join(root, 'deleted-lineage-candidate.json');
   await writeFile(serializedPath, JSON.stringify(serializeBuildDiscoveryState(successor)));
   const moduleUrl = pathToFileURL(
@@ -957,8 +957,8 @@ test('durable lineage rejects head/history deletion after fresh-process rehydrat
       /durable lineage anchor survives a missing checkpoint/.test(error.stderr),
   );
   await access(lineagePath);
-  await assert.rejects(access(join(stateDirectory, 'BUILD-DISCOVERY.yaml')));
-  await assert.rejects(access(join(stateDirectory, 'BUILD-DISCOVERY-HISTORY')));
+  await assert.rejects(access(join(stateDirectory, 'discover.yaml')));
+  await assert.rejects(access(join(stateDirectory, 'disc-hist')));
   await assert.rejects(
     readPersistedBuildDiscovery({
       root,
@@ -970,8 +970,8 @@ test('durable lineage rejects head/history deletion after fresh-process rehydrat
 });
 
 test('discovery resume fails closed when an immutable predecessor generation is rewritten', async () => {
-  const runId = 'discovery-history-tamper';
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-history-tamper-')));
+  const runId = 'disc-tamper';
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-disc-tamper-')));
   const { base, successor } = discoveryPersistenceRuns(runId, root);
   await persistBuildDiscovery({
     root,
@@ -985,10 +985,10 @@ test('discovery resume fails closed when an immutable predecessor generation is 
   });
   const historyDirectory = join(
     root,
-    `.cruise/runs/${runId}/BUILD-DISCOVERY-HISTORY`,
+    `.cruise/runs/${runId}/disc-hist`,
   );
   const revisionZero = (await readdir(historyDirectory))
-    .find((name) => name.startsWith('REV-000000000000-'));
+    .find((name) => name === 'rev-0');
   assert.ok(revisionZero);
   const priorQuestions = join(historyDirectory, revisionZero, 'QUESTIONS.yaml');
   await rm(priorQuestions);
@@ -1024,7 +1024,7 @@ test('pending discovery generations recover after every canonical-file and head 
   ];
 
   for (const [index, faultPoint] of faultPoints.entries()) {
-    const runId = `discovery-fault-${String(index).padStart(2, '0')}`;
+    const runId = `disc-f${index}`;
     const root = await realpath(await mkdtemp(join(tmpdir(), `${runId}-`)));
     const { base, successor } = discoveryPersistenceRuns(runId, root);
     await persistBuildDiscovery({
@@ -1053,7 +1053,7 @@ test('pending discovery generations recover after every canonical-file and head 
     assert.equal(recovered.state_sha256, buildDiscoveryStateDigest(successor), faultPoint);
     assert.equal(recovered.checkpoint_revision, 1, faultPoint);
     await assert.rejects(access(
-      join(root, `.cruise/runs/${runId}/BUILD-DISCOVERY-PENDING.yaml`),
+      join(root, `.cruise/runs/${runId}/disc-pend.yaml`),
     ));
     assert.deepEqual(
       (await readdir(join(root, '.cruise/project/discovery'))).sort(),
@@ -1076,7 +1076,7 @@ test('faults before the durable discovery intent preserve the old head and allow
     'generation:published',
     'intent:prepared',
   ].entries()) {
-    const runId = `discovery-precommit-fault-${index}`;
+    const runId = `disc-pre${index}`;
     const root = await realpath(await mkdtemp(join(tmpdir(), `${runId}-`)));
     const { base, successor } = discoveryPersistenceRuns(runId, root);
     await persistBuildDiscovery({
@@ -1115,8 +1115,8 @@ test('faults before the durable discovery intent preserve the old head and allow
 });
 
 test('fresh process reclaims a crashed writer, rolls the exact pending generation forward, and resumes', async () => {
-  const runId = 'discovery-process-crash';
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-process-crash-')));
+  const runId = 'disc-crash';
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-disc-crash-')));
   const { base, successor, origin } = discoveryPersistenceRuns(runId, root);
   await persistBuildDiscovery({
     root,
@@ -1172,7 +1172,7 @@ test('fresh process reclaims a crashed writer, rolls the exact pending generatio
   assert.equal(recovered.state_sha256, buildDiscoveryStateDigest(successor));
   assert.equal(recovered.checkpoint_revision, 1);
   await assert.rejects(access(
-    join(root, `.cruise/runs/${runId}/BUILD-DISCOVERY.lock`),
+    join(root, `.cruise/runs/${runId}/disc.lock`),
   ));
 
   const resumeAttestation = attestBuildDiscoveryResume({
@@ -1200,12 +1200,12 @@ test('fresh process reclaims a crashed writer, rolls the exact pending generatio
 });
 
 test('discovery persistence rejects symlinked immutable-history storage without writing outside root', async () => {
-  const runId = 'discovery-history-symlink';
+  const runId = 'disc-link';
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-symlink-')));
   const outside = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-outside-')));
   const stateDirectory = join(root, `.cruise/runs/${runId}`);
   await mkdir(stateDirectory, { recursive: true });
-  await symlink(outside, join(stateDirectory, 'BUILD-DISCOVERY-HISTORY'));
+  await symlink(outside, join(stateDirectory, 'disc-hist'));
   const { base } = discoveryPersistenceRuns(runId, root);
   await assert.rejects(
     persistBuildDiscovery({
@@ -1219,7 +1219,7 @@ test('discovery persistence rejects symlinked immutable-history storage without 
 });
 
 test('approved pre-approval Research resumes the same interrupted Build run and contradiction reopens readiness', async () => {
-  const runId = 'discovery-research-return';
+  const runId = 'disc-rsrch';
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-resume-')));
   const origin = discoveryOriginFixture(root);
   const initialEvidence = evidence(runId, { originSha256: origin.sha256 });
@@ -1394,7 +1394,7 @@ test('approved pre-approval Research resumes the same interrupted Build run and 
 });
 
 test('selected and rejected concept lineage is mandatory and preserved in DISCOVERY.md', () => {
-  const runId = 'discovery-lineage';
+  const runId = 'disc-line';
   const material = readyMaterial(runId);
   const run = initialize(runId, material);
   assert.equal(run.state.snapshot.concepts.selected_concept_id, 'C-01');
@@ -1479,7 +1479,7 @@ test('selected and rejected concept lineage is mandatory and preserved in DISCOV
 });
 
 test('QUESTIONS.yaml permits one material question and preserves its cursor across interruption resume', () => {
-  const runId = 'discovery-question-resume';
+  const runId = 'disc-qna';
   const openQuestion = {
     id: 'Q-01',
     status: 'open',
@@ -1657,7 +1657,7 @@ test('QUESTIONS.yaml permits one material question and preserves its cursor acro
 });
 
 test('viable concept receives one-use authority only after real complete unapproved Build drafts verify', async () => {
-  const runId = 'discovery-drafting';
+  const runId = 'disc-draft';
   const phaseQuestion = 'Choose the retry window only after P-01 exposes production timing evidence.';
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-drafts-')));
   const repositoryBaselineSha256 = captureRepositoryBaseline(root).sha256;
@@ -1829,7 +1829,7 @@ test('viable concept receives one-use authority only after real complete unappro
 });
 
 test('automatic drafting rejects a semantically valid final artifact that reuses a discovery D-XX meaning', async () => {
-  const runId = 'discovery-reused-decision';
+  const runId = 'disc-reuse';
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cruise-discovery-reused-d-')));
   const repositoryBaselineSha256 = captureRepositoryBaseline(root).sha256;
   const projectCapture = draftOriginCapture(root, 'bootstrap');
@@ -1884,7 +1884,7 @@ test('automatic drafting rejects a semantically valid final artifact that reuses
 
 test('automatic drafting rejects missing decision-to-requirement and phase-question joins', async () => {
   const missingMapping = await automaticDraftLineageSubject({
-    runId: 'discovery-missing-requirement-map',
+    runId: 'disc-req',
     materializeOverrides: { omitMilestoneDecisionLink: true },
   });
   await assert.rejects(
@@ -1900,7 +1900,7 @@ test('automatic drafting rejects missing decision-to-requirement and phase-quest
 
   const phaseQuestion = 'Choose the retry window after phase evidence is available.';
   const changedQuestion = await automaticDraftLineageSubject({
-    runId: 'discovery-changed-phase-question',
+    runId: 'disc-phase',
     phaseQuestion,
     materializeOverrides: {
       finalPhaseQuestion: 'Choose a different unrelated phase-local preference.',

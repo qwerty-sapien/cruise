@@ -218,8 +218,8 @@ test('claimed completion cannot contradict derived evidence state', () => {
   ]);
 });
 
-test('handoff records exactly one of six public route transitions with evidence and origin', () => {
-  assert.deepEqual(PUBLIC_ROUTES, ['build', 'quick', 'refine', 'goal', 'debug', 'research']);
+test('handoff records exactly one of five public route transitions with evidence and origin', () => {
+  assert.deepEqual(PUBLIC_ROUTES, ['build', 'quick', 'refine', 'goal', 'debug']);
   const handoff = createHandoff({
     id: 'HO-01',
     createdAt: START,
@@ -240,31 +240,31 @@ test('handoff records exactly one of six public route transitions with evidence 
 });
 
 test('handoffs cannot loop, chain, invent routes, or reactivate retired Review', () => {
-  const research = createHandoff({
+  const refine = createHandoff({
     id: 'HO-01',
     createdAt: START,
-    sourceRoute: 'research',
+    sourceRoute: 'refine',
     targetRoute: 'quick',
-    trigger: 'research_implementation',
+    trigger: 'explicit_user_request',
     reason: 'The result proves a later bounded fix can enter Quick admission.',
     evidenceIds: ['E-01'],
-    originPath: '.cruise/runs/research/origin.yaml',
+    originPath: '.cruise/runs/refine/origin.yaml',
   });
-  assert.equal(research.authorizes_product_edits, false);
+  assert.equal(refine.authorizes_product_edits, false);
   assert.throws(
-    () => assertOneHopHandoff(research, { parentHandoff: research }),
+    () => assertOneHopHandoff(refine, { parentHandoff: refine }),
     /one-hop only/,
   );
   assert.throws(
     () => createHandoff({
       id: 'HO-02',
       createdAt: START,
-      sourceRoute: 'research',
-      targetRoute: 'research',
+      sourceRoute: 'refine',
+      targetRoute: 'refine',
       trigger: 'route_mismatch',
       reason: 'loop',
       evidenceIds: ['E-01'],
-      originPath: '.cruise/runs/research/origin.yaml',
+      originPath: '.cruise/runs/refine/origin.yaml',
     }),
     /source and target routes must differ|duplicate items/,
   );
@@ -345,13 +345,13 @@ test('Quick promotion target is derived by the shared semantic gate', () => {
   assert.deepEqual(promoted.semantic_reasons, ['root_cause_unknown']);
 });
 
-test('Goal handoff preserves exact separate activation authority', () => {
+test('Goal handoff preserves exact combined activation authority', () => {
   const handoff = createHandoff({
     id: 'HO-06',
     createdAt: START,
     sourceRoute: 'refine',
     targetRoute: 'goal',
-    trigger: 'semantic_promotion',
+    trigger: 'explicit_user_request',
     reason: 'Durable recovery and multiple slices became necessary.',
     semanticReasons: ['durable_continuation_required'],
     evidenceIds: ['E-06'],
@@ -360,7 +360,7 @@ test('Goal handoff preserves exact separate activation authority', () => {
   assert.equal(handoff.authorizes_goal_activation, false);
   assert.equal(
     handoff.goal_activation_requirement,
-    'separate_Approve_Plan_then_Start_Cruise_required',
+    'combined_Plan_and_Goal_Approve_required',
   );
 });
 
@@ -376,12 +376,12 @@ test('checked-in YAML schemas parse and validate emitted records', async () => {
   const handoff = createHandoff({
     id: 'HO-01',
     createdAt: START,
-    sourceRoute: 'research',
+    sourceRoute: 'quick',
     targetRoute: 'refine',
-    trigger: 'research_implementation',
+    trigger: 'explicit_user_request',
     reason: 'Recommendation complete; implementation requires an approved finite plan.',
     evidenceIds: ['E-01'],
-    originPath: '.cruise/runs/research/origin.yaml',
+    originPath: '.cruise/runs/quick/origin.yaml',
   });
   assertYamlSchema(parseYaml(stringifyYaml(evidence)), evidenceSchema, {
     name: 'evidence fixture',

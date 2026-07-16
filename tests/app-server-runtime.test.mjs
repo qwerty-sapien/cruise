@@ -26,9 +26,12 @@ test('isolates writable app-server state while retaining the required Codex cont
   await writeFile(join(sourceHome, 'installation_id'), 'test-installation\n');
   await writeFile(join(sourceHome, 'agents', 'cruise_l1.toml'), 'name = "worker"\n');
   await writeFile(join(sourceHome, 'accounts', 'registry.json'), '{"active":"test"}\n');
-  await writeFile(join(sourceHome, 'rules', 'cruise-worker.rules'), 'prefix_rule(pattern=["cruise", "worker"], decision="allow")\n');
+  await writeFile(join(sourceHome, 'rules', 'worker.rules'), 'prefix_rule(pattern=["cruise", "worker"], decision="allow")\n');
 
-  const runtime = await createIsolatedAppServerRuntime({ codexHome: sourceHome });
+  const runtime = await createIsolatedAppServerRuntime({
+    codexHome: sourceHome,
+    runtimeRoot: join(sourceHome, 'app-run'),
+  });
   assert.notEqual(runtime.codexHome, sourceHome);
   assert.equal(runtime.spawnOptions.env.CODEX_HOME, runtime.codexHome);
   assert.equal(await readFile(join(runtime.codexHome, 'config.toml'), 'utf8'), 'model = "test"\n');
@@ -36,7 +39,7 @@ test('isolates writable app-server state while retaining the required Codex cont
   assert.equal(await readFile(join(runtime.codexHome, 'agents', 'cruise_l1.toml'), 'utf8'), 'name = "worker"\n');
   assert.equal(await readFile(join(runtime.codexHome, 'accounts', 'registry.json'), 'utf8'), '{"active":"test"}\n');
   assert.equal(
-    await readFile(join(runtime.codexHome, 'rules', 'cruise-worker.rules'), 'utf8'),
+    await readFile(join(runtime.codexHome, 'rules', 'worker.rules'), 'utf8'),
     'prefix_rule(pattern=["cruise", "worker"], decision="allow")\n',
   );
 
@@ -88,6 +91,7 @@ test('worker runtime preserves inherited plugins, Apps, MCP servers, and guardra
   const runtime = await createIsolatedAppServerRuntime({
     codexHome: sourceHome,
     extensionProfile: 'worker',
+    runtimeRoot: join(sourceHome, 'worker-run'),
   });
   t.after(() => runtime.dispose());
   assert.deepEqual(runtime.extensionPolicy, {
@@ -116,6 +120,7 @@ test('Doctor discovery runtime keeps the full inherited Codex configuration', as
   const runtime = await createIsolatedAppServerRuntime({
     codexHome: sourceHome,
     extensionProfile: 'doctor-discovery',
+    runtimeRoot: join(sourceHome, 'doctor-run'),
   });
   t.after(() => runtime.dispose());
   assert.equal(

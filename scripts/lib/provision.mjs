@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants, realpathSync } from 'node:fs';
 import {
   chmod,
@@ -12,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   assessProvisionInstallCommand,
   capabilityRequestAuthorityDigest,
@@ -103,7 +103,7 @@ const CANDIDATE_ACTIONS = new Set([
   'block',
 ]);
 const SAFE_ID = /^CAP-[A-Z0-9][A-Z0-9-]*$/;
-const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_RUN_ID = /^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const SENSITIVE_KEY =
   /(?:^|[_-])(?:api[_-]?key|authorization|cookie|credential|password|passphrase|private[_-]?key|secret|session|token)(?:$|[_-])/i;
@@ -1239,7 +1239,7 @@ async function readBoundedRootStateFile(root, path, {
 }
 
 async function atomicWrite(path, content) {
-  const temporary = `${path}.tmp-${randomUUID()}`;
+  const temporary = join(dirname(path), '.prov-stage');
   try {
     await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     await rename(temporary, path);
@@ -1254,7 +1254,7 @@ async function atomicWrite(path, content) {
 }
 
 async function immutableAtomicWrite(path, content) {
-  const temporary = `${path}.tmp-${randomUUID()}`;
+  const temporary = join(dirname(path), '.prov-link');
   try {
     await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     await link(temporary, path);
@@ -1316,8 +1316,8 @@ export class ProvisionStateStore {
       authJobs,
       authState,
       exclude: join(skills, 'exclude'),
-      rejected: join(internal, 'rejected-capabilities.yaml'),
-      capabilities: join(internal, 'capabilities.yaml'),
+      rejected: join(internal, 'rejected.yaml'),
+      capabilities: join(internal, 'caps.yaml'),
     };
   }
 
@@ -1415,7 +1415,7 @@ export class ProvisionStateStore {
   }
 
   async saveAuthJobState(state) {
-    if (!isPlainObject(state) || !/^AUTH-[0-9]{3,}$/u.test(state.id ?? '') ||
+    if (!isPlainObject(state) || !/^AUTH-[0-9]{3,5}$/u.test(state.id ?? '') ||
         !SAFE_ID.test(state.capability_id ?? '') || state.kind !== 'cruise_auth_job_state' ||
         !['running', 'failed', 'unconfirmed', 'succeeded', 'waiting_auth', 'cancelled', 'timed_out'].includes(state.status)) {
       throw new ProvisionValidationError('Authentication job state is invalid.');
@@ -1461,8 +1461,10 @@ export class ProvisionStateStore {
     const contractBinding = assertRunMatchesProvisionContract(run);
     const safe = sanitizeProvisionRecord(run);
     const paths = await this._paths();
-    const path = join(paths.runs, `${run.run_id}.yaml`);
-    const contractPath = join(paths.runs, `${run.run_id}.contract.yaml`);
+    const runDirectory = join(paths.runs, run.run_id);
+    await ensureRealDirectory(runDirectory);
+    const path = join(runDirectory, 'state.yaml');
+    const contractPath = join(runDirectory, 'contract.yaml');
     const contractSerialized = stringifyProvisionYaml(contractBinding.contract);
     if (Buffer.byteLength(contractSerialized, 'utf8') > PROVISION_RUN_STATE_MAX_BYTES) {
       throw new ProvisionValidationError('Provision run contract exceeds the bounded artifact byte budget.');
@@ -1493,8 +1495,9 @@ export class ProvisionStateStore {
       throw new ProvisionValidationError('Invalid provision run id.');
     }
     const paths = await this._paths();
-    const path = join(paths.runs, `${runId}.yaml`);
-    const contractPath = join(paths.runs, `${runId}.contract.yaml`);
+    const runDirectory = join(paths.runs, runId);
+    const path = join(runDirectory, 'state.yaml');
+    const contractPath = join(runDirectory, 'contract.yaml');
     const run = parseProvisionYaml(await readBoundedRootStateFile(this.root, path, {
       maxBytes: PROVISION_RUN_STATE_MAX_BYTES,
       label: 'Cruise provision run state',

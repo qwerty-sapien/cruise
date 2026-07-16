@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { resolveCodexHome } from './agent-config.mjs';
 
-export const WORKER_HOST_RULE_FILE = 'cruise-worker.rules';
+export const WORKER_HOST_RULE_FILE = 'worker.rules';
 export const LEGACY_WORKER_HOST_RULE = 'prefix_rule(pattern=["cruise", "worker"], decision="allow")\n';
 
 export function renderWorkerHostRule(entrypoint) {
@@ -95,7 +95,7 @@ export async function installWorkerHostRule({ codexHome = null, entrypoint } = {
     throw new Error(`${path} already exists but is not the exact Cruise-managed rule; remove or reconcile it manually.`);
   }
 
-  const temporary = `${path}.${process.pid}.tmp`;
+  const temporary = join(dirname(path), '.rule-stage');
   let handle = null;
   try {
     handle = await open(temporary, 'wx', 0o600);

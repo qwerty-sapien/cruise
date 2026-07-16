@@ -27,13 +27,20 @@ const BUILD_IDENTIFIER = /^(PRJ|M|R|AC|D|Q|P|RSK|C|QI)-(\d{2,})$/u;
 const IDENTIFIER_IN_TEXT = /(?:^|[^A-Za-z0-9_-])((?:PRJ|M|R|AC|D|Q|P|RSK|C|QI)-\d{2,})(?![A-Za-z0-9_-])/gmu;
 const REGISTRY_KIND = 'cruise_build_id_registry';
 const SNAPSHOT_KIND = 'cruise_build_id_registry_snapshot';
-const REGISTRY_HISTORY_DIRECTORY = 'ID-REGISTRY-HISTORY';
-const REGISTRY_HEAD_FILE = 'ID-REGISTRY-HEAD.yaml';
-const REGISTRY_PENDING_FILE = 'ID-REGISTRY-PENDING.yaml';
-const REGISTRY_LOCK_FILE = 'ID-REGISTRY.yaml.lock';
-const REGISTRY_COMMITMENTS_DIRECTORY = 'ID-REGISTRY-COMMITMENTS';
-const REGISTRY_HISTORY_ENTRY = /^REV-(\d{12})-([a-f0-9]{64})\.yaml$/u;
-const REGISTRY_COMMITMENT_ENTRY = /^REV-(\d{12})-([a-f0-9]{64})\.yaml$/u;
+const REGISTRY_HISTORY_DIRECTORY = 'id-hist';
+const REGISTRY_HEAD_FILE = 'id-head.yaml';
+const REGISTRY_PENDING_FILE = 'id-pend.yaml';
+const REGISTRY_LOCK_FILE = 'ids.yaml.lock';
+const REGISTRY_COMMITMENTS_DIRECTORY = 'id-locks';
+const REGISTRY_HISTORY_ENTRY = /^id-(\d{1,6})\.yaml$/u;
+const REGISTRY_COMMITMENT_ENTRY = /^id-(\d{1,6})\.yaml$/u;
+
+function registryEntryName(revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0 || revision > 999_999) {
+    throw new Error('Build ID registry revision exceeds the informative filename range');
+  }
+  return `id-${revision}.yaml`;
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const COMMITTED_REGISTRY_HEADS = new Map();
 
@@ -73,7 +80,7 @@ export const BUILD_ID_REGISTRY_SCHEMA = Object.freeze({
 export function buildIdRegistryPath(repositoryRoot, projectId) {
   const root = resolve(nonEmpty(repositoryRoot, 'repositoryRoot'));
   if (!PROJECT_ID.test(projectId)) throw new TypeError('projectId must be a PRJ-XX identifier');
-  return join(root, '.cruise', 'project', 'ID-REGISTRY.yaml');
+  return join(root, '.cruise', 'project', 'ids.yaml');
 }
 
 const NAMESPACE_ORDER = new Map(BUILD_ID_NAMESPACES.map((namespace, index) => [namespace, index]));
@@ -1590,11 +1597,11 @@ async function registryLocations(
     const requestedDirectoryPath = resolve(dirname(absoluteInput));
     const requestedDirectory = await realpath(dirname(absoluteInput));
     if (
-      basename(absoluteInput) !== 'ID-REGISTRY.yaml' ||
+      basename(absoluteInput) !== 'ids.yaml' ||
       (requestedDirectoryPath !== expectedDirectory &&
         requestedDirectoryPath !== recordedExpectedDirectory) ||
       requestedDirectory !== canonicalDirectory ||
-      resolve(canonicalDirectory, 'ID-REGISTRY.yaml') !==
+      resolve(canonicalDirectory, 'ids.yaml') !==
         resolve(requestedDirectory, basename(absoluteInput))
     ) {
       throw new Error('Build ID registry path differs from the immutable Origin repository root');
@@ -1603,15 +1610,15 @@ async function registryLocations(
     canonicalDirectory = await realpath(dirname(absoluteInput));
   }
   const absolute = resolve(canonicalDirectory, basename(absoluteInput));
-  if (basename(absolute) !== 'ID-REGISTRY.yaml') {
-    throw new Error('Build ID registry must use the exact ID-REGISTRY.yaml filename');
+  if (basename(absolute) !== 'ids.yaml') {
+    throw new Error('Build ID registry must use the exact ids.yaml filename');
   }
   try {
     const current = await lstat(absolute);
     if (current.isSymbolicLink() || (!current.isFile() && !current.isDirectory())) {
-      throw new Error('ID-REGISTRY.yaml is not a safe regular path');
+      throw new Error('ids.yaml is not a safe regular path');
     }
-    if (current.isDirectory()) throw new Error('ID-REGISTRY.yaml cannot be a directory');
+    if (current.isDirectory()) throw new Error('ids.yaml cannot be a directory');
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
@@ -1719,7 +1726,7 @@ function headPayload(head) {
 function createRegistryHead(validated, previousHead = null, anchorRevision = null) {
   const { entry } = validated;
   const anchor = anchorRevision ?? entry.revision;
-  const generation = `REV-${String(entry.revision).padStart(12, '0')}-${entry.registry_sha256}.yaml`;
+  const generation = registryEntryName(entry.revision);
   const payload = {
     schema_version: 1,
     kind: 'cruise_build_id_registry_head',
@@ -1795,7 +1802,7 @@ async function readRegistryHistory(locations, { allowMissing = false, allowEmpty
     if (!match || !entry.isFile() || entry.isSymbolicLink()) {
       throw new Error('Build ID registry history contains an unapproved entry');
     }
-    return { entry, revision: Number(match[1]), registry_sha256: match[2] };
+    return { entry, revision: Number(match[1]) };
   }).sort((left, right) => left.revision - right.revision);
   const anchorRevision = parsedNames[0].revision;
   const validated = [];
@@ -1813,8 +1820,7 @@ async function readRegistryHistory(locations, { allowMissing = false, allowEmpty
     const record = parseYaml(bytes.toString('utf8'));
     const item = validateRegistryHistoryEntry(record, previous);
     if (
-      item.entry.revision !== candidate.revision ||
-      item.entry.registry_sha256 !== candidate.registry_sha256
+      item.entry.revision !== candidate.revision
     ) {
       throw new Error('Build ID registry history filename differs from its exact entry');
     }
@@ -1860,9 +1866,10 @@ function registryCommitmentLocations(locations, registryBinding) {
   if (!PROJECT_ID.test(registryBinding.project_id)) {
     throw new Error('registry commitment project_id is invalid');
   }
-  const key = digest(
-    `${registryBinding.origin_identity_sha256}\0${registryBinding.project_id}`,
-  );
+  const key = registryBinding.project_id.toLowerCase();
+  if (key.length > 15 || !/^prj-\d{2,}$/u.test(key)) {
+    throw new Error('registry commitment project namespace must be informative and at most 15 characters');
+  }
   const directory = join(locations.cruise_directory, REGISTRY_COMMITMENTS_DIRECTORY);
   return {
     key,
@@ -1877,7 +1884,7 @@ function registryCommitmentPayload(head, previousCommitment = null) {
     kind: 'cruise_build_id_registry_revision_commitment',
     origin_identity_sha256: head.origin_identity_sha256,
     project_id: head.project_id,
-    registry_path: '.cruise/project/ID-REGISTRY.yaml',
+    registry_path: '.cruise/project/ids.yaml',
     anchor_revision: head.anchor_revision,
     revision: head.revision,
     generation: head.generation,
@@ -1919,7 +1926,7 @@ function validateRegistryCommitment(
     commitment.kind !== 'cruise_build_id_registry_revision_commitment' ||
     commitment.origin_identity_sha256 !== registryBinding.origin_identity_sha256 ||
     commitment.project_id !== registryBinding.project_id ||
-    commitment.registry_path !== '.cruise/project/ID-REGISTRY.yaml' ||
+    commitment.registry_path !== '.cruise/project/ids.yaml' ||
     !Number.isSafeInteger(commitment.anchor_revision) ||
     commitment.anchor_revision < 0 ||
     !Number.isSafeInteger(commitment.revision) ||
@@ -2021,7 +2028,7 @@ async function readRegistryCommitments(
     if (!match || !entry.isFile() || entry.isSymbolicLink()) {
       throw new Error('Build ID registry commitment lineage contains an unapproved entry');
     }
-    return { name: entry.name, revision: Number(match[1]), head_sha256: match[2] };
+    return { name: entry.name, revision: Number(match[1]) };
   }).sort((left, right) => left.revision - right.revision);
   const anchorRevision = names[0].revision;
   const entries = [];
@@ -2041,7 +2048,6 @@ async function readRegistryCommitments(
     );
     if (
       commitment.revision !== candidate.revision ||
-      commitment.head_sha256 !== candidate.head_sha256 ||
       commitment.anchor_revision !== anchorRevision
     ) {
       throw new Error('Build ID registry commitment filename differs from its exact entry');
@@ -2118,12 +2124,9 @@ async function publishRegistryCommitment(
     ...payload,
     commitment_sha256: objectDigest(payload),
   });
-  const name = `REV-${String(head.revision).padStart(12, '0')}-${head.head_sha256}.yaml`;
+  const name = registryEntryName(head.revision);
   const finalPath = join(commitmentLocations.lineage_directory, name);
-  const temporaryPath = join(
-    commitmentLocations.directory,
-    `.${commitmentLocations.key}.${name}.${process.pid}.${randomUUID()}.tmp`,
-  );
+  const temporaryPath = join(commitmentLocations.directory, '.commit-stage');
   const bytes = Buffer.from(stringifyYaml(commitment), 'utf8');
   try {
     await writeNewFile(temporaryPath, bytes, 0o400);
@@ -2222,10 +2225,7 @@ async function atomicReplaceRegistryFile({
   committedStep = null,
 }) {
   const identity = await directoryIdentity(locations.directory, 'Build ID registry directory');
-  const temporaryPath = join(
-    locations.directory,
-    `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`,
-  );
+  const temporaryPath = join(locations.directory, '.id-stage');
   let prepared = false;
   try {
     await writeNewFile(temporaryPath, bytes, 0o600);
@@ -2256,7 +2256,7 @@ function lockMetadata(registry) {
     kind: 'cruise_build_id_registry_writer_lock',
     origin_identity_sha256: registry.origin_identity_sha256,
     project_id: registry.project_id,
-    registry_path: 'ID-REGISTRY.yaml',
+    registry_path: 'ids.yaml',
     pid: process.pid,
     nonce: randomUUID(),
     acquired_at: new Date().toISOString(),
@@ -2279,7 +2279,7 @@ function validateLockMetadata(record, registry) {
     record.kind !== 'cruise_build_id_registry_writer_lock' ||
     record.origin_identity_sha256 !== registry.origin_identity_sha256 ||
     record.project_id !== registry.project_id ||
-    record.registry_path !== 'ID-REGISTRY.yaml' ||
+    record.registry_path !== 'ids.yaml' ||
     !Number.isSafeInteger(record.pid) ||
     record.pid <= 0 ||
     typeof record.nonce !== 'string' ||
@@ -2306,10 +2306,7 @@ async function acquireRegistryLock(locations, registry) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const metadata = lockMetadata(registry);
     const bytes = Buffer.from(stringifyYaml(metadata), 'utf8');
-    const temporaryPath = join(
-      locations.directory,
-      `.ID-REGISTRY.lock.${process.pid}.${metadata.nonce}.tmp`,
-    );
+    const temporaryPath = join(locations.directory, '.id-lock-stage');
     await writeNewFile(temporaryPath, bytes, 0o600);
     try {
       await assertDirectoryIdentity(locations.directory, directory, 'Build ID registry directory');
@@ -2346,13 +2343,13 @@ async function acquireRegistryLock(locations, registry) {
       directory,
       'Build ID registry directory',
     );
-    const quarantine = `${locations.lock_path}.${existing.nonce}.stale`;
+    const quarantine = join(locations.directory, '.id-lock-stale');
     await rename(locations.lock_path, quarantine);
     await rm(quarantine, { force: true });
     await rm(
       join(
         locations.directory,
-        `.ID-REGISTRY.lock.${existing.pid}.${existing.nonce}.tmp`,
+        '.id-lock-stage',
       ),
       { force: true },
     );
@@ -2451,7 +2448,7 @@ async function publishRegistryHistoryEntry(
   { faultInjector = null } = {},
 ) {
   const historyIdentity = await ensureRegistryHistoryDirectory(locations);
-  const name = `REV-${String(validated.entry.revision).padStart(12, '0')}-${validated.entry.registry_sha256}.yaml`;
+  const name = registryEntryName(validated.entry.revision);
   const finalPath = join(locations.history_directory, name);
   const bytes = Buffer.from(stringifyYaml(validated.entry), 'utf8');
   const existing = await readNoFollowIfExists(finalPath, `Build ID registry history ${name}`);
@@ -2461,10 +2458,7 @@ async function publishRegistryHistoryEntry(
     }
     return;
   }
-  const temporaryPath = join(
-    locations.directory,
-    `.${REGISTRY_HISTORY_DIRECTORY}.${name}.${process.pid}.${randomUUID()}.tmp`,
-  );
+  const temporaryPath = join(locations.directory, '.id-hist-stage');
   try {
     await writeNewFile(temporaryPath, bytes, 0o400);
     await invokeRegistryFault(faultInjector, 'after_history_prepare');
@@ -2498,7 +2492,7 @@ async function materializeRegistryCommit(
     path: locations.absolute,
     bytes: validated.registry_bytes,
     locations,
-    label: 'ID-REGISTRY.yaml',
+    label: 'ids.yaml',
     faultInjector,
     preparedStep: 'after_registry_prepare',
     committedStep: 'after_registry_commit',
@@ -2532,7 +2526,7 @@ async function inspectManagedRegistry(
   registryBinding,
   { allowLegacy = true } = {},
 ) {
-  const registryBytes = await readNoFollowIfExists(locations.absolute, 'ID-REGISTRY.yaml');
+  const registryBytes = await readNoFollowIfExists(locations.absolute, 'ids.yaml');
   const headFile = await readRegistryHead(locations, { allowMissing: true });
   const history = await readRegistryHistory(locations, {
     allowMissing: true,
@@ -2571,7 +2565,7 @@ async function inspectManagedRegistry(
   }
   if (registryBytes !== null) {
     if (!registryBytes.equals(committed.registry_bytes)) {
-      throw new Error('ID-REGISTRY.yaml differs from its immutable committed history head');
+      throw new Error('ids.yaml differs from its immutable committed history head');
     }
   }
   return {
@@ -2592,7 +2586,7 @@ async function repairManagedRegistryMirrors(locations, managed) {
       path: locations.absolute,
       bytes: managed.registry_bytes,
       locations,
-      label: 'ID-REGISTRY.yaml recovery',
+      label: 'ids.yaml recovery',
     });
   }
   if (managed.head_present !== true) {
@@ -2657,13 +2651,13 @@ async function recoverRegistryPendingCommit(locations, registryForLock) {
   if (pending.new_generation !== expectedHead.generation) {
     throw new Error('Build ID registry pending generation differs from its candidate');
   }
-  const currentBytes = await readNoFollowIfExists(locations.absolute, 'ID-REGISTRY.yaml');
+  const currentBytes = await readNoFollowIfExists(locations.absolute, 'ids.yaml');
   if (
     currentBytes !== null &&
     !currentBytes.equals(validated.registry_bytes) &&
     !currentBytes.equals(previous?.registry_bytes ?? Buffer.alloc(0))
   ) {
-    throw new Error('ID-REGISTRY.yaml forked while a pending commit was durable');
+    throw new Error('ids.yaml forked while a pending commit was durable');
   }
   const currentHead = await readRegistryHead(locations, { allowMissing: true });
   if (
@@ -2730,7 +2724,7 @@ async function openRegistryState(locations, registryForLock, { migrateLegacy = f
   if (current?.legacy && migrateLegacy) current = await migrateLegacyRegistry(locations, current);
   if (current != null && !current.legacy) current = await repairManagedRegistryMirrors(locations, current);
   if (current == null && knownCommittedHead(locations, registryForLock) !== null) {
-    throw new Error('ID-REGISTRY.yaml and its durable immutable history were deleted behind the live committed head');
+    throw new Error('ids.yaml and its durable immutable history were deleted behind the live committed head');
   }
   if (current?.legacy && knownCommittedHead(locations, current.registry) !== null) {
     throw new Error('Build ID registry immutable history was deleted behind the live committed head');
@@ -2751,14 +2745,14 @@ export async function readBuildIdRegistry(
     initialBuildOriginAttestation,
     originRecord,
   });
-  const raw = await readNoFollowIfExists(locations.absolute, 'ID-REGISTRY.yaml');
+  const raw = await readNoFollowIfExists(locations.absolute, 'ids.yaml');
   let registryForLock;
   if (raw !== null) {
     registryForLock = parseYaml(raw.toString('utf8'));
     validateBuildIdRegistry(registryForLock, { initialBuildOriginAttestation, originRecord });
   } else {
     if (initialBuildOriginAttestation === null || originRecord === null) {
-      throw new Error('ID-REGISTRY.yaml is missing and cannot be recovered without Origin authority');
+      throw new Error('ids.yaml is missing and cannot be recovered without Origin authority');
     }
     const binding = assertOriginBinding(initialBuildOriginAttestation, originRecord);
     registryForLock = {

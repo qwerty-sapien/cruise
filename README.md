@@ -1,6 +1,6 @@
 # Cruise
 
-Cruise offers a concise set of six Codex skills that covers all your coding needs - it ensures tightly-scoped modifications by preserving the original request, decomposing it into subtasks, enforcing long-running iterative improvement on the repo in alignment with your intention. With the release of GPT-5.6, it now has seven launcher-managed worker levels, an optional terminal client for the full native Goal workflow. Note: This plugin is only codex-compatible.
+Cruise is a Codex-only development harness with five intent-based skills. It preserves the original request, scales the workflow to the work, isolates bounded workers, and requires current evidence before completion. Seven launcher-managed worker levels and an optional terminal client support everything from one small edit to durable Goal execution.
 
 ## Choose a skill
 
@@ -10,7 +10,6 @@ Know the exact small change?           cruise:quick
 Need a finite plan before coding?      cruise:refine
 Need durable consequential execution?  cruise:goal
 Have a failure with unknown cause?     cruise:debug
-Need evidence before deciding?         cruise:research
 ```
 
 The lanes are mutually exclusive by primary intent and what is already known:
@@ -20,9 +19,8 @@ The lanes are mutually exclusive by primary intent and what is already known:
 | Starting a project or milestone | `$cruise:build` | An approved foundation, phase DAG, and persistent queue—no product implementation |
 | Making an exact, low-risk change | `$cruise:quick` | The smallest scoped edit with focused proof |
 | Resolving a finite outcome that needs a plan | `$cruise:refine` | A few material questions, one approved plan, and current-thread execution |
-| Running consequential or recovery-sensitive work | `$cruise:goal` | Durable execution behind separate Plan and Start approvals |
+| Running consequential or recovery-sensitive work | `$cruise:goal` | Durable execution behind one combined Plan-and-Goal approval |
 | Investigating a failure with an unknown cause | `$cruise:debug` | A proven cause and the smallest verified repair |
-| Gathering evidence before deciding | `$cruise:research` | A read-only, source-backed brief |
 
 ### Nearest handoff
 
@@ -31,7 +29,8 @@ The lanes are mutually exclusive by primary intent and what is already known:
 | Unknown-cause symptom | Debug |
 | Material design or product decision | Refine |
 | Consequential, cross-system, or durable work | Goal |
-| Missing evidence or feasibility | Research |
+| One missing fact inside Build, Quick, Refine, Debug, or Goal | Private Research Cell; keep the current lane |
+| Evidence-only inquiry | Native Codex or GitHub review |
 | New project, foundation, or milestone | Build |
 
 Cruise keeps these lanes mutually exclusive by primary intent and by what is already known. The retired public Review route remains readable in legacy schema-v1 records but cannot start or resume; use native Codex or GitHub review instead.
@@ -77,8 +76,12 @@ Use $cruise:quick to make this exact low-risk change.
 Use $cruise:refine to plan and implement this bounded outcome.
 Use $cruise:goal to execute this compatibility migration.
 Use $cruise:debug to find and repair this intermittent failure.
-Use $cruise:research to compare these migration options before we choose.
 ```
+
+The private **Research helper** is available to Build, Refine, Debug, and Goal. It resolves one
+bounded worker question and returns an evidence card that the current workflow immediately maps
+into its plan, hypothesis, or ready node. It has no command, skill manifest, route, second run,
+or product-edit authority.
 
 ### From the terminal
 
@@ -134,19 +137,32 @@ Build selects one of two evidence-based modes:
 
 Discovery runs only for missing or conflicting readiness evidence. Approval locks the displayed contract and queue bytes but authorizes neither product implementation nor Goal activation.
 
-### Goal requires two distinct approvals
+### Goal needs two decisions
 
-1. Inspect and resolve the highest-impact open decision.
-2. Prepare the inactive `.cruise/goal/` artifacts.
-3. Select **Approve Plan** to lock the implementation plan.
-4. Separately select **Start Cruise** to authorize activation.
-5. Recheck the locked bytes, set and verify native Goal state, then execute.
+| Decision | What Cruise shows | Choices |
+| --- | --- | --- |
+| 1. Execution envelope | Capabilities, authentication, permissions, and autonomy | **Approve all**, **Select some**, **Reject all**, or **Discuss** |
+| 2. Combined contract | One inactive PLAN.md + GOAL.md candidate, with excerpts, links, and bound revisions | **Approve both**, **Refine**, or **Reject both** |
+
+After both decisions, Cruise rechecks the complete-suite snapshot, sets and verifies native Goal state, then executes. When GUI Plan mode is unavailable, the terminal client presents the same combined contract deterministically.
 
 For the complete Build queue, receipt, controller, and recovery contracts, see [Build and Goal](docs/BUILD-AND-GOAL.md).
 
 ## Worker policy
 
 The root agent coordinates every run. Substantive mapping, planning, implementation, diagnosis, research, synthesis, and independent verification happen in launcher-managed worker tasks.
+
+Cruise gives naming one narrow worker boundary. Before a run exists, `cruise_l1` assigns the semantic repository namespace and run name. Fixed protocol artifacts keep stable, purpose-based names.
+
+| Naming rule | Result |
+| --- | --- |
+| Informative | A path reveals its purpose without opening the file |
+| Short | Each Cruise-assigned generated component is at most 15 characters |
+| Deterministic | Fixed protocol files use names such as `run-name.yaml`, `map-pkt.yaml`, `map-facts.yaml`, `drift.yaml`, `admit.yaml`, and `done.yaml` |
+| Human-facing | UUIDs, hashes, timestamps, PIDs, and random suffixes never become generated path components |
+| Integrity-safe | SHA-256 remains inside records and receipts; it does not double as a filename |
+
+The `begin` runtime does not accept a caller-selected run directory. External host protocols may still require their own filenames; Cruise does not rename those files or use them as Cruise artifact namespaces.
 
 ### Levels
 
@@ -160,7 +176,7 @@ The root agent coordinates every run. Substantive mapping, planning, implementat
 | `6` | `cruise_l6` | `sol-X` | `gpt-5.6-sol` | `xhigh` |
 | `7` | `cruise_l7` | `sol-U` | `gpt-5.6-sol` | `ultra` |
 
-Level `1` is coordination-only. Worker choice never widens scope, permissions, write authority, effects, or cost boundaries.
+Level `1` is naming-only and read-only. It cannot inspect the repository or perform substantive work. Worker choice never widens scope, permissions, write authority, effects, or cost boundaries.
 
 ### Classes
 

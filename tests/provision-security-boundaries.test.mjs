@@ -16,7 +16,7 @@ function capabilityRequest({ id = 'CAPREQ-901', permissions = [], repositoryRoot
   return policy.createCapabilityRequest({
     id,
     originatingRun: 'security-boundary-run',
-    publicSkill: 'research',
+    publicSkill: 'debug',
     originSha256: ORIGIN_SHA256,
     repositoryRoot,
     permissionDecisions: [{
@@ -559,19 +559,21 @@ test('provision state store rejects linked and oversized exclusion and rejection
   await writeFile(join(secondRoot, '.cruise', 'skills', 'exclude'), Buffer.alloc((256 * 1024) + 1, 0x61));
   await assert.rejects(secondStore.loadExclusions(), /bounded regular non-symlink file/iu);
   await writeFile(
-    join(secondRoot, '.cruise', 'internal', 'rejected-capabilities.yaml'),
+    join(secondRoot, '.cruise', 'internal', 'rejected.yaml'),
     Buffer.alloc((1024 * 1024) + 1, 0x61),
   );
   await assert.rejects(secondStore.loadRejectedCapabilities(), /bounded regular non-symlink file/iu);
-  const rejectedPath = join(secondRoot, '.cruise', 'internal', 'rejected-capabilities.yaml');
+  const rejectedPath = join(secondRoot, '.cruise', 'internal', 'rejected.yaml');
   await unlink(rejectedPath);
-  const outsideRejected = join(outside, 'rejected-capabilities.yaml');
+  const outsideRejected = join(outside, 'rejected.yaml');
   await writeFile(outsideRejected, '{"schema_version":1,"kind":"cruise_rejected_capabilities","rejected":[]}\n');
   await symlink(outsideRejected, rejectedPath);
   await assert.rejects(secondStore.loadRejectedCapabilities(), /bounded regular non-symlink file|escapes/iu);
 
+  const oversizedRun = join(secondRoot, '.cruise', 'internal', 'provision-runs', 'oversized-run');
+  await mkdir(oversizedRun, { recursive: true });
   await writeFile(
-    join(secondRoot, '.cruise', 'internal', 'provision-runs', 'oversized-run.yaml'),
+    join(oversizedRun, 'state.yaml'),
     Buffer.alloc((4 * 1024 * 1024) + 1, 0x61),
   );
   await assert.rejects(
@@ -616,7 +618,7 @@ test('tmux auth transport re-reads the exact digest-bound job before constructin
     serverName: 'safe-mcp.server',
     requiredScopes: ['connector:read'],
   });
-  const provisionRunId = 'run-security-auth';
+  const provisionRunId = 'auth-sec';
   const candidateIdentity = 'official/safe-connector';
   const effectAuthorization = authAuthorization(
     request,

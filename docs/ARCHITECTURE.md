@@ -14,18 +14,16 @@ This page explains Cruise’s shared runtime: what becomes authoritative, where 
 
 ## Run lifecycle
 
-```text
-Doctor readiness
-  → immutable Origin
-  → foreign-diff baseline
-  → bounded semantic mapping
-  → deterministic route
-  → approvals / permissions / capability checks
-  → bounded worker attempts
-  → integration
-  → evidence audit
-  → terminal closeout
-```
+| Stage | Durable result |
+| ---: | --- |
+| 1 | Doctor verifies the installed runtime and worker host |
+| 2 | Level 1 assigns the repository and run namespaces |
+| 3 | Origin captures the exact request and repository baseline |
+| 4 | Drift monitoring starts before semantic work |
+| 5 | One bounded mapping produces one deterministic route |
+| 6 | Approval, permission, and capability gates admit work |
+| 7 | Bounded worker attempts produce attributable changes |
+| 8 | Integration and evidence audit determine closeout |
 
 Before any public skill creates run state, `cruise doctor --json` must verify:
 
@@ -34,7 +32,7 @@ Before any public skill creates run state, `cruise doctor --json` must verify:
 - the running `cruise` entrypoint; and
 - the exact host rule for that absolute entrypoint followed by `worker`.
 
-Origin and state are then created in the same run directory. The semantic-mapping packet is bound to immutable Origin identities and a level-2 worker.
+Origin and state are then created in the same run directory. The mapping packet is bound to immutable Origin identities and a level-2 worker.
 
 ## Origin and machine state
 
@@ -44,13 +42,18 @@ Cruise captures the full triggering message before it paraphrases or asks a ques
 
 ```text
 .cruise/runs/<run-id>/
+├── run-name.yaml
 ├── origin.yaml
-├── foreign-diff-guard.yaml
+├── drift.yaml
 ├── probe.yaml
+├── map-pkt.yaml
+├── map-facts.yaml
 ├── route.yaml
 ├── state.yaml
 └── evidence.yaml
 ```
+
+Some files appear only after their stage begins. A level-1 `repo.yaml` record pins the repository namespace under `.cruise/`.
 
 | Format | Use |
 | --- | --- |
@@ -61,6 +64,21 @@ Cruise captures the full triggering message before it paraphrases or asks a ques
 Build also has project and milestone Origins; Goal has `.cruise/goal/ORIGIN.yaml`.
 
 Stable identifiers—such as `G-XX`, `R-XX`, `AC-XX`, `P-XX`, `T-XX`, `E-XX`, `F-XX`, `H-XX`, and `RSK-XX`—are monotonic. Cruise does not silently reuse or renumber them.
+
+## Names and integrity
+
+Names are operational state, not decoration. An operator should be able to locate a run, understand an artifact's role, and recover the right authority without decoding an opaque token.
+
+| Concern | Cruise rule |
+| --- | --- |
+| Semantic namespaces | Level `1` assigns the repository and run names before run creation |
+| Protocol artifacts | Stable schema-owned names describe their role, for example `route.yaml`, `drift.yaml`, and `done.yaml` |
+| Length | Cruise-assigned generated path components are no longer than 15 characters |
+| Opaque identity | UUIDs, hash fragments, timestamps, PIDs, and random text are rejected as generated path names |
+| Integrity | Full hashes remain in signed or validated record fields, never in a path component |
+| Collision handling | The naming worker receives unavailable semantic names and must choose a different informative name |
+
+This separates a **semantic locator** from an **integrity binding**: the path is readable; the record proves which exact bytes it represents. Source files checked into Cruise and filenames mandated by Codex or another external protocol are outside this generated-artifact namespace.
 
 ## Repository drift protection
 
@@ -136,7 +154,7 @@ Retryable app-server errors remain pending while Codex reports a retry. Terminal
 
 Cruise selects an exact worker level for each substantive phase. The configured class provides an ordinary default; task cost, consequence, and evidence may justify a different level.
 
-- Level `1` is coordination-only.
+- Level `1` is a read-only naming worker. It assigns the repository namespace and run name, each limited to 15 informative characters, and cannot inspect or change the repository. Stable protocol filenames are schema-owned rather than regenerated on every run.
 - Worker pairs are checked against the live catalog.
 - Provider fallback is disabled.
 - The exact model and reasoning setting are supplied through typed app-server fields.
@@ -160,8 +178,9 @@ Cruise searches in this order:
 Automatic installation requires an inspectable, trusted, immutable version in local scope, satisfied permission and sandbox checks, no reusable secret, and a safe rollback story. Installer exit success is insufficient: a smoke check must verify identity, version, and usable scope.
 
 ```text
-.cruise/internal/capabilities.yaml
-.cruise/internal/provision-runs/<run-id>.yaml
+.cruise/internal/caps.yaml
+.cruise/internal/provision-runs/<run-name>/state.yaml
+.cruise/internal/provision-runs/<run-name>/contract.yaml
 ```
 
 If authentication is required, the affected node enters `waiting_auth`. Cruise gives one host-native action and never asks for a reusable secret in chat, arguments, or artifacts. Only descendants of that node wait; independent work may continue if the host actually schedules it. Resume revalidates identity and granted scope.

@@ -7,6 +7,7 @@ import {
   lstat,
   mkdir,
   readFile,
+  realpath,
   rename,
   symlink,
   unlink,
@@ -52,6 +53,18 @@ function resignInventory(inventory) {
   return inventory;
 }
 
+async function nameRepository(root) {
+  await mkdir(join(root, '.cruise'), { recursive: true });
+  await writeYamlFile(join(root, '.cruise', 'repo.yaml'), {
+    schema_version: 1,
+    kind: 'cruise_repository_name',
+    name: 'guard-repo',
+    repository_root: await realpath(root),
+    assigned_by: 'cruise_l1',
+    worker_level: 1,
+  });
+}
+
 async function fixture({ dirty = false, beforeGuard = null } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'cruise-foreign-diff-'));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
@@ -66,7 +79,8 @@ async function fixture({ dirty = false, beforeGuard = null } = {}) {
     await writeFile(join(root, 'foreign.txt'), 'accepted dirty baseline\n');
     await writeFile(join(root, 'untracked.txt'), 'accepted untracked baseline\n');
   }
-  const statePath = join(root, '.cruise', 'runs', 'run-01', 'foreign-diff-guard.yaml');
+  await nameRepository(root);
+  const statePath = join(root, '.cruise', 'runs', 'run-01', 'drift.yaml');
   await createForeignDiffGuard({
     statePath,
     runId: 'run-01',
@@ -127,7 +141,8 @@ test('non-Git tree monitoring applies the same product-scope boundary', async ()
   await writeFile(join(root, 'app.txt'), 'product baseline\n');
   await writeFile(join(root, '.DS_Store'), 'host metadata\n');
   await writeFile(join(root, 'pkg', '__pycache__', 'module.pyc'), 'cache\n');
-  const statePath = join(root, '.cruise', 'runs', 'run-tree', 'foreign-diff-guard.yaml');
+  await nameRepository(root);
+  const statePath = join(root, '.cruise', 'runs', 'run-tree', 'drift.yaml');
   await createForeignDiffGuard({
     statePath,
     runId: 'run-tree',
@@ -766,7 +781,8 @@ test('dirty submodules fail closed instead of hiding nested byte changes', async
   execFileSync('git', ['config', '-f', '.gitmodules', 'submodule.sub.ignore', 'all'], { cwd: parent });
   execFileSync('git', ['config', 'diff.ignoreSubmodules', 'all'], { cwd: parent });
   execFileSync('git', ['commit', '-qam', 'parent baseline'], { cwd: parent });
-  const statePath = join(parent, '.cruise', 'runs', 'run-01', 'foreign-diff-guard.yaml');
+  await nameRepository(parent);
+  const statePath = join(parent, '.cruise', 'runs', 'run-01', 'drift.yaml');
   await createForeignDiffGuard({
     statePath,
     runId: 'run-01',
@@ -790,7 +806,8 @@ test('directory metadata changes pause as real drift', async () => {
   await writeFile(join(root, 'src', 'tracked.txt'), 'baseline\n');
   execFileSync('git', ['add', '.'], { cwd: root });
   execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: root });
-  const statePath = join(root, '.cruise', 'runs', 'run-01', 'foreign-diff-guard.yaml');
+  await nameRepository(root);
+  const statePath = join(root, '.cruise', 'runs', 'run-01', 'drift.yaml');
   await createForeignDiffGuard({
     statePath,
     runId: 'run-01',

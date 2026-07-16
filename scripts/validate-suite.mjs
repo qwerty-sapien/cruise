@@ -6,8 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   APPROVED_ARTIFACTS,
-  isApprovePlanChoice,
-  isStartCruiseChoice,
+  isApprovePlanGoalChoice,
+  isPlanGoalReviewOptions,
   ORIGIN_ARTIFACT,
   PLAN_ARTIFACTS,
 } from './lib/goal-contract.mjs';
@@ -38,7 +38,6 @@ export const EXPECTED_PUBLIC_SKILLS = Object.freeze([
   'refine',
   'goal',
   'debug',
-  'research',
 ]);
 
 export const QUICK_HARD_GATE_FIXTURES = Object.freeze([
@@ -72,7 +71,7 @@ const DESCRIPTION_CONTRACTS = Object.freeze({
   build: {
     positive: [/durable/iu, /project foundation|milestone/iu, /contract|roadmap/iu],
     negative: [/do not use/iu],
-    neighbors: ['quick', 'refine', 'goal', 'debug', 'research'],
+    neighbors: ['quick', 'refine', 'goal', 'debug'],
     handoff: /hand|later|execution/iu,
   },
   quick: {
@@ -98,12 +97,6 @@ const DESCRIPTION_CONTRACTS = Object.freeze({
     negative: [/do not use/iu],
     neighbors: ['refine', 'goal'],
     handoff: /neighbor|handoff|becomes a durable|cross-system/iu,
-  },
-  research: {
-    positive: [/acquire|reconcile/iu, /evidence/iu, /decision brief|recommendation/iu, /without product-code edits|without.*product.*edit/iu],
-    negative: [/do not use/iu],
-    neighbors: ['build', 'refine', 'goal'],
-    handoff: /hand implementation|after the recommendation|handoff/iu,
   },
 });
 
@@ -230,7 +223,7 @@ function assertDescriptions(skillRecords) {
 
 function assertSkillMetadata(root, skillsRoot) {
   const discovered = readdirSync(skillsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && statSync(join(skillsRoot, entry.name, 'SKILL.md'), { throwIfNoEntry: false })?.isFile())
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right, 'en'));
   const expected = [...EXPECTED_PUBLIC_SKILLS].sort((left, right) => left.localeCompare(right, 'en'));
@@ -366,7 +359,7 @@ function assertCheckedInYamlParses(root) {
 
 function assertSchemaContracts(root) {
   if (JSON.stringify(PUBLIC_ROUTES) !== JSON.stringify(EXPECTED_PUBLIC_SKILLS)) {
-    throw new Error(`routing public routes differ from the six public skills: ${PUBLIC_ROUTES.join(', ')}`);
+    throw new Error(`routing public routes differ from the five public skills: ${PUBLIC_ROUTES.join(', ')}`);
   }
   if (ROUTE_CONFIDENCE_THRESHOLD !== 0.85) throw new Error('routing confidence threshold must be 0.85');
   if (!CLASSIFIER_OUTPUT_SCHEMA?.properties?.route?.enum) throw new Error('route classifier schema is absent');
@@ -461,22 +454,18 @@ function assertQuickGates() {
 
 function assertGoalContract(root) {
   if (
-    !isApprovePlanChoice('Approve Plan') ||
-    isApprovePlanChoice('approve plan') ||
-    isApprovePlanChoice('Approve Plan!') ||
-    isApprovePlanChoice(' Approve Plan') ||
-    isApprovePlanChoice('Approve Plan\n')
+    !isApprovePlanGoalChoice('Approve both') ||
+    isApprovePlanGoalChoice('approve') ||
+    isApprovePlanGoalChoice('Approve both!') ||
+    isApprovePlanGoalChoice(' Approve both') ||
+    isApprovePlanGoalChoice('Approve both\n') ||
+    !isPlanGoalReviewOptions([
+      { label: 'Approve both' },
+      { label: 'Refine' },
+      { label: 'Reject both' },
+    ])
   ) {
-    throw new Error('Goal Plan approval must accept only the exact case-sensitive Approve Plan label');
-  }
-  if (
-    !isStartCruiseChoice('Start Cruise') ||
-    isStartCruiseChoice('start cruise') ||
-    isStartCruiseChoice('Start Cruise!') ||
-    isStartCruiseChoice(' Start Cruise') ||
-    isStartCruiseChoice('Start Cruise\n')
-  ) {
-    throw new Error('Goal activation must accept only the exact case-sensitive Start Cruise label');
+    throw new Error('Goal must accept only the exact structured Approve both/Refine/Reject both combined review');
   }
   if (ORIGIN_ARTIFACT !== '.cruise/goal/ORIGIN.yaml' || !PLAN_ARTIFACTS.includes(ORIGIN_ARTIFACT) || !APPROVED_ARTIFACTS.includes(ORIGIN_ARTIFACT)) {
     throw new Error('Goal approval snapshots must lock the immutable ORIGIN.yaml bytes');
@@ -506,7 +495,7 @@ function assertGoalContract(root) {
 
 function assertPlanningOnlySkills(root) {
   const build = readFileSync(join(root, 'skills', 'build', 'SKILL.md'), 'utf8');
-  const research = readFileSync(join(root, 'skills', 'research', 'SKILL.md'), 'utf8');
+  const research = readFileSync(join(root, 'internal', 'research', 'WORKFLOW.md'), 'utf8');
   if (!/must not modify product source|never implements product code|does not implement product code/iu.test(build)) {
     throw new Error('Build must explicitly prohibit product-code writes');
   }
@@ -570,7 +559,7 @@ function assertForeignDiffContract(root) {
   const normalizedShared = shared.replace(/\s+/gu, ' ');
   for (const phrase of [
     'Start non-destructive foreign-diff monitoring automatically',
-    '`foreign-diff-guard.yaml` in `monitoring` state',
+    '`drift.yaml` in `monitoring` state',
     'does not ask a start question',
     'pre-existing dirty path',
     'never ask a speculative repository-change question when no incident exists',
@@ -650,7 +639,7 @@ function assertPrivateProvisioner(root) {
   }
   if (JSON.stringify(policy.public_surface.public_skills_allowed_to_request) !== JSON.stringify(EXPECTED_PUBLIC_SKILLS) ||
       policy.public_surface.recursive_public_skill_invocation !== 'forbidden') {
-    throw new Error('private provision requesters or recursion boundary differs from the six public skills');
+    throw new Error('private provision requesters or recursion boundary differs from the five public skills');
   }
   if (policy?.default_decision?.action !== 'no_provisioning' ||
       policy?.default_decision?.reason !== 'current_capabilities_sufficient') {
@@ -703,6 +692,25 @@ function assertPrivateProvisioner(root) {
   }
 }
 
+function assertPrivateResearchHelper(root) {
+  const helper = join(root, 'internal', 'research', 'WORKFLOW.md');
+  if (!statSync(helper, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error('private Research helper workflow is missing');
+  }
+  if (statSync(join(root, 'skills', 'research', 'SKILL.md'), { throwIfNoEntry: false })) {
+    throw new Error('private Research helper must not expose a SKILL.md');
+  }
+  const source = readFileSync(helper, 'utf8');
+  if (!/available\s+to\s+Build,\s+Quick,\s+Refine,\s+Goal,\s+and\s+Debug/iu.test(source)) {
+    throw new Error('private Research helper must be available to every public skill');
+  }
+  if (!/no\s+public\s+command|never\s+gain\s+a\s+command/iu.test(source) ||
+      !/no\s+public\s+route|never\s+becomes\s+a\s+public\s+route/iu.test(source) ||
+      !/never invokes a public Cruise skill recursively/iu.test(source)) {
+    throw new Error('private Research helper boundary is not fail-closed');
+  }
+}
+
 export function validateSuite({ root = ROOT } = {}) {
   const canonicalRoot = realpathSync(resolve(root));
   const errors = [];
@@ -722,7 +730,7 @@ export function validateSuite({ root = ROOT } = {}) {
     manifest = JSON.parse(readFileSync(join(canonicalRoot, '.codex-plugin', 'plugin.json'), 'utf8'));
     assertManifest(canonicalRoot, manifest);
   });
-  check('exactly six public skills and exclusive metadata', () => assertSkillMetadata(canonicalRoot, join(canonicalRoot, 'skills')));
+  check('exactly five public skills and exclusive metadata', () => assertSkillMetadata(canonicalRoot, join(canonicalRoot, 'skills')));
   check('private capability absent from public commands', () => assertNoPublicCommandLeak(canonicalRoot));
   check('local documentation links resolve', () => assertLinks(canonicalRoot));
   check('no unfinished public/runtime placeholders', () => assertNoPlaceholders(canonicalRoot));
@@ -731,10 +739,11 @@ export function validateSuite({ root = ROOT } = {}) {
   check('Origin route and traceability schemas', () => assertSchemaContracts(canonicalRoot));
   check('Quick hard promotion gates', () => assertQuickGates());
   check('Goal exact labels locks and native state', () => assertGoalContract(canonicalRoot));
-  check('Build and Research write boundaries', () => assertPlanningOnlySkills(canonicalRoot));
+  check('Build and private Research write boundaries', () => assertPlanningOnlySkills(canonicalRoot));
   check('all public skills use the Doctor-attested worker path', () => assertDoctorAttestedLauncher(canonicalRoot));
   check('all public skills auto-monitor and pause only on concrete foreign diffs', () => assertForeignDiffContract(canonicalRoot));
   check('private provision policy and enforcement boundary', () => assertPrivateProvisioner(canonicalRoot));
+  check('private Research helper boundary', () => assertPrivateResearchHelper(canonicalRoot));
 
   return Object.freeze({
     ok: errors.length === 0,

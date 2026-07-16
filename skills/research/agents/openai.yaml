@@ -1,6 +1,0 @@
-interface:
-  display_name: "Cruise Research"
-  short_description: "Source-backed research without product edits"
-  default_prompt: "Use $cruise:research to gather and reconcile evidence for this technical decision without modifying product code."
-policy:
-  allow_implicit_invocation: false

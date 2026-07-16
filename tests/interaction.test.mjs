@@ -60,6 +60,18 @@ test('only exact Start Cruise requests activation', async () => {
   assert.equal(nearMiss.startRequested, false);
 });
 
+test('recognizes only structured exact combined Plan-and-Goal approval', async () => {
+  const approved = await answerUserInputRequest(request('Approve both'), dependencies());
+  const nearMiss = await answerUserInputRequest(request('approve'), dependencies());
+  const typed = await answerUserInputRequest(request('Recommended path'), {
+    ...dependencies(2),
+    readLine: async () => 'Approve both',
+  });
+  assert.equal(approved.selections[0].approvePlanGoal, true);
+  assert.equal(nearMiss.selections[0].approvePlanGoal, false);
+  assert.equal(typed.selections[0].approvePlanGoal, false);
+});
+
 test('option response normalization cannot turn whitespace near misses into approval tokens', async () => {
   const paddedPlan = await answerUserInputRequest(
     request(' Approve Plan '),
@@ -126,12 +138,15 @@ test('cancellation can never authorize Start', async () => {
   assert.equal(answered.startRequested, false);
 });
 
-test('rejects monolithic and auto-resolving question requests', async () => {
+test('allows the two-question Goal review but rejects larger and auto-resolving requests', async () => {
   const twoQuestions = request('One');
   twoQuestions.questions.push({ ...twoQuestions.questions[0], id: 'second' });
+  const answered = await answerUserInputRequest(twoQuestions, dependencies());
+  assert.deepEqual(Object.keys(answered.result.answers), ['review', 'second']);
+  twoQuestions.questions.push({ ...twoQuestions.questions[0], id: 'third' });
   await assert.rejects(
     answerUserInputRequest(twoQuestions, dependencies()),
-    /exactly one adaptive question/,
+    /one adaptive question, or the two-question Goal review/,
   );
   await assert.rejects(
     answerUserInputRequest(

@@ -193,6 +193,7 @@ export async function runWorkerSession({
   client = null,
   clientFactory = (options) => new AppServerClient(options),
   runtimeFactory = createIsolatedAppServerRuntime,
+  runtimeRoot = null,
   timeoutMs = 30 * 60 * 1000,
 } = {}) {
   if (!Number.isInteger(level) || level < 1 || level > 7) {
@@ -262,7 +263,7 @@ export async function runWorkerSession({
   try {
     if (ownedClient) {
       runtimePromise = Promise.resolve().then(
-        () => runtimeFactory({ extensionProfile: 'worker', codexHome }),
+        () => runtimeFactory({ extensionProfile: 'worker', codexHome, runtimeRoot }),
       );
       runtime = await deadline.run('isolated runtime setup', () => runtimePromise);
       extensionPolicy = runtime.extensionPolicy ?? extensionPolicy;

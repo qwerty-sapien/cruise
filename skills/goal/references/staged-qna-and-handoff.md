@@ -1,6 +1,6 @@
 # Staged Q&A and Native Goal Activation
 
-Use this protocol to turn an under-specified request into a short, decision-oriented conversation, two reviewable artifacts, and a truthful native Goal transition.
+Use this protocol to turn an under-specified request into one Goal-needs decision, one combined Plan-and-Goal review, and a truthful native Goal transition.
 
 ## 1. Capability boundary
 
@@ -10,46 +10,47 @@ Use the best native surface exposed in the current runtime:
 
 | Available surface | Required behavior |
 | --- | --- |
-| Cruise terminal client | Use exactly one blocking `request_user_input` question per call; omit `autoResolutionMs`. The client renders Up/Down, Enter/Space, immediate 1–9, and cancellation controls. Label the distinct, case-sensitive review options exactly **Approve Plan** and later **Start Cruise**; the user must select the option rather than type it through Other. Finalize candidate bytes before each review, then make no post-approval artifact write. |
+| Cruise terminal client | Omit `autoResolutionMs`. Ask the Goal-needs envelope once, with answer-driven detail only for Select some/Discuss. Finalize PLAN and GOAL, render the deterministic combined preview from their captured revisions, then offer exactly **Approve both**, **Refine**, and **Reject both**. The user must select Approve both rather than type it through Other. Make no candidate-artifact write after offering the combined review. |
 | `request_user_input` or another structured question tool | Ask one short question with 2–3 mutually exclusive options. Put the evidence-backed recommendation first and use the tool's free-text route for exceptions. |
 | Ordinary conversation | Render 2–4 numbered choices and ask the user to reply with a number, option label, or their own text. |
-| Native `get_goal` / `create_goal` tools | Inspect state before activation, then directly create the approved Goal after both reviews. |
+| Native `get_goal` / `create_goal` tools | Inspect state before activation, then directly create the approved Goal after the combined review. |
 | User-only `/goal` command | Emit one exact command and wait for later confirmation. |
 
 Do not promise keyboard behavior unless the observed host exposes it. The `cruise` command is the plugin's pbrain-like host; ordinary Codex chat remains native-selector or number/label/free-text behavior.
 
-## 2. Q&A state machine
+## 2. Two-question state machine
 
 Maintain an internal, concise uncertainty ledger with these states:
 
 ```text
-inspect → choose one material uncertainty → ask → receive answer
-        → record impact → (ask next material uncertainty | draft plan)
+inspect → Goal-specific needs → (bounded detail branch | finalize envelope)
+        → compile Plan + Goal → observed native item or deterministic preview → Approve both | Refine | Reject both
 ```
 
-Start with repository-first reconnaissance. Classify a candidate uncertainty as material only when its answer can change product behavior, scope, protected compatibility, architecture, data/safety risk, acceptance proof, permission envelope, or current slice.
+Start with repository-first reconnaissance. Infer the product candidate from inspectable evidence instead of front-loading product questions. The two high-level questions are the Goal-specific needs envelope and the combined Plan-and-Goal decision.
 
-For every answer:
+For every branch answer:
 
 1. Echo the choice and its consequence in one sentence.
 2. Mark the relevant requirement or decision as proposed/locked/deferred/reopened.
 3. Re-evaluate only affected unknowns.
-4. Ask another question only if one remains material.
+4. Ask another question only when Select some, Discuss, or Refine cannot be applied without it.
 
-An answer that accepts the recommendation normally closes that branch. An answer that introduces a new requirement, direction, risk, or acceptance condition opens only the smallest affected follow-up. Never restart the whole interview or ask a generic “anything else?” questionnaire.
+**Approve all** or **Reject all** closes the needs branch. **Approve both** or **Reject both** closes the combined review. **Select some**, **Discuss**, or **Refine** opens only the smallest affected follow-up. Never restart the whole interview or ask a generic “anything else?” questionnaire.
 
-## 3. The shape of one question
+## 3. Shape of the Goal-specific needs question
 
 Use one decision per turn by default. Give only enough evidence to make the choice legible:
 
 ```md
-**Decision — [short decision name]**
+**Goal-specific needs**
 
-[One sentence: observed fact + why it changes the plan.]
+[Only the concrete installs, named-site authentication checkpoints, mini-plan autonomy, and ordinary tool permissions this Goal may need.]
 
-1. **[Recommended path]** — [short consequence]
-2. **[Alternative]** — [short consequence]
-3. **Other** — reply with a different direction or constraint.
+1. **Approve all** — include every displayed bounded need.
+2. **Select some** — choose a subset in one compact follow-up.
+3. **Reject all** — remain interactive and pause when a need arises.
+4. **Discuss** — clarify the envelope before it is finalized.
 
 Reply with `1`, `2`, an option label, or your own words.
 ```
@@ -58,31 +59,25 @@ Rules:
 
 - Put the recommendation first, with a reason grounded in observed evidence.
 - Keep labels mutually exclusive and descriptions short.
-- Use 2–3 choices for a native selector; use at most 4 in plain text.
+- Use these four choices for the needs selector; use the same numbered labels in plain text.
 - Do not include a dense list of assumptions, an entire plan, or multiple unrelated questions.
-- Ask two coupled questions only if the native structured UI supports it and one answer is meaningless without the other.
-- Never treat a missing reply, an ambiguous “sure,” or a reaction to a plan as Start approval.
+- Never treat a missing reply, an ambiguous “sure,” or the needs answer as combined approval.
 
-## 4. Q&A depth and fast paths
+## 4. Branch depth and fast paths
 
-Use less Q&A when evidence already fixes the direction:
+Use no extra branch when the answer is **Approve all** or **Reject all**. Compile the candidate immediately.
 
-- A clear request plus an inspectable repository may need one decision about the acceptance/protected boundary, then a plan draft.
-- If the user chooses the recommendation and all mandatory evidence/permissions are already clear, do not add preference questions.
-
-Use more Q&A when the user materially changes direction:
+Use one compact branch when the user chooses **Select some**, **Discuss**, or **Refine**:
 
 - Re-slice only if the new work cannot fit the current strategically complete outcome.
 - Re-open only the decisions and requirements affected by the answer.
-- Ask the next safety, acceptance, or permission fork before implementation-detail preferences.
+- Ask the next safety, acceptance, or permission fork only when the selected branch cannot be recorded safely without it.
 
-If no material question remains, state that Cruise is drafting the review artifacts; do not manufacture a choice merely to make the conversation feel interactive.
+Once the branch is resolved, draft the review artifacts; do not manufacture another high-level choice.
 
-## 5. Two distinct reviews
+## 5. One combined review
 
-### Plan review
-
-Write and validate immutable `ORIGIN.yaml`, `SPEC.md`, `DECISIONS.md`, `ALIGNMENT.md`, optional `ROADMAP.md`, and `PLAN.md`. Present a short review card with:
+Write and validate immutable `ORIGIN.yaml`, `SPEC.md`, `DECISIONS.md`, `ALIGNMENT.md`, optional `ROADMAP.md`, `PLAN.md`, and `GOAL.md` before approval. In Codex GUI, request a combined native Plan item as a best effort and use it only if observed. Otherwise immediately present the deterministic Cruise preview. It contains bounded meaningful excerpts, full-file links, both revision hashes, and a Plan section covering:
 
 - outcome and current slice;
 - locked/reopened decisions;
@@ -91,11 +86,7 @@ Write and validate immutable `ORIGIN.yaml`, `SPEC.md`, `DECISIONS.md`, `ALIGNMEN
 - permission envelope and deferred work;
 - paths and digests for the full files.
 
-Ask whether to **Approve Plan**, revise/reopen it, or save/stop. Use that exact label in the Cruise terminal client. It displays and snapshots the current Plan artifact digests before the picker opens. Approval locks those exact bytes and lets Cruise compile GOAL.md; it never starts target edits or effects, and locked Plan bytes must not be rewritten merely to record approval state.
-
-### Goal review
-
-Compile `GOAL.md` from the approved plan and alignment. Its source-of-truth header must name the exact paths/digests of `ORIGIN.yaml`, `ALIGNMENT.md`, `PLAN.md`, and the supporting SPEC/DECISIONS files. It must make these points explicit:
+The Goal section follows in the same frame. `GOAL.md` is compiled from the still-mutable candidate plan and alignment. Its source-of-truth header must name the exact paths/digests of `ORIGIN.yaml`, `ALIGNMENT.md`, `PLAN.md`, and the supporting SPEC/DECISIONS files. It must make these points explicit:
 
 | Contract element | Minimum content |
 | --- | --- |
@@ -106,7 +97,7 @@ Compile `GOAL.md` from the approved plan and alignment. Its source-of-truth head
 | Checkpoints | Working-memory/progress-log paths and when to update them; say explicitly when none are necessary. |
 | Boundaries | Permissions, non-goals, interruption conditions, and no automatic scope expansion. |
 
-Show a compact card built from those fields. The explicit **Start Cruise** choice approves GOAL.md and the already-approved plan together. Revising GOAL.md materially after plan approval invalidates it and any affected plan/digest; return to the smallest necessary review step.
+After the presentation, offer exactly **Approve both**, **Refine**, and **Reject both**. The explicit structured **Approve both** choice locks and approves PLAN.md, GOAL.md, every supporting contract artifact, and the repository baseline together. **Refine** reopens the pair and branches into the smallest targeted change; show one replacement presentation before asking again. **Reject both** saves nothing as executable authority. This ordering eliminates the old write-between-reviews window: missing headings, alignment corrections, permission changes, and GOAL compilation are all resolved before the only approval snapshot.
 
 ## 6. Alignment enforcer
 
@@ -139,7 +130,7 @@ The native Goal objective and GOAL.md must reference this file and PLAN.md. That
 
 ## 7. Native activation procedure
 
-After the final Start choice:
+After the combined Approve both choice:
 
 1. Recompute the repository baseline and all approved artifact digests.
 2. If `get_goal` is exposed, call it. An unrelated active Goal is a blocker; offer to preserve/finish/pause it rather than overwrite it.
@@ -154,7 +145,7 @@ After the final Start choice:
    stop at an explicit blocked condition.
    ```
 
-4. If the Cruise terminal client owns the thread, finalize all bytes before showing **Start Cruise**. After selection, do not rewrite an approval-state field or any contract artifact; finish the preparation turn without calling `create_goal`. The client verifies the exact Plan and Goal snapshots plus repository baseline, changes collaboration mode from Plan to Default, checks `thread/goal/get`, calls `thread/goal/set` once, verifies the response and persisted state, and monitors the native Goal continuation that starts automatically.
+4. If the Cruise terminal client owns the thread, finalize all bytes before the combined preview and picker. After **Approve both**, do not rewrite an approval-state field or any contract artifact; finish the preparation turn without calling `create_goal`. The client verifies the one exact complete-suite snapshot plus repository baseline, checks `thread/goal/get`, calls `thread/goal/set` once, verifies the response and persisted state, and monitors the native Goal continuation that starts automatically.
 5. Otherwise, if `create_goal` is exposed, call it once and confirm its returned active state/identity.
 6. Only after active-state confirmation create CLOSEOUT.md and begin execution.
 7. If only a user slash command exists, emit the exact `/goal` command containing that objective and stop. Do not call a shell, fake a CLI event, or call this activation successful.
@@ -164,16 +155,16 @@ After the final Start choice:
 
 For a forward test, capture:
 
-- each Q&A turn and why it was material;
+- each answer-driven branch and why it was material;
 - option/recommendation plus response method (native selector, number/label, free text);
 - response-driven follow-up or explicit fast-path decision;
-- separate plan and Goal approvals with their artifact digests, including ORIGIN;
+- one combined Plan-and-Goal approval with every artifact digest, including ORIGIN;
 - activation method, returned state, and resolved ALIGNMENT/PLAN/GOAL references.
 
 Treat these as failures:
 
 - a monolithic question dump;
 - a redundant follow-up after a recommendation closes all material uncertainty;
-- activation after plan approval but before Goal approval;
+- activation without one current complete-suite approval;
 - a claimed automatic `/goal` transition without a real `create_goal` or `thread/goal/set` result;
 - unresolved, stale, or mismatched alignment/plan references.

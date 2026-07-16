@@ -61,8 +61,8 @@ export function createSemanticMappingPacket({
   const run = absoluteRunDirectory(runDirectory);
   const root = absoluteRunDirectory(repositoryRoot);
   const originPath = join(run, 'origin.yaml');
-  const factsOutputPath = join(run, 'semantic-facts.yaml');
-  const packetPath = join(run, 'semantic-mapping-packet.yaml');
+  const factsOutputPath = join(run, 'map-facts.yaml');
+  const packetPath = join(run, 'map-pkt.yaml');
   return deepFreeze({
     packet_kind: SEMANTIC_MAPPING_PACKET_KIND,
     packet_schema_version: 1,

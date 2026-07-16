@@ -22,7 +22,7 @@ async function fixture(t) {
   await mkdir(requestedAuthority, { mode: 0o700 });
   const authority = await realpath(requestedAuthority);
   return {
-    lockPath: join(authority, 'foreign-diff-guard.lock'),
+    lockPath: join(authority, 'drift.lock'),
     resource: RESOURCE,
     scope: SCOPE,
   };

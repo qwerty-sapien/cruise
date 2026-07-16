@@ -35,7 +35,7 @@ build:
 Discovery is a temporary internal run submode whose immutable Origin `mode` and
 `mode_candidate` remain `bootstrap` or `milestone`. Persist its six subordinate records under
 the canonical `discovery/` directory and its inert event/recovery envelope at
-`.cruise/runs/<run-id>/BUILD-DISCOVERY.yaml`, never by rewriting Origin mode or overloading the
+`.cruise/runs/<run-id>/discover.yaml`, never by rewriting Origin mode or overloading the
 approved project/milestone `STATE.yaml`.
 
 ## 2. Immutable origin
@@ -100,7 +100,7 @@ Use exactly this source-of-truth area:
 ```text
 .cruise/project/
 ├── ORIGIN.yaml
-├── ID-REGISTRY.yaml
+├── ids.yaml
 ├── PROJECT.md
 ├── REQUIREMENTS.md
 ├── ARCHITECTURE.md
@@ -110,7 +110,7 @@ Use exactly this source-of-truth area:
 └── QUEUE.yaml
 ```
 
-Add `QUEUE-STATE.yaml` and its adjacent `QUEUE-STATE-HISTORY/` only after queue runtime exists.
+Add `queue-run.yaml` and its adjacent `queue-hist/` only after queue runtime exists.
 During discovery add the subordinate `discovery/` directory described in the discovery
 reference. Neither queue-runtime artifact is a general edit surface: only the private
 evidence-aware queue coordinator may create or advance them from a verified Build receipt and
@@ -120,9 +120,9 @@ revision, per-item mechanically validated evidence, hash-chained attempts, activ
 manifest, and evidence-bound result/closeout. History durably preserves one exact-byte,
 predecessor-hashed state snapshot per revision before the mutable head advances.
 
-Registry persistence also owns `ID-REGISTRY-HISTORY/`, `ID-REGISTRY-HEAD.yaml`, and the
-transient `ID-REGISTRY-PENDING.yaml` and `ID-REGISTRY.yaml.lock` companions beside the canonical
-registry, plus the independent `.cruise/ID-REGISTRY-COMMITMENTS/` lineage fence. They are protocol
+Registry persistence also owns `id-hist/`, `id-head.yaml`, and the
+transient `id-pend.yaml` and `ids.yaml.lock` companions beside the canonical
+registry, plus the independent `.cruise/id-locks/` lineage fence. They are protocol
 state, not author-editable project artifacts and not additional approval-manifest entries.
 
 `PROJECT.md` contains name, one-sentence identity, beneficiary, core value, measurable
@@ -219,12 +219,12 @@ reviewed draft project/milestone, has no active or completed phase, and lists ex
 the reviewed milestone Origin/contract/queue identities, and a matching last reconciliation;
 its recommended next Cruise command must identify an approved phase.
 
-`ID-REGISTRY.yaml` is the append-only project-wide history for active and superseded
+`ids.yaml` is the append-only project-wide history for active and superseded
 `PRJ/M/R/AC/D/Q/P/RSK/C/QI` IDs. Approval requires its exact predecessor, revision chain, and
 the current locked artifact content manifest through opaque history authority; serialized
 counters and caller-selected IDs are not authority.
 
-Persist the registry only at the exact `.cruise/project/ID-REGISTRY.yaml` beneath its immutable
+Persist the registry only at the exact `.cruise/project/ids.yaml` beneath its immutable
 Origin repository root. Each commit first records a durable pending intent bound to the exact
 prior committed-head digest, then hard-links one immutable generation containing the exact
 registry YAML bytes and predecessor hash, appends the same head identity to the independently
@@ -270,12 +270,12 @@ project/milestone `STATE.yaml` remains outside the immutable manifest but is sem
 validated and snapshot-bound in the review, capture, and initial verification digests so it
 cannot change inside the approval transaction. Once the verified receipt exists, valid runtime
 State updates are deliberately not byte-locked by `verifyBuildApprovalArtifacts` and do not
-revoke queue authority. `QUEUE-STATE.yaml`, its append-only `QUEUE-STATE-HISTORY/`, discovery
-records, the private `.cruise/QUEUE-STATE-COMMITMENTS/` rollback fence, and phase runtime files also
+revoke queue authority. `queue-run.yaml`, its append-only `queue-hist/`, discovery
+records, the private `.cruise/queue-locks/` rollback fence, and phase runtime files also
 remain outside the immutable manifest. Queue state must live exactly beside its approved
 `QUEUE.yaml`; its atomic persistence CAS binds the queue/path, one-revision successor,
 canonical state digest, exact file-byte digest, and the adjacent read-only
-`QUEUE-STATE-HISTORY/` head/aggregate digest. Each immutable history entry contains the exact
+`queue-hist/` head/aggregate digest. Each immutable history entry contains the exact
 state bytes and chains to its predecessor, so a fresh coordinator can replay unchanged
 attempt/evidence prefixes and reject rollback, forks, gaps, or history/state disagreement. A
 root-bound immutable genesis marker and per-revision commitment chain keyed by Build approval

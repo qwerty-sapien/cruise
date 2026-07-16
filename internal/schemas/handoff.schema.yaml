@@ -107,4 +107,5 @@ properties:
     type: string
     enum:
       - not_applicable
+      - combined_Plan_and_Goal_Approve_required
       - separate_Approve_Plan_then_Start_Cruise_required

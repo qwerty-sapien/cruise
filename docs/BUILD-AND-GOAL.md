@@ -48,7 +48,7 @@ Passing viability creates drafts automatically; it does not approve them.
 ```text
 .cruise/project/
 ├── ORIGIN.yaml
-├── ID-REGISTRY.yaml
+├── ids.yaml
 ├── PROJECT.md
 ├── REQUIREMENTS.md
 ├── ARCHITECTURE.md
@@ -112,7 +112,7 @@ The directive is bound to the later displayed review digest. It approves plannin
 
 ### 5. Persist the approved queue
 
-The queue is an immutable DAG of narrowed Research, Goal, Refine, Quick, or already-approved Debug work. `QUEUE-STATE.yaml` is mutable only through the private coordinator.
+The queue is an immutable DAG of narrowed Research, Goal, Refine, Quick, or already-approved Debug work. `queue-run.yaml` is mutable only through the private coordinator.
 
 | Queue rule | Enforcement |
 | --- | --- |
@@ -157,11 +157,11 @@ Writer-lock metadata is fully synchronized in a private preparation inode before
 
 A milestone file or `ROADMAP.md` alone does not activate milestone control.
 
-1. **Inspect.** Ask only the highest-impact unresolved decision.
-2. **Prepare.** Write the inactive candidate under `.cruise/goal/`.
-3. **Approve Plan.** Lock the reviewed plan bytes and SHA-256 digests.
-4. **Start Cruise.** Separately authorize Goal activation.
-5. **Activate.** Recheck snapshots, return to Default mode, set and verify native Goal state, then launch bounded workers.
+1. **Inspect.** Resolve the one Goal-specific needs/autonomy envelope, with answer-driven detail only when requested.
+2. **Prepare.** Write PLAN.md and GOAL.md together as one inactive candidate under `.cruise/goal/`.
+3. **Present.** Bind the final Plan and Goal revisions before rendering either the observed GUI-native item or deterministic Cruise preview.
+4. **Review and decide.** In Codex GUI, use an actually observed native combined Plan item when available; otherwise immediately show Cruise's deterministic combined preview with meaningful excerpts, full-file links, and both bound revisions. Apply one structured **Approve both**, **Refine**, or **Reject both** decision to the pair.
+5. **Activate.** Recheck the complete-suite snapshot, return to Default mode, set and verify native Goal state, then launch bounded workers.
 
 ### Inactive Goal artifacts
 
@@ -176,16 +176,17 @@ A milestone file or `ROADMAP.md` alone does not activate milestone control.
 └── ROADMAP.md   # only when strategically necessary
 ```
 
-`CLOSEOUT.md` is forbidden before activation. Approved bytes are not edited after **Start Cruise**.
+`CLOSEOUT.md` is forbidden before activation. Candidate bytes are not edited after the combined **Approve both** selection.
 
 ### Approval meanings
 
 | Action | Locks | Authorizes |
 | --- | --- | --- |
-| **Approve Plan** | Displayed implementation plan bytes | Nothing to execute yet |
-| **Start Cruise** | Separately reviewed Goal contract | Native Goal activation after all snapshots revalidate |
+| **Approve both** | Displayed Plan, Goal, supporting contract bytes, and repository baseline | Native Goal activation after the complete snapshot revalidates |
+| **Refine** | Nothing | Reopens Plan and Goal together for a targeted revision |
+| **Reject both** | Nothing | Keeps implementation and external effects inactive |
 
-Free text that repeats either label is not an approval event.
+Free text that repeats **Approve both** is not an approval event.
 
 ## Goal after Build
 
@@ -195,7 +196,7 @@ The standard handoff is:
 Use cruise:goal for P-01.
 ```
 
-It consumes one approved, strategically complete phase through the same Plan/Start/native-Goal protocol.
+It consumes one approved, strategically complete phase through the same combined Plan-and-Goal/native-Goal protocol.
 
 ### Milestone controller
 
@@ -254,13 +255,13 @@ The standalone client cannot resolve an existing milestone-controller Build appr
 <details>
 <summary>Embedding contract for milestone control</summary>
 
-A resolver-capable Node host imports `cruise-codex-plugin/session` and passes `resolveBuildApproval`. After controller selection, Plan approval, Start approval, and confirmed native Goal activation, the session returns the same live `controllerDriver` and emits `milestoneControllerReady`.
+A resolver-capable Node host imports `cruise-codex-plugin/session` and passes `resolveBuildApproval`. After controller selection, combined Plan-and-Goal approval, and confirmed native Goal activation, the session returns the same live `controllerDriver` and emits `milestoneControllerReady`.
 
 The driver retains the opaque controller, Build, activation, and state authorities. It exposes named operations for persistent questions, phase activation and closeout, hard stops, milestone completion, dangerous-question suppression, reload, and explicit close. The embedding keeps it live for the controller run and calls `driver.close()` when ownership ends.
 
 If bootstrap cannot safely create or reload canonical milestone state, the session pauses and rechecks the objective and task identity of the just-activated native Goal. If another Goal replaced it, Cruise leaves that Goal unchanged and stops its app-server.
 
-Hosts that already own the approved Plan/Start boundary may import `cruise-codex-plugin/milestone-controller-host`. The factory accepts only the strict canonical Build draft State bound to the verified receipt’s project, milestone, baseline, readiness, Origin, contract, queue, question, and phase identities. Durable controller history is loaded and reconciled before a stale Build-draft mirror is interpreted.
+Hosts that already own the approved combined Plan-and-Goal boundary may import `cruise-codex-plugin/milestone-controller-host`. The factory accepts only the strict canonical Build draft State bound to the verified receipt’s project, milestone, baseline, readiness, Origin, contract, queue, question, and phase identities. Durable controller history is loaded and reconciled before a stale Build-draft mirror is interpreted.
 
 </details>
 

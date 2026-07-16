@@ -11,8 +11,8 @@ Use this protocol to convert a difficult request into one approval-bound Cruise 
 - [5. Artifact suite](#5-artifact-suite)
 - [6. Goal slicing](#6-goal-slicing)
 - [7. Permission envelope](#7-permission-envelope)
-- [8. Pre-Start validation](#8-pre-start-validation)
-- [9. Start and identity binding](#9-start-and-identity-binding)
+- [8. Pre-approval validation](#8-pre-approval-validation)
+- [9. Combined approval and identity binding](#9-combined-approval-and-identity-binding)
 - [10. Refine and Continue](#10-refine-and-continue)
 - [11. Reduced assurance](#11-reduced-assurance)
 - [12. Blocked-preparation fast path](#12-blocked-preparation-fast-path)
@@ -73,7 +73,7 @@ Ask only when different answers change:
 - mandatory evidence or the ability to prove completion;
 - write ownership, external effects, permissions, cost, or duration.
 
-Use the staged Q&A protocol. Default to **one short material decision per turn**. When a structured interface is available, use one question with 2–3 mutually exclusive choices, an evidence-backed recommendation first, and its automatic free-form option. In ordinary chat, use 2–4 numbered choices and accept a number, label, or free text.
+Use the two-high-level-question protocol: first the Goal-needs/autonomy envelope, then the combined Plan-and-Goal decision. **Select some**, **Discuss**, and **Refine** may open the smallest necessary answer-driven branch. Do not add another top-level questionnaire. When a structured interface is available, use mutually exclusive choices and its automatic free-form option only where the protocol permits it.
 
 Ask two tightly coupled decisions in one turn only when separating them would make either unintelligible. Never present a dense questionnaire, a full plan disguised as a question, or multiple unrelated forks. After every answer, record its consequence and ask another question only when an affected material uncertainty remains. A user accepting the recommendation normally closes that branch; do not add optional preference questions after it.
 
@@ -139,7 +139,7 @@ Every mandatory requirement has at least one decidable acceptance criterion. “
 
 ### DECISIONS.md
 
-Keep an index plus complete append-preserving entries. Record Start separately from permission decisions. A permission decision names exact capability, target, limits, owner, expiry, expected evidence, and cleanup.
+Keep an index plus complete append-preserving entries. Record the combined Plan-and-Goal decision separately from permission decisions. A permission decision names exact capability, target, limits, owner, expiry, expected evidence, and cleanup.
 
 ### ALIGNMENT.md
 
@@ -176,7 +176,6 @@ Use these suite states:
 
 - `Draft` — unresolved material issue or validation failure;
 - `Prepared (inactive)` — internally consistent and ready for plan review;
-- `Plan approved (inactive)` — exact planning bytes are approved but GOAL is not yet approved or active;
 - `Approved (inactive)` — exact plan and Goal bytes are approved but native activation is not yet confirmed;
 - `Cancelled (inactive)` — preserved but unusable without Refine.
 
@@ -206,11 +205,11 @@ Build the envelope with the permissions protocol. At minimum classify:
 - commits, pushes, PRs, releases, or deployments;
 - production/data mutations, destructive operations, messages, credentials, intrusive tests, or paid compute.
 
-Use `None approved` for absent effects. Never infer a high-risk effect from Start. Runtime approval prompts still apply even when a permission is locked in the contract.
+Use `None approved` for absent effects. Never infer a high-risk effect from **Approve both**. Runtime approval prompts still apply even when a permission is locked in the contract.
 
-## 8. Pre-Start validation
+## 8. Pre-approval validation
 
-Record all five results before plan review:
+Record all five results before the combined review:
 
 1. **Decision coverage** — every material choice and permission is locked, safely deferred, or blocking.
 2. **Requirement coverage** — every accepted requirement maps to criteria, nodes, and evidence.
@@ -220,16 +219,13 @@ Record all five results before plan review:
 
 Any blocking failure keeps every known-affected artifact Draft.
 
-After explicit **Approve Plan**, bind the exact planning artifacts and compile GOAL without rewriting those locked bytes merely to record approval. Before the separate Goal review, validate that the Goal has one resolvable slice, current references, a measurable scorecard/stopping condition, a feedback loop, checkpoint/progress memory, and no plan or permission drift. Goal review cannot repair a stale plan silently.
+Compile GOAL while the whole candidate is still mutable. Validate that it has one resolvable slice, current references, a measurable scorecard/stopping condition, a feedback loop, checkpoint/progress memory, and no plan or permission drift. Fix any missing `ALIGNMENT.md` section or other structural defect now, before rendering the combined Plan-and-Goal presentation and taking its only approval snapshot.
 
-## 9. Start and identity binding
+## 9. Combined approval and identity binding
 
-Use two distinct approval points:
+Use one approval point after both artifacts are complete. In Codex GUI, request a native combined item as a best effort and use it only if actually observed. Otherwise immediately render Cruise's deterministic combined preview from the captured bytes: Goal title plus Summary/Objective, Plan title plus Summary/Steps, bounded excerpts, full-file links, and both revision hashes. Then offer exactly **Approve both**, **Refine**, and **Reject both**. Treat only an unambiguous structured Approve both selection as complete-suite approval and activation authority.
 
-1. **Plan review** — approve the implementation plan, request targeted revisions/reopen a decision, or save/stop. Plan approval authorizes GOAL compilation only; it is not execution approval.
-2. **Goal review** — after the plan is approved, present the compact Goal contract and ask whether to Start Cruise, revise/reopen, or save inactive. Treat only an unambiguous Start choice as approval of GOAL and activation authority.
-
-Use a native structured selector when available; otherwise use a concise numbered choice. Do not turn either review into a dense questionnaire. A later material direction invalidates every affected approval and artifact digest.
+Use a native structured selector when available; otherwise use a concise numbered choice. Do not turn the review into a dense questionnaire. Refine reopens both artifacts as one candidate; after applying the smallest transitive edit, render a replacement presentation and take one fresh combined approval.
 
 Bind approval to:
 
@@ -242,11 +238,11 @@ Bind approval to:
 
 Immediately before execution, recompute all identities. If any changed unexpectedly, keep the suite inactive, identify affected checks, and reconcile.
 
-Before showing **Start Cruise**, make the prepared suite the final `Approved (inactive)` candidate and bind the review to its exact bytes and permission envelope. After explicit Start, do not change an approval-state field or any approved artifact byte; run only the immediate identity recheck. In a Cruise terminal-client preparation turn, end after this recheck so the client can switch to Default mode and use `thread/goal/get` plus `thread/goal/set`; do not create a competing Goal. In another host, if `get_goal`/`create_goal` are available, inspect for a conflicting active Goal and call `create_goal` directly. Confirm the returned active state in either case. Keep the suite inactive while a user-invoked handoff awaits confirmation. If no native Goal exists, the only fallback is a separate exact **Execute in Current Thread** selection with a `D-XX` loss-of-durability decision bound to current Plan, Goal, and baseline digests; it is never Start or native activation. After confirmed native activation or that explicit fallback begins, preserve approved artifact bytes. Record active-state provenance and execution changes in CLOSEOUT, not by rewriting GOAL to manufacture an active label.
+Before showing **Approve both**, make the prepared suite the final `Approved (inactive)` candidate and bind the review to its exact bytes and permission envelope. After explicit Approve both, do not change an approval-state field or any approved artifact byte; run only the immediate identity recheck. In a Cruise terminal-client preparation turn, end after this recheck so the client can use `thread/goal/get` plus `thread/goal/set`; do not create a competing Goal. In another host, if `get_goal`/`create_goal` are available, inspect for a conflicting active Goal and call `create_goal` directly. Confirm the returned active state in either case. Keep the suite inactive while a user-invoked handoff awaits confirmation. If no native Goal exists, the only fallback is a separate exact **Execute in Current Thread** selection with a `D-XX` loss-of-durability decision bound to current Plan, Goal, and baseline digests; it is not combined approval or native activation. After confirmed native activation or that explicit fallback begins, preserve approved artifact bytes. Record active-state provenance and execution changes in CLOSEOUT, not by rewriting GOAL to manufacture an active label.
 
 ## 10. Refine and Continue
 
-For Refine, update only the minimal transitive set. A changed requirement usually affects SPEC, ALIGNMENT, the relevant slice, PLAN coverage/evidence, and GOAL. A changed node detail may affect only PLAN and GOAL. Revoke/re-request the smallest affected approval rather than preserving a stale digest.
+For Refine, update only the minimal transitive set. A changed requirement usually affects SPEC, ALIGNMENT, the relevant slice, PLAN coverage/evidence, and GOAL. A changed node detail may affect only PLAN and GOAL. The prior combined candidate is no longer approved; render the updated pair together and ask the same one combined review again.
 
 For Continue:
 
@@ -269,7 +265,7 @@ When fresh independent lanes, planners, critics, or `T-01` reviewers are unavail
 - never call the work independently reviewed;
 - keep mandatory independent-review requirements blocking.
 
-If independence is desirable but not locked, include the reduced assurance in the Start summary so the user can Start, save inactive artifacts, or stop.
+If independence is desirable but not locked, include the reduced assurance in the combined presentation so the user can approve both, refine, or reject both.
 
 ## 12. Blocked-preparation fast path
 
@@ -278,7 +274,7 @@ Use this only when all are true:
 - the user requested preparation or inactive save, not execution;
 - repository evidence identifies one explicit mandatory gate that cannot run;
 - no waiver is granted and no equivalent approved evidence exists;
-- the missing gate makes Start ineligible;
+- the missing gate makes activation ineligible;
 - remaining unknowns cannot remove that block within current permissions.
 
 Then:
@@ -288,7 +284,7 @@ Then:
 3. skip independent implementation/architecture planners and the critic unless a locked requirement demands them;
 4. create a minimal PLAN whose graph represents the unavailable prerequisite, any safe preparation node already requested, and read-only `T-01`—do not invent implementation nodes that cannot start;
 5. create the required inactive suite, including ALIGNMENT and GOAL, with `Draft` or `Prepared (inactive)` only when its definition truly fits;
-6. state that Start is unavailable, save the suite, and stop;
+6. state that activation is unavailable, save the suite, and stop;
 7. create no CLOSEOUT and run no implementation or release command.
 
 Keep the suite compact enough to finish as one coherent write set. Include paths/commands and exact evidence, but never paste a lane transcript into planning artifacts.

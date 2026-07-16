@@ -46,9 +46,9 @@ import { createMilestoneRuntimeFixture } from './helpers/milestone-runtime-fixtu
 
 const NOW = '2026-07-13T00:00:00.000Z';
 const LATER = '2026-07-13T01:00:00.000Z';
-const QUEUE_PATH = '.cruise/milestones/M-003-safe-rollout/QUEUE.yaml';
-const STATE_PATH = '.cruise/milestones/M-003-safe-rollout/QUEUE-STATE.yaml';
-const HISTORY_PATH = '.cruise/milestones/M-003-safe-rollout/QUEUE-STATE-HISTORY';
+const QUEUE_PATH = '.cruise/milestones/M-003-rollout/QUEUE.yaml';
+const STATE_PATH = '.cruise/milestones/M-003-rollout/queue-run.yaml';
+const HISTORY_PATH = '.cruise/milestones/M-003-rollout/queue-hist';
 const IDENTITY = Object.freeze({
   source: 'git:queue-persistence-test',
   build: 'source-tree:queue-persistence-test',
@@ -201,7 +201,7 @@ test('revision-zero history rolls forward after a crash before the first state r
   await assert.rejects(lstat(subject.absoluteStatePath), { code: 'ENOENT' });
 
   const head = parseYaml(
-    await readFile(join(subject.absoluteHistoryPath, 'REV-000000000000.yaml'), 'utf8'),
+    await readFile(join(subject.absoluteHistoryPath, 'q-0.yaml'), 'utf8'),
   );
   const genesisBytes = Buffer.from(head.state_yaml_base64, 'base64');
   const genesis = parseYaml(genesisBytes.toString('utf8'));
@@ -224,7 +224,7 @@ test('revision-zero history rolls forward after a crash before the first state r
   assert.deepEqual(await readFile(subject.absoluteStatePath), genesisBytes);
   assert.equal((await lstat(subject.absoluteHistoryPath)).mode & 0o777, 0o700);
   assert.equal(
-    (await lstat(join(subject.absoluteHistoryPath, 'REV-000000000000.yaml'))).mode & 0o777,
+    (await lstat(join(subject.absoluteHistoryPath, 'q-0.yaml'))).mode & 0o777,
     0o400,
   );
   await assert.rejects(
@@ -261,18 +261,15 @@ test('empty revision-zero staging is reclaimed after pre-link writer crashes', a
     const staleUuid = '00000000-0000-4000-8000-000000000099';
     const approvedDirectory = join(
       subject.root,
-      '.cruise/milestones/M-003-safe-rollout',
+      '.cruise/milestones/M-003-rollout',
     );
     await writeFile(
-      join(
-        approvedDirectory,
-        `QUEUE-STATE-HISTORY.99999999.${staleUuid}.REV-000000000000.yaml.tmp`,
-      ),
+      join(approvedDirectory, '.q-hist-stage'),
       'abandoned history staging',
       { mode: 0o400 },
     );
     await writeFile(
-      join(approvedDirectory, `QUEUE-STATE.yaml.99999999.${staleUuid}.tmp`),
+      join(approvedDirectory, '.q-state-stage'),
       'abandoned state staging',
       { mode: 0o600 },
     );
@@ -287,7 +284,7 @@ test('empty revision-zero staging is reclaimed after pre-link writer crashes', a
     });
     assert.equal(persisted.snapshot.history_head_revision, 0);
     assert.deepEqual(await readdir(subject.absoluteHistoryPath), [
-      'REV-000000000000.yaml',
+      'q-0.yaml',
     ]);
     assert.deepEqual(
       (await readdir(approvedDirectory)).filter((name) => name.endsWith('.tmp')),
@@ -356,7 +353,7 @@ test('pre-link genesis commitment recovers exact bytes after fresh-process clock
   );
   await assert.rejects(lstat(subject.absoluteStatePath), { code: 'ENOENT' });
   const historyEntry = parseYaml(
-    await readFile(join(subject.absoluteHistoryPath, 'REV-000000000000.yaml'), 'utf8'),
+    await readFile(join(subject.absoluteHistoryPath, 'q-0.yaml'), 'utf8'),
   );
   const exactBytes = Buffer.from(historyEntry.state_yaml_base64, 'base64');
   const exactGenesis = parseYaml(exactBytes.toString('utf8'));
@@ -401,7 +398,7 @@ test('fresh read materializes a committed later revision lost before its history
     /simulated later pre-history-link process death/u,
   );
   assert.deepEqual(await readdir(subject.absoluteHistoryPath), [
-    'REV-000000000000.yaml',
+    'q-0.yaml',
   ]);
 
   const fresh = recreateCoordinator(subject);
@@ -419,8 +416,8 @@ test('fresh read materializes a committed later revision lost before its history
     /resume attestation is stale/u,
   );
   assert.deepEqual(await readdir(subject.absoluteHistoryPath), [
-    'REV-000000000000.yaml',
-    'REV-000000000001.yaml',
+    'q-0.yaml',
+    'q-1.yaml',
   ]);
   const currentObservation = await hostResumeForBytes(
     subject,
@@ -460,7 +457,7 @@ test('queue persistence is repository-root bound and refuses total genesis rollb
   });
   const commitmentDirectory = join(
     subject.root,
-    '.cruise/QUEUE-STATE-COMMITMENTS',
+    '.cruise/queue-locks',
   );
   const commitmentEntries = await readdir(commitmentDirectory, { withFileTypes: true });
   const commitmentFiles = commitmentEntries.filter((entry) => entry.isFile());
@@ -474,7 +471,7 @@ test('queue persistence is repository-root bound and refuses total genesis rollb
   );
   assert.deepEqual(
     await readdir(join(commitmentDirectory, commitmentLineages[0].name)),
-    ['REV-000000000000.yaml'],
+    ['q-0.yaml'],
   );
   await rm(subject.absoluteStatePath, { force: true });
   await rm(subject.absoluteHistoryPath, { recursive: true, force: true });
@@ -528,7 +525,7 @@ test('durable revision commitments reject a consistent local history rollback', 
   });
 
   await writeFile(subject.absoluteStatePath, revisionOneBytes, { mode: 0o600 });
-  await unlink(join(subject.absoluteHistoryPath, 'REV-000000000002.yaml'));
+  await unlink(join(subject.absoluteHistoryPath, 'q-2.yaml'));
   const fresh = (await reverifyCoordinator(subject)).coordinator;
   const rollbackResume = await hostResumeForBytes(
     subject,
@@ -567,7 +564,7 @@ async function installForgedHistorySuccessor(
   { installState = true } = {},
 ) {
   const bytes = Buffer.from(stringifyYaml(state), 'utf8');
-  const previousName = `REV-${String(state.revision - 1).padStart(12, '0')}.yaml`;
+  const previousName = `q-${state.revision - 1}.yaml`;
   const previous = parseYaml(await readFile(join(subject.root, HISTORY_PATH, previousName), 'utf8'));
   const payload = {
     schema_version: 1,
@@ -582,7 +579,7 @@ async function installForgedHistorySuccessor(
     previous_entry_sha256: previous.entry_sha256,
   };
   const entry = { ...payload, entry_sha256: sha256(canonicalJson(payload)) };
-  const name = `REV-${String(state.revision).padStart(12, '0')}.yaml`;
+  const name = `q-${state.revision}.yaml`;
   await writeFile(join(subject.root, HISTORY_PATH, name), stringifyYaml(entry), { mode: 0o400 });
   if (installState) await writeFile(subject.absoluteStatePath, bytes, { mode: 0o600 });
   return bytes;
@@ -737,14 +734,14 @@ test('queue state persists atomically beside QUEUE.yaml and resumes only from ex
   assert.match(persisted.snapshot.history_sha256, /^[a-f0-9]{64}$/u);
   assert.equal((await lstat(subject.absoluteStatePath)).mode & 0o777, 0o600);
   assert.equal((await lstat(subject.absoluteHistoryPath)).mode & 0o777, 0o700);
-  assert.deepEqual(await readdir(subject.absoluteHistoryPath), ['REV-000000000000.yaml']);
+  assert.deepEqual(await readdir(subject.absoluteHistoryPath), ['q-0.yaml']);
   assert.equal(
-    (await lstat(join(subject.absoluteHistoryPath, 'REV-000000000000.yaml'))).mode & 0o777,
+    (await lstat(join(subject.absoluteHistoryPath, 'q-0.yaml'))).mode & 0o777,
     0o400,
   );
   assert.deepEqual(
-    (await readdir(join(subject.root, '.cruise/milestones/M-003-safe-rollout')))
-      .filter((name) => name.includes('QUEUE-STATE.yaml.')),
+    (await readdir(join(subject.root, '.cruise/milestones/M-003-rollout')))
+      .filter((name) => name === '.q-state-stage'),
     [],
   );
 
@@ -910,7 +907,7 @@ test('opaque exact-byte CAS rejects older, forked, skipped-revision, rewritten, 
     /regular no-follow file/,
   );
 
-  const approvedDirectory = join(subject.root, '.cruise/milestones/M-003-safe-rollout');
+  const approvedDirectory = join(subject.root, '.cruise/milestones/M-003-rollout');
   const movedDirectory = `${approvedDirectory}.moved`;
   await rename(approvedDirectory, movedDirectory);
   await symlink(movedDirectory, approvedDirectory);
@@ -942,7 +939,7 @@ test('fresh coordinators verify persistent history before accepting rollback, fo
     expectedSnapshot: first.snapshot,
   });
   const stateOneBytes = await readFile(subject.absoluteStatePath);
-  const entryOnePath = join(subject.absoluteHistoryPath, 'REV-000000000001.yaml');
+  const entryOnePath = join(subject.absoluteHistoryPath, 'q-1.yaml');
   const entryOneBytes = await readFile(entryOnePath);
 
   const validCoordinator = recreateCoordinator(subject);
@@ -1064,7 +1061,7 @@ test('fresh coordinators verify persistent history before accepting rollback, fo
       coordinator: historyDirectoryCoordinator,
       resumeAttestation: historyDirectoryAttestation,
     }),
-    /QUEUE-STATE-HISTORY must be a regular no-follow directory/,
+    /queue-hist must be a regular no-follow directory/,
   );
 
 });
@@ -1094,7 +1091,7 @@ test('fresh coordinator deterministically rolls one durable pending history head
     }),
     /simulated trusted pending successor crash/u,
   );
-  const historyHeadPath = join(subject.absoluteHistoryPath, 'REV-000000000001.yaml');
+  const historyHeadPath = join(subject.absoluteHistoryPath, 'q-1.yaml');
   const historyHeadBytes = await readFile(historyHeadPath);
   const fresh = recreateCoordinator(subject);
   const resume = await hostResumeForBytes(

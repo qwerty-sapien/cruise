@@ -41,7 +41,7 @@ import { parseYaml } from './yaml-state.mjs';
 const MAX_BOOTSTRAP_STATE_BYTES = 4 * 1024 * 1024;
 const BUILD_DRAFT_STATE_KIND = 'cruise_milestone_state';
 const CONTROLLER_STATE_KIND = 'cruise_milestone_controller_state';
-const CONTROLLER_HISTORY_DIRECTORY = 'CONTROLLER-STATE-HISTORY';
+const CONTROLLER_HISTORY_DIRECTORY = 'ctrl-hist';
 const SHA256 = /^[a-f0-9]{64}$/u;
 const PROJECT_ID = /^PRJ-[0-9]{2,}$/u;
 const QUESTION_ID = /^Q-[0-9]{2,}$/u;

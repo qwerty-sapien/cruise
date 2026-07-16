@@ -44,9 +44,20 @@ Use Refine when repository inspection leaves at most a few material decisions ab
 - to `cruise:quick` only when the work is already resolved, bounded, low-risk, and locally verifiable;
 - to `cruise:debug` when the central problem is an observed failure with unknown cause;
 - to `cruise:goal` before execution when the work becomes long-running, cross-system, strategically sliced, risky, permission-heavy, or dependent on durable recovery;
-- to native Codex/GitHub review for findings, or `cruise:research` for a decision brief without product edits.
+- to native Codex/GitHub review when evidence itself—not implementation—is now the user's outcome.
 
 Preserve the same Origin Record across a handoff and do not route recursively.
+
+### Use a Research Cell before escalating a finite decision
+
+For one bounded uncertainty that can change the Plan, first read the
+[Research Cell procedure](../../internal/research/WORKFLOW.md#use-a-research-cell), then launch it as a
+parent-owned worker phase. It is not a public-skill invocation: inherit this run's Origin,
+baseline, `E-XX` IDs, permissions, and stop rules; announce the question and first
+repository/source check; then return one evidence card. Put its recommendation directly in the
+plan's task, ownership, and verification. If the evidence cannot be bounded, record that limit
+and use native Codex or the existing parent permission/capability path; do not create a second
+run, approval, or detached brief for a Cell.
 
 ## Resolve capability gaps inside the finite contract
 

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import {
   access,
   lstat,
-  mkdtemp,
+  mkdir,
   open,
   readFile,
   readdir,
@@ -24,6 +24,7 @@ import { AppServerClient } from './lib/app-server-client.mjs';
 import { appServerDiagnostic, createIsolatedAppServerRuntime } from './lib/app-server-runtime.mjs';
 import { createDeadline, waitForCleanup } from './lib/deadline.mjs';
 import { installManagedAgentConfigs, inspectManagedAgentConfigs } from './lib/agent-config.mjs';
+import { assertArtifactFileName, assertRunName } from './lib/artifact-naming.mjs';
 import {
   CRUISE_CLASSES,
   readCruiseClass,
@@ -97,7 +98,6 @@ export const PUBLIC_SKILLS = Object.freeze([
   'refine',
   'goal',
   'debug',
-  'research',
 ]);
 
 export function pluginRuntimeStayedStable({
@@ -118,7 +118,7 @@ const HELP = `Cruise ${CLI_VERSION} — plan, review, and carry out work with Co
 
 Usage:
   cruise [start] [options] <request...>
-  cruise <build|quick|refine|goal|debug|research> [options] <request...>
+  cruise <build|quick|refine|goal|debug> [options] <request...>
   cruise doctor [--json] [--deep|--troubleshoot] [--fixture <path>] [--install-worker-rule]
   cruise config style [default|professional|friendly]
   cruise config style --show [--json]
@@ -164,17 +164,20 @@ Public skills:
   Need a finite plan before coding?      $cruise:refine
   Need durable consequential execution?  $cruise:goal
   Have a failure with unknown cause?     $cruise:debug
-  Need evidence before deciding?         $cruise:research
+  Need evidence before deciding?         Use the parent workflow's private Research helper
 
 Read-only code review remains available through native Codex or GitHub review tools.
 
 The skill subcommands keep one Codex task and switch Default/Plan automatically.
 Unprefixed requests remain a backwards-compatible alias for cruise goal.
-For larger work, Cruise saves a plan and asks for a separate confirmation before starting.
+For larger work, Cruise shows a revision-bound Plan-and-Goal preview and asks for one Approve both/Refine/Reject both decision before starting.
 `;
 
 export function parseArgs(argv) {
   const args = [...argv];
+  if (args[0] === 'research') {
+    throw new Error('`cruise research` is not available: Research is a private helper inside Build, Quick, Refine, Goal, and Debug.');
+  }
   let command = 'start';
   if (['start', ...PUBLIC_SKILLS, 'doctor', 'config', 'agents', 'hooks', 'worker', 'picker-demo', 'help'].includes(args[0])) {
     command = args.shift();
@@ -548,10 +551,15 @@ export function inspectWorkspaceWriteNetworkContract(schema) {
 }
 
 async function probeAppServerSchema({ codexHome = null } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'cruise-doctor-schema-'));
+  const directory = join(tmpdir(), 'cruise-schema');
+  await mkdir(directory, { mode: 0o700 });
   let runtime = null;
   try {
-    runtime = await createIsolatedAppServerRuntime({ codexHome, extensionProfile: 'worker' });
+    runtime = await createIsolatedAppServerRuntime({
+      codexHome,
+      extensionProfile: 'worker',
+      runtimeRoot: directory,
+    });
     const generated = runCommand('codex', [
       'app-server',
       'generate-json-schema',
@@ -647,6 +655,7 @@ export async function probeModelCatalog({
   clientFactory = (options) => new AppServerClient(options),
 } = {}) {
   const deadline = createDeadline(timeoutMs, 'Doctor model catalog probe');
+  const runtimeRoot = join(tmpdir(), 'cruise-model-catalog');
   let runtime = null;
   let client = null;
   let rejectFatal;
@@ -665,7 +674,11 @@ export async function probeModelCatalog({
   try {
     runtime = await deadline.run(
       'isolated runtime setup',
-      () => runtimeFactory({ codexHome, extensionProfile: 'worker' }),
+      () => runtimeFactory({
+        codexHome,
+        extensionProfile: 'worker',
+        runtimeRoot,
+      }),
     );
     client = clientFactory({
       args: ['app-server', '--stdio', ...runtime.appServerArgs],
@@ -709,6 +722,7 @@ export async function probeModelCatalog({
     if (runtime) {
       await waitForCleanup(() => runtime.dispose(), cleanupTimeoutMs);
     }
+    await rm(runtimeRoot, { recursive: true, force: true });
   }
 }
 
@@ -752,7 +766,7 @@ export async function collectDoctorReport({ codexHome = null } = {}) {
       check(
         'plugin-files',
         'pass',
-        `${manifest.name}@${manifest.version}; exactly six public skills are readable`,
+        `${manifest.name}@${manifest.version}; exactly five public skills are readable`,
       ),
     );
   } catch (error) {
@@ -1181,6 +1195,8 @@ function exactRunChild(root, candidate, label, namePattern) {
   ) {
     throw new Error(`${label} must be a direct, named artifact under .cruise/runs/<run-id>`);
   }
+  assertRunName(parts[2]);
+  assertArtifactFileName(parts[3]);
   return Object.freeze({ runId: parts[2], name: parts[3], relativePath: path });
 }
 
@@ -1205,14 +1221,14 @@ export async function validateWorkerInvocationScope({
     requestedRoot,
     requestedPacket,
     'worker packet',
-    /^(?=[^/]*packet)[a-z0-9][a-z0-9._-]*\.(?:md|ya?ml)$/iu,
+    /^(?=[^/]*(?:pkt|packet))[a-z0-9][a-z0-9._-]*\.(?:md|ya?ml)$/iu,
   );
   const canonicalPacket = await realpath(requestedPacket);
   const packet = exactRunChild(
     root,
     canonicalPacket,
     'worker packet',
-    /^(?=[^/]*packet)[a-z0-9][a-z0-9._-]*\.(?:md|ya?ml)$/iu,
+    /^(?=[^/]*(?:pkt|packet))[a-z0-9][a-z0-9._-]*\.(?:md|ya?ml)$/iu,
   );
   if (packet.relativePath !== requestedPacketRecord.relativePath) {
     throw new Error('worker packet path must not traverse a symlinked file or parent');
@@ -1223,7 +1239,7 @@ export async function validateWorkerInvocationScope({
     requestedRoot,
     requestedReport,
     'worker report',
-    /^(?=[^/]*report)[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
+    /^(?=[^/]*(?:rpt|report))[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
   );
   const requestedReportParent = dirname(requestedReport);
   const canonicalReportParent = await realpath(requestedReportParent);
@@ -1232,7 +1248,7 @@ export async function validateWorkerInvocationScope({
     root,
     canonicalReport,
     'worker report',
-    /^(?=[^/]*report)[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
+    /^(?=[^/]*(?:rpt|report))[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
   );
   if (report.relativePath !== requestedReportRecord.relativePath) {
     throw new Error('worker report parent must not traverse a symlink');
@@ -1272,7 +1288,7 @@ export async function validateWorkerReportDestination({
     requestedRoot,
     requestedReport,
     'worker report',
-    /^(?=[^/]*report)[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
+    /^(?=[^/]*(?:rpt|report))[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
   );
   const canonicalReportParent = await realpath(dirname(requestedReport));
   const canonicalReport = join(canonicalReportParent, basename(requestedReport));
@@ -1280,7 +1296,7 @@ export async function validateWorkerReportDestination({
     root,
     canonicalReport,
     'worker report',
-    /^(?=[^/]*report)[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
+    /^(?=[^/]*(?:rpt|report))[a-z0-9][a-z0-9._-]*\.ya?ml$/iu,
   );
   if (report.relativePath !== requestedReportRecord.relativePath) {
     throw new Error('worker report parent must not traverse a symlink');
@@ -1292,7 +1308,7 @@ export async function validateWorkerReportDestination({
 }
 
 export async function assertWorkerForeignDiffGuard(scope) {
-  const statePath = join(dirname(scope.packetPath), 'foreign-diff-guard.yaml');
+  const statePath = join(dirname(scope.packetPath), 'drift.yaml');
   let state;
   try {
     state = await readForeignDiffGuardState(statePath);
@@ -1350,7 +1366,7 @@ export async function prepareWorkerLaunch({
   const guardPreflight = await assertWorkerForeignDiffGuard(scope);
   const packet = await readWorkerPacket(scope.packetPath, { expectedSha256: packetSha256 });
   let mapperOutput = null;
-  const mappingName = /^semantic-mapping-packet\.(?:yaml|yml|md)$/u.test(basename(scope.packetPath));
+  const mappingName = /^map-pkt\.(?:yaml|yml|md)$/u.test(basename(scope.packetPath));
   const mappingTag = new RegExp(`^packet_kind:\\s*["']?${SEMANTIC_MAPPING_PACKET_KIND}["']?\\s*$`, 'mu').test(packet);
   if (mappingName || mappingTag) {
     if (level !== 2) {
@@ -1404,7 +1420,7 @@ export async function prepareWorkerLaunch({
 async function withWorkerForeignDiffLock(scope, callback) {
   const lockPath = join(
     dirname(foreignDiffAuthorityPath(scope.cwd, scope.runId)),
-    'foreign-diff-guard.lock',
+    'drift.lock',
   );
   return withHostAuthorityLock({
     lockPath,
@@ -1464,6 +1480,7 @@ export async function runWorker(options, {
       cwd,
       packet,
       codexHome: options.codexHome ?? null,
+      runtimeRoot: admission.authorityDirectory,
     });
     return await withWorkerForeignDiffLock(scope, async () => {
       // A change that arrives while inference is running cannot be attributed

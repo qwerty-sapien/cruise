@@ -9,7 +9,6 @@ export const PROVISION_PUBLIC_CALLERS = Object.freeze([
   'refine',
   'goal',
   'debug',
-  'research',
 ]);
 
 export const COMMUNITY_DIRECT_USE_THRESHOLD_STARS = 1000;
@@ -38,7 +37,7 @@ export const PRIVATE_CAPABILITY_PATHS = Object.freeze({
   exclude: '.cruise/skills/exclude',
   quarantine: '.cruise/skills/quarantine/',
   adapted: '.cruise/skills/adapted/',
-  rejected: '.cruise/internal/rejected-capabilities.yaml',
+  rejected: '.cruise/internal/rejected.yaml',
 });
 export const CURRENT_HOST_PROVISION_CAPABILITIES = Object.freeze({
   instruction_analysis_isolation_confirmed: false,
@@ -81,8 +80,8 @@ export const FIT_GATES = Object.freeze({
 
 const REQUEST_ID = /^CAPREQ-[0-9]{3,}$/u;
 const CAPABILITY_ID = /^CAP-[A-Z0-9][A-Z0-9-]*$/u;
-const AUTH_ID = /^AUTH-[0-9]{3,}$/u;
-const PROVISION_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const AUTH_ID = /^AUTH-[0-9]{3,5}$/u;
+const PROVISION_RUN_ID = /^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const COMMIT_SHA = /^[a-f0-9]{40,64}$/iu;
 const CONTENT_SHA = /^[a-f0-9]{64}$/iu;
 const SAFE_NAME = /^[A-Za-z0-9_.-]+$/u;
@@ -392,7 +391,7 @@ export function validateCapabilityRequest(value) {
   if (!REQUEST_ID.test(request.id)) throw new TypeError('Capability request id must match CAPREQ-*');
   if (!text(request.originating_run)) throw new TypeError('Capability request needs originating_run.');
   if (!PROVISION_PUBLIC_CALLERS.includes(request.public_skill)) {
-    throw new TypeError('Capability request public_skill must be one of the six public Cruise skills.');
+    throw new TypeError('Capability request public_skill must be one of the five public Cruise skills.');
   }
   if (!isObject(request.task) || !text(request.task.summary)) {
     throw new TypeError('Capability request task.summary must be non-empty.');
@@ -1867,6 +1866,7 @@ export async function acquireExternalCandidate({
   const unexaminedReviewClosure = reviewClosure.filter((path) => !paths.includes(path));
   const byPath = new Map(tree.map((entry) => [entry.path, entry]));
   const selected = [];
+  const quarantineNames = new Set();
   let totalBytes = 0;
   for (const path of paths) {
     const entry = byPath.get(path);
@@ -1895,9 +1895,19 @@ export async function acquireExternalCandidate({
     if (bytes !== entry.size_bytes || bytes + totalBytes - entry.size_bytes > maxTotalBytes) {
       throw new TypeError(`Hosting API blob ${path} does not match bounded tree metadata.`);
     }
+    const sourceStem = path.split('/').at(-1)
+      .replace(/\.[^.]+$/u, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, '-')
+      .replace(/^-+|-+$/gu, '') || 'source';
+    const quarantineName = `${sourceStem.slice(0, 10)}.blob`;
+    if (quarantineNames.has(quarantineName)) {
+      throw new TypeError('Selected acquisition paths require distinct informative quarantine names.');
+    }
+    quarantineNames.add(quarantineName);
     selected.push({
       original_path: path,
-      quarantine_name: `${sha256(`${revision.commit_sha}:${path}:${blob.content}`)}.blob`,
+      quarantine_name: quarantineName,
       size_bytes: bytes,
       sha256: sha256(blob.content),
       content: blob.content,
@@ -2034,7 +2044,15 @@ export async function persistQuarantinedAcquisition(acquired, { root } = {}) {
   const cruise = join(canonicalRoot, '.cruise');
   const skills = join(cruise, 'skills');
   const quarantine = join(skills, 'quarantine');
-  const destination = resolve(quarantine, commitSha);
+  const repositoryStem = binding.acquisition.repository
+    .split(/[/:]/u)
+    .filter(Boolean)
+    .at(-1)
+    .replace(/\.git$/u, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '') || 'source';
+  const destination = resolve(quarantine, `skill-${repositoryStem.slice(0, 9)}`);
   if (!destination.startsWith(`${resolve(quarantine)}/`)) {
     throw new TypeError('Quarantine destination escapes the managed root.');
   }
@@ -2044,7 +2062,7 @@ export async function persistQuarantinedAcquisition(acquired, { root } = {}) {
   const records = [];
   for (const blob of blobs) {
     const metadata = binding.quarantine.blobs.find((entry) => entry.original_path === blob.path);
-    if (!metadata || !/^[a-f0-9]{64}\.blob$/u.test(metadata.quarantine_name)) {
+    if (!metadata || !/^[a-z][a-z0-9-]{0,9}\.blob$/u.test(metadata.quarantine_name)) {
       throw new TypeError('Quarantine blob metadata is invalid.');
     }
     const path = join(destination, metadata.quarantine_name);

@@ -4,9 +4,8 @@ const SKILLS = Object.freeze([
   'refine',
   'goal',
   'debug',
-  'research',
 ]);
-const LEGACY_SKILLS = Object.freeze(['review']);
+const LEGACY_SKILLS = Object.freeze(['review', 'research']);
 const RECORD_SKILLS = Object.freeze([...SKILLS, ...LEGACY_SKILLS]);
 
 const STATUSES = Object.freeze([
@@ -55,7 +54,7 @@ const SKILL_SET = new Set(SKILLS);
 const RECORD_SKILL_SET = new Set(RECORD_SKILLS);
 const STATUS_SET = new Set(STATUSES);
 const TERMINAL_STATUS_SET = new Set(TERMINAL_RUN_STATUSES);
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const RUN_ID = /^(?=.{1,15}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const CAPABILITY_ID = /^CAP-[A-Z0-9][A-Z0-9-]*$/u;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
 const SENSITIVE_KEY = /^(?:api[_-]?key|authorization|cookie|credential|password|passphrase|private[_-]?key|secret|session[_-]?token|access[_-]?token|refresh[_-]?token|bearer)$/iu;
@@ -81,7 +80,11 @@ export const RUN_STATE_SCHEMA = deepFreeze({
   properties: {
     schema_version: { const: RUN_STATE_SCHEMA_VERSION, type: 'integer' },
     kind: { const: RUN_STATE_KIND, type: 'string' },
-    run_id: { type: 'string', pattern: RUN_ID.source },
+    run_id: {
+      type: 'string',
+      maxLength: 15,
+      pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$',
+    },
     selected_skill: { type: 'string', enum: [...RECORD_SKILLS] },
     current_route: { type: 'string', enum: [...RECORD_SKILLS] },
     status: { type: 'string', enum: [...STATUSES] },

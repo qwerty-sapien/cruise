@@ -1,5 +1,6 @@
 import {
   isApprovePlanChoice,
+  isApprovePlanGoalChoice,
   isStartCruiseChoice,
 } from './goal-contract.mjs';
 import { sanitizeUserFacingText } from './user-facing-output.mjs';
@@ -38,9 +39,9 @@ export async function answerUserInputRequest(
   { pickOne, readLine, input, output, lineReader = null, signal = null, communicationStyle = 'default' },
 ) {
   const questions = params.questions ?? [];
-  if (questions.length !== 1) {
+  if (questions.length < 1 || questions.length > 2) {
     throw new Error(
-      `Cruise requires exactly one adaptive question per request; received ${questions.length}.`,
+      `Cruise requires one adaptive question, or the two-question Goal review; received ${questions.length}.`,
     );
   }
   if (params.autoResolutionMs != null) {
@@ -116,6 +117,8 @@ export async function answerUserInputRequest(
       source: answerSource,
       approvePlan:
         answerSource === 'option' && isApprovePlanChoice(selectedOptionLabel),
+      approvePlanGoal:
+        answerSource === 'option' && isApprovePlanGoalChoice(selectedOptionLabel),
       startCruise:
         answerSource === 'option' && isStartCruiseChoice(selectedOptionLabel),
     });

@@ -11,7 +11,7 @@
 ## 1. Declarative queue
 
 Build owns an immutable project `QUEUE.yaml` or milestone `QUEUE.yaml`. Runtime state lives in
-`QUEUE-STATE.yaml`; never mix mutable status into the locked definition. The queue is a
+`queue-run.yaml`; never mix mutable status into the locked definition. The queue is a
 declarative orchestration contract, not a script containing recursive public-skill calls.
 
 ```yaml
@@ -86,7 +86,7 @@ queue skills.
 No Build review exists until `attestBuildApprovalReadiness` mechanically closes mode,
 readiness, and viability and binds the canonical root/product baseline, project/milestone IDs,
 and both Origin hashes. Finalized Origins also retain opaque initial-capture and paired-byte
-authority. `.cruise/project/ID-REGISTRY.yaml` has separate opaque history authority bound to its
+authority. `.cruise/project/ids.yaml` has separate opaque history authority bound to its
 predecessor, superseded records, and each locked artifact's raw-content digest.
 `prepareBuildApprovalReview` consumes all three authorities, rereads
 and semantically validates both contracts and queues, checks the bindings, and returns the exact
@@ -114,22 +114,22 @@ review/approval record is audit data, not authority by itself.
 
 Create and verify the queue approval only with that branded Build receipt. It binds the exact
 queue path, definition digest, Build approval/manifest digests, permissions, and approval time.
-Any definition change invalidates both approvals; `QUEUE-STATE.yaml` updates do not change
+Any definition change invalidates both approvals; `queue-run.yaml` updates do not change
 locked bytes but still require the private coordinator. Bootstrap approval covers both the
 project and required first-executable-milestone contracts and both queue definitions.
 
 ## 3. Private coordinator
 
 The private evidence-aware queue coordinator is the sole mutation path for
-`QUEUE-STATE.yaml`; the legacy generic state updater is disabled. For every operation it
+`queue-run.yaml`; the legacy generic state updater is disabled. For every operation it
 requires the opaque verified Build receipt and matching queue approval, validates the exact
 definition/state join, checks phase and `consumes`/`produces` dataflow coverage, and permits
 only an explicit legal transition. It appends immutable attempt records rather than replacing
-history. Attempts form a replayable hash chain. Persist only the exact `QUEUE-STATE.yaml`
+history. Attempts form a replayable hash chain. Persist only the exact `queue-run.yaml`
 adjacent to the approved `QUEUE.yaml`: revision zero is the first write, and every changed write
 must advance exactly one revision, present the opaque CAS snapshot returned by the prior exact
 write/read, and preserve every earlier attempt/evidence entry as an unchanged prefix. First add
-and synchronize the corresponding read-only `QUEUE-STATE-HISTORY/REV-NNNNNNNNNNNN.yaml` entry;
+and synchronize the corresponding read-only `queue-hist/REV-NNNNNNNNNNNN.yaml` entry;
 that hash-chained entry embeds the exact candidate state bytes and cannot replace an existing
 revision. Only then atomically rename the synchronized private state temporary file. A crash or
 interference can therefore leave an explicit history-ahead condition, never unrecorded advanced
@@ -148,7 +148,7 @@ history directory as uncommitted staging only while holding the writer lock, rec
 dead PID-bound lock and removing only exact private staging names before retry. The canonical
 root must equal the root in the verified Build approval. Once genesis is durably committed, a
 synchronized immutable marker under
-`.cruise/QUEUE-STATE-COMMITMENTS/` binds the Build approval digest, queue identity/definition,
+`.cruise/queue-locks/` binds the Build approval digest, queue identity/definition,
 paths, and exact revision-zero state/history digests. A separate immutable hash-chained
 commitment is appended for every later state-history revision. Deleting both adjacent runtime
 artifacts cannot reset the queue. Each revision commitment embeds the exact local history-entry
@@ -266,8 +266,8 @@ authority.
 ## 5. Goal phase and milestone controller
 
 The default handoff is `Use cruise:goal for P-01.` Each phase gets its own immutable Goal
-plan, exact **Approve Plan**, later exact **Start Cruise**, native activation, verification,
-and closeout after activation.
+Plan-and-Goal pair, one exact combined **Approve**, native activation, verification, and
+closeout after activation.
 
 The advanced path is eligible only when the current Goal session observes the exact structured
 **Use Milestone Controller M-XX** option and joins its opaque receipt to a fresh branded Build

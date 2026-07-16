@@ -1,6 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
-import { access, chmod, copyFile, cp, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, chmod, copyFile, cp, mkdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { resolveCodexHome } from './agent-config.mjs';
@@ -75,12 +74,19 @@ export function appServerExtensionArgs(profile, mcpServerNames = []) {
 export async function createIsolatedAppServerRuntime({
   codexHome = null,
   extensionProfile = 'inherit',
+  runtimeRoot = null,
 } = {}) {
   if (!EXTENSION_PROFILES.has(extensionProfile)) {
     throw new TypeError(`unknown app-server extension profile: ${extensionProfile}`);
   }
+  if (typeof runtimeRoot !== 'string' || runtimeRoot.length === 0) {
+    throw new TypeError('isolated app-server runtime requires an informative runtimeRoot');
+  }
   const sourceHome = resolve(codexHome ?? resolveCodexHome());
-  const runtimeHome = await mkdtemp(join(tmpdir(), 'cruise-app-server-'));
+  const parent = resolve(runtimeRoot);
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  const runtimeHome = join(parent, 'app-home');
+  await mkdir(runtimeHome, { mode: 0o700 });
   try {
     await chmod(runtimeHome, 0o700);
     for (const name of CONTROL_FILES) {

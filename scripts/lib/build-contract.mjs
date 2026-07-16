@@ -1521,7 +1521,7 @@ function normalizeQueueItem(input, parentOriginSha256) {
   const status = input.status ?? 'draft';
   if (!QUEUE_STATUS_SET.has(status)) throw new TypeError(`${id}.status is invalid`);
   if (status !== 'draft') {
-    throw new Error(`${id} runtime status belongs in QUEUE-STATE.yaml; QUEUE.yaml must remain draft`);
+    throw new Error(`${id} runtime status belongs in queue-run.yaml; QUEUE.yaml must remain draft`);
   }
   if (input.skill === 'debug' && input.mode !== 'reactive') {
     throw new Error(`${id} Debug work may be inserted only in reactive mode`);
@@ -1550,13 +1550,13 @@ function normalizeQueueItem(input, parentOriginSha256) {
   const blockers = input.blockers ?? [];
   const attempts = input.attempts ?? [];
   if (!Array.isArray(blockers) || blockers.length > 0) {
-    throw new Error(`${id}.blockers belong in QUEUE-STATE.yaml and must be empty in QUEUE.yaml`);
+    throw new Error(`${id}.blockers belong in queue-run.yaml and must be empty in QUEUE.yaml`);
   }
   if (!Array.isArray(attempts) || attempts.length > 0) {
-    throw new Error(`${id}.attempts belong in QUEUE-STATE.yaml and must be empty in QUEUE.yaml`);
+    throw new Error(`${id}.attempts belong in queue-run.yaml and must be empty in QUEUE.yaml`);
   }
   if (input.result != null) {
-    throw new Error(`${id}.result belongs in QUEUE-STATE.yaml and must be null in QUEUE.yaml`);
+    throw new Error(`${id}.result belongs in queue-run.yaml and must be null in QUEUE.yaml`);
   }
   const pathEnvelope = normalizeQueuePathEnvelope(input, id);
   return {
@@ -2077,8 +2077,8 @@ function requiredLockedFiles(mode) {
 }
 
 const PROJECT_CONTRACT_PATH = '.cruise/project';
-export const BUILD_ID_REGISTRY_PATH = `${PROJECT_CONTRACT_PATH}/ID-REGISTRY.yaml`;
-const MILESTONE_CONTRACT_PATH = /^\.cruise\/milestones\/(M-\d{2,})-[a-z0-9][a-z0-9-]*$/u;
+export const BUILD_ID_REGISTRY_PATH = `${PROJECT_CONTRACT_PATH}/ids.yaml`;
+const MILESTONE_CONTRACT_PATH = /^\.cruise\/milestones\/(?=.{1,15}$)(M-\d{2,})-[a-z0-9][a-z0-9-]*$/u;
 
 function selectionSnapshot(selection) {
   return {
@@ -2109,7 +2109,13 @@ async function canonicalContractDirectory(root, mode, contractDirectory) {
   if (mode === 'bootstrap' && rel !== '.cruise/project') {
     throw new Error('bootstrap approval must use .cruise/project');
   }
-  if (mode === 'milestone' && !/^\.cruise\/milestones\/M-\d{2,}-[a-z0-9][a-z0-9-]*$/u.test(rel)) {
+  if (
+    mode === 'milestone'
+    && (
+      !/^\.cruise\/milestones\/M-\d{2,}-[a-z0-9][a-z0-9-]*$/u.test(rel)
+      || rel.split('/').at(-1).length > 15
+    )
+  ) {
     throw new Error('milestone approval requires .cruise/milestones/<M-ID>-<slug>');
   }
   return { canonicalRoot, canonicalDirectory, relativeDirectory: rel };
@@ -2942,11 +2948,11 @@ async function inspectBuildContractDraft({
   const active = mode === 'milestone' ? milestone : project;
   const extraNames = stringArray(additionalArtifactPaths, 'additionalArtifactPaths');
   const additional = extraNames.map((path) => {
-    if (['STATE.yaml', 'QUEUE-STATE.yaml'].includes(basename(path))) {
+    if (['STATE.yaml', 'queue-run.yaml'].includes(basename(path))) {
       throw new Error(`${basename(path)} is mutable runtime state and cannot be byte-locked`);
     }
-    if (basename(path) === 'ID-REGISTRY.yaml') {
-      throw new Error('ID-REGISTRY.yaml is already a canonical approval artifact');
+    if (basename(path) === 'ids.yaml') {
+      throw new Error('ids.yaml is already a canonical approval artifact');
     }
     const absolute = resolve(active.canonicalDirectory, path);
     const rel = portable(relative(active.canonicalDirectory, absolute));

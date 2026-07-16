@@ -780,7 +780,7 @@ test('candidate-provided executable callbacks never control install, smoke, or r
     throw new Error('candidate callback executed');
   };
   const run = createProvisionRun({
-    runId: 'trusted-adapter-boundary',
+    runId: 'trust-adapter',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -833,7 +833,7 @@ test('host-native and built-in capabilities may prove why no version exists', as
     equivalent_mandatory_evidence: true,
   };
   const run = createProvisionRun({
-    runId: 'builtin-no-version',
+    runId: 'builtin-ver',
     nodes: [{
       ...node('CAP-A', 'host-parser'),
       kind: 'builtin',
@@ -850,7 +850,7 @@ test('host-native and built-in capabilities may prove why no version exists', as
           action: 'fallback',
           identity: 'host-parser',
           version: null,
-          fallback_approval: fallbackApproval('builtin-no-version', fallback),
+          fallback_approval: fallbackApproval('builtin-ver', fallback),
         }),
     },
     smokeBroker: smokeVerificationBroker(async () => ({
@@ -897,7 +897,7 @@ test('smoke success requires proven identity, scope, evidence, and matching vers
   for (const [index, [label, candidate, proof]] of cases.entries()) {
     await t.test(label, async () => {
       const run = createProvisionRun({
-        runId: `smoke-negative-${index + 1}`,
+        runId: `smoke-neg-${index + 1}`,
         nodes: [node('CAP-A', 'host-tool')],
         now: fixedNow,
       });
@@ -950,7 +950,7 @@ test('installer exit zero cannot bypass a failed smoke test and safe rollback ru
 
 test('rollback broker rejects recovery evidence outside the exact managed installation root', async () => {
   const run = createProvisionRun({
-    runId: 'rollback-path-escape',
+    runId: 'rollback-path',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -996,7 +996,7 @@ test('automatic install trust requires declared rollback safety and recovery', a
 
   let installs = 0;
   const run = createProvisionRun({
-    runId: 'rollback-proof-required',
+    runId: 'rollback-proof',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -1021,7 +1021,7 @@ test('automatic install trust requires declared rollback safety and recovery', a
 
 test('failed install validation records unavailable automated rollback truthfully', async () => {
   const run = createProvisionRun({
-    runId: 'rollback-unavailable',
+    runId: 'rollback-none',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -1132,7 +1132,7 @@ test('empty trusted-catalog entries cannot authorize arbitrary installers', () =
 
 test('external use cannot bypass the opaque private selection evaluation', async () => {
   const run = createProvisionRun({
-    runId: 'external-use-gate',
+    runId: 'ext-use',
     nodes: [node('CAP-A', 'external-analyzer')],
     now: fixedNow,
   });
@@ -1220,7 +1220,7 @@ test('opaque selection and effect authorization bind exact action, scope, identi
   }
   let installs = 0;
   const scheduler = new ProvisionScheduler({
-    run: createProvisionRun({ runId: 'bound-install-plan', nodes: [node('CAP-A', 'analyzer')], now: fixedNow }),
+    run: createProvisionRun({ runId: 'install-plan', nodes: [node('CAP-A', 'analyzer')], now: fixedNow }),
     now: fixedNow,
     resolvers: {
       trusted_catalog: async () => trustedInstallCandidate({
@@ -1237,7 +1237,7 @@ test('opaque selection and effect authorization bind exact action, scope, identi
 
 test('scheduler exclusions apply before activation or privileged adapter context', async () => {
   const run = createProvisionRun({
-    runId: 'scheduler-exclusion',
+    runId: 'sched-excl',
     nodes: [node('CAP-A', 'excluded-tool')],
     now: fixedNow,
   });
@@ -1272,7 +1272,7 @@ test('scheduler refreshes repository revocations after resolution and before ada
   const capabilityRequest = schedulerRequestForRoot('CAPREQ-246', root);
   const store = new ProvisionStateStore({ root, now: fixedNow });
   const run = createProvisionRun({
-    runId: 'revocation-use',
+    runId: 'revoke-use',
     requestId: capabilityRequest.request.id,
     capabilityRequest,
     nodes: [node('CAP-A', 'use-capability')],
@@ -1350,16 +1350,16 @@ test('scheduler rejects cross-repository and forged state stores before revocati
   const result = await scheduler.run();
   assert.equal(result.nodes[0].status, 'excluded');
   assert.equal(adapterCalls, 0);
-  await access(join(root, '.cruise', 'internal', 'provision-runs', 'store-authority.yaml'));
+  await access(join(root, '.cruise', 'internal', 'provision-runs', 'store-authority', 'state.yaml'));
   await assert.rejects(
-    access(join(foreignRoot, '.cruise', 'internal', 'provision-runs', 'store-authority.yaml')),
+    access(join(foreignRoot, '.cruise', 'internal', 'provision-runs', 'store-authority', 'state.yaml')),
     /ENOENT/,
   );
 });
 
 test('trust and node-bound auth are validated before entering waiting_auth', async () => {
   const run = createProvisionRun({
-    runId: 'auth-after-trust',
+    runId: 'auth-trust',
     nodes: [node('CAP-A', 'external-analyzer')],
     now: fixedNow,
   });
@@ -1382,7 +1382,7 @@ test('trust and node-bound auth are validated before entering waiting_auth', asy
   assert.equal(rejected.nodes[0].blocking_reason, 'unsafe_install_rejected');
 
   const hostRun = createProvisionRun({
-    runId: 'auth-node-binding',
+    runId: 'auth-node',
     nodes: [node('CAP-A', 'host-connector')],
     now: fixedNow,
   });
@@ -1393,7 +1393,7 @@ test('trust and node-bound auth are validated before entering waiting_auth', asy
       host_native: async () => useCandidate({
         identity: 'host-connector',
         auth_required: true,
-        authorization_run_id: 'auth-node-binding',
+        authorization_run_id: 'auth-node',
         auth_job: createAuthJob({ id: 'AUTH-001', capabilityId: 'CAP-B', serverName: 'host-connector', requiredScopes: ['connector:read'] }),
       }),
     },
@@ -1403,7 +1403,7 @@ test('trust and node-bound auth are validated before entering waiting_auth', asy
   assert.equal(invalid.nodes[0].blocking_reason, 'auth_job_invalid');
 
   const scopeRun = createProvisionRun({
-    runId: 'auth-scope-binding',
+    runId: 'auth-scope',
     nodes: [node('CAP-A', 'host-connector')],
     now: fixedNow,
   });
@@ -1414,7 +1414,7 @@ test('trust and node-bound auth are validated before entering waiting_auth', asy
       host_native: async () => useCandidate({
         identity: 'host-connector',
         auth_required: true,
-        authorization_run_id: 'auth-scope-binding',
+        authorization_run_id: 'auth-scope',
         auth_job: createAuthJob({
           id: 'AUTH-001',
           capabilityId: 'CAP-A',
@@ -1455,7 +1455,7 @@ test('preferred and mandatory fallback must be preapproved and equivalent', asyn
       version_unavailable_reason: 'The host built-in has no version metadata.',
     })),
   });
-  const blocked = await makeScheduler('unapproved-fallback', null).run();
+  const blocked = await makeScheduler('fallback-no', null).run();
   assert.equal(blocked.nodes[0].blocking_reason, 'fallback_not_preapproved_or_equivalent');
   const approvedFallback = {
     identity: 'host-parser',
@@ -1468,19 +1468,19 @@ test('preferred and mandatory fallback must be preapproved and equivalent', asyn
     equivalent_mandatory_evidence: true,
   };
   const tampered = await makeScheduler(
-    'tampered-fallback',
+    'fallback-bad',
     { ...approvedFallback, approval_sha256: 'tampered' },
     approvedFallback,
   ).run();
   assert.equal(tampered.nodes[0].blocking_reason, 'fallback_not_preapproved_or_equivalent');
-  const approved = await makeScheduler('approved-fallback', approvedFallback, approvedFallback).run();
+  const approved = await makeScheduler('fallback-ok', approvedFallback, approvedFallback).run();
   assert.equal(approved.status, 'succeeded');
 });
 
 test('required capability nodes cannot accept a skip resolution', async () => {
   assert.throws(
     () => createProvisionRun({
-      runId: 'mandatory-not-required',
+      runId: 'must-needed',
       nodes: [{ ...node('CAP-A', 'parser'), necessity: 'mandatory', required_for_completion: false }],
       now: fixedNow,
     }),
@@ -1524,7 +1524,7 @@ test('persisted or caller-forged success never satisfies the DAG without revalid
   );
 
   const persisted = createProvisionRun({
-    runId: 'persisted-success',
+    runId: 'saved-success',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -1578,7 +1578,7 @@ test('an independent optional node may skip without preventing required completi
 
 test('a skipped optional dependency never releases its dependent', async () => {
   const run = createProvisionRun({
-    runId: 'skipped-dependency',
+    runId: 'skip-dep',
     nodes: [
       { ...node('CAP-A', 'optional-source'), required_for_completion: false },
       node('CAP-B', 'required-consumer', ['CAP-A']),
@@ -1676,7 +1676,7 @@ test('auth wait pauses descendants, completes independent siblings, and resumes 
 test('scheduler rejects plain or forged auth checkers and blocks drifted opaque auth evidence', async () => {
   assert.throws(
     () => new ProvisionScheduler({
-      run: createProvisionRun({ runId: 'plain-auth-callback', nodes: [node('CAP-A', 'private')], now: fixedNow }),
+      run: createProvisionRun({ runId: 'plain-auth', nodes: [node('CAP-A', 'private')], now: fixedNow }),
       authCheck: async () => ({ ok: true, identity: 'forged', scope: ['connector:read'] }),
     }),
     /Plain .*auth callbacks are forbidden/iu,
@@ -1691,7 +1691,7 @@ test('scheduler rejects plain or forged auth checkers and blocks drifted opaque 
   const candidate = () => useCandidate({
     identity: 'drift-connector',
     auth_required: true,
-    authorization_run_id: 'auth-evidence-drift',
+    authorization_run_id: 'auth-drift',
     auth_job: authJob,
   });
   let drifted = false;
@@ -1701,7 +1701,7 @@ test('scheduler rejects plain or forged auth checkers and blocks drifted opaque 
     scope: ['connector:read'],
   }));
   const scheduler = new ProvisionScheduler({
-    run: createProvisionRun({ runId: 'auth-evidence-drift', nodes: [node('CAP-A', 'private')], now: fixedNow }),
+    run: createProvisionRun({ runId: 'auth-drift', nodes: [node('CAP-A', 'private')], now: fixedNow }),
     now: fixedNow,
     authBroker: broker,
     resolvers: { host_native: async () => candidate() },
@@ -1732,7 +1732,7 @@ test('declined authentication uses only an approved equivalent preferred fallbac
   };
   const preferred = new ProvisionScheduler({
     run: createProvisionRun({
-      runId: 'preferred-auth-decline',
+      runId: 'pref-decline',
       nodes: [{ ...node('CAP-A', 'private-parser'), necessity: 'preferred', approved_fallback: fallback }],
       now: fixedNow,
     }),
@@ -1741,14 +1741,14 @@ test('declined authentication uses only an approved equivalent preferred fallbac
       host_native: async () => useCandidate({
         identity: 'private-parser',
         auth_required: true,
-        authorization_run_id: 'preferred-auth-decline',
+        authorization_run_id: 'pref-decline',
         auth_job: createAuthJob({ id: 'AUTH-001', capabilityId: 'CAP-A', serverName: 'private-parser', requiredScopes: ['connector:read'] }),
       }),
       builtin_fallback: async () => useCandidate({
         action: 'fallback',
         identity: 'host-parser',
         version: null,
-        fallback_approval: fallbackApproval('preferred-auth-decline', fallback),
+        fallback_approval: fallbackApproval('pref-decline', fallback),
       }),
     },
     smokeBroker: smokeVerificationBroker(async () => ({
@@ -1767,7 +1767,7 @@ test('declined authentication uses only an approved equivalent preferred fallbac
 
   const mandatory = new ProvisionScheduler({
     run: createProvisionRun({
-      runId: 'mandatory-auth-decline',
+      runId: 'must-decline',
       nodes: [{ ...node('CAP-A', 'private-parser'), necessity: 'mandatory' }],
       now: fixedNow,
     }),
@@ -1776,7 +1776,7 @@ test('declined authentication uses only an approved equivalent preferred fallbac
       host_native: async () => useCandidate({
         identity: 'private-parser',
         auth_required: true,
-        authorization_run_id: 'mandatory-auth-decline',
+        authorization_run_id: 'must-decline',
         auth_job: createAuthJob({ id: 'AUTH-001', capabilityId: 'CAP-A', serverName: 'private-parser', requiredScopes: ['connector:read'] }),
       }),
     },
@@ -1929,7 +1929,7 @@ test('blocked resolutions consume the bounded retry budget', async () => {
 
 test('provision retries have no hidden default attempt ceiling', async () => {
   const run = createProvisionRun({
-    runId: 'reviewed-retry-history',
+    runId: 'retry-hist',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -1956,7 +1956,7 @@ test('provision retries have no hidden default attempt ceiling', async () => {
 test('successful retry requeues descendants blocked only by the failed dependency', async () => {
   let failRoot = true;
   const run = createProvisionRun({
-    runId: 'retry-descendants',
+    runId: 'retry-deps',
     nodes: [node('CAP-A', 'root'), node('CAP-B', 'child', ['CAP-A'])],
     now: fixedNow,
   });
@@ -2011,7 +2011,7 @@ test('state store writes private YAML atomically, round-trips, and redacts secre
   const loaded = await store.loadRun('persisted', { capabilityRequest: SCHEDULER_REQUEST });
   assert.equal(loaded.metadata.authorization, '[REDACTED]');
   assert.equal(loaded.nodes[0].id, 'CAP-A');
-  const registry = await readFile(join(root, '.cruise', 'internal', 'capabilities.yaml'), 'utf8');
+  const registry = await readFile(join(root, '.cruise', 'internal', 'caps.yaml'), 'utf8');
   assert.match(registry, /"kind": "cruise_capability_registry"/);
 });
 
@@ -2049,7 +2049,7 @@ test('persisted provision DAG authority rejects structural drift and recomputed 
     await t.test(name, async () => {
       const root = await mkdtemp(join(tmpdir(), `cruise-provision-contract-${name}-`));
       const store = new ProvisionStateStore({ root, now: fixedNow });
-      const runId = `contract-${name}`;
+      const runId = `ct-${name}`;
       const run = createProvisionRun({
         runId,
         nodes: [node('CAP-A', 'source'), node('CAP-B', 'consumer', ['CAP-A'])],
@@ -2070,10 +2070,10 @@ test('persisted provision DAG authority rejects structural drift and recomputed 
     await t.test(`recomputed-${field}`, async () => {
       const root = await mkdtemp(join(tmpdir(), `cruise-provision-contract-${field}-`));
       const store = new ProvisionStateStore({ root, now: fixedNow });
-      const runId = `contract-${field}`;
+      const runId = `ct-${field}`;
       const run = createProvisionRun({ runId, nodes: [node('CAP-A', 'connector')], now: fixedNow });
       const statePath = await store.saveRun(run);
-      const contractPath = join(root, '.cruise', 'internal', 'provision-runs', `${runId}.contract.yaml`);
+      const contractPath = join(root, '.cruise', 'internal', 'provision-runs', runId, 'contract.yaml');
       const state = parseProvisionYaml(await readFile(statePath, 'utf8'));
       const contract = parseProvisionYaml(await readFile(contractPath, 'utf8'));
       if (field === 'auth') {
@@ -2094,7 +2094,7 @@ test('persisted provision DAG authority rejects structural drift and recomputed 
 
 test('scheduler requires its live CAPREQ-bound DAG contract and does not expose mutable node authority', async () => {
   const tampered = createProvisionRun({
-    runId: 'scheduler-contract-tamper',
+    runId: 'sched-tamper',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });
@@ -2105,7 +2105,7 @@ test('scheduler requires its live CAPREQ-bound DAG contract and does not expose 
   );
 
   const run = createProvisionRun({
-    runId: 'scheduler-contract-copy',
+    runId: 'sched-copy',
     nodes: [node('CAP-A', 'parser')],
     now: fixedNow,
   });

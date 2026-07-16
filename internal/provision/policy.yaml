@@ -10,7 +10,6 @@ public_surface:
     - refine
     - goal
     - debug
-    - research
   recursive_public_skill_invocation: forbidden
   public_skill_registration_forbidden:
     - SKILL.md
@@ -1127,7 +1126,7 @@ scheduler:
   capability_run_requires_nonempty_nodes: true
   zero_node_no_provisioning_run_supported: false
   immutable_dag_contract:
-    persisted_separately_as: .cruise/internal/provision-runs/<run-id>.contract.yaml
+    persisted_separately_as: .cruise/internal/provision-runs/<run-id>/contract.yaml
     contract_sha256_persisted_on_run: true
     persisted_self_digest_is_authority: false
     live_opaque_capreq_run_expected_digest_required: true
@@ -1271,7 +1270,7 @@ exclusion:
   quarantine_root: .cruise/skills/quarantine/
   quarantine_persistence_requires_exact_request_root_and_current_exclusion_digest: true
   adapted_root: .cruise/skills/adapted/
-  rejected_registry: .cruise/internal/rejected-capabilities.yaml
+  rejected_registry: .cruise/internal/rejected.yaml
   host_wide_hiding_claim: forbidden
   immutable_rejection_identity:
     - repository

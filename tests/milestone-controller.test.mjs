@@ -78,8 +78,8 @@ import {
 } from './helpers/build-contract-artifacts.mjs';
 
 const MILESTONE_ID = 'M-003';
-const MILESTONE_PATH = '.cruise/milestones/M-003-safe-rollout';
-const CONTROLLER_PATH = '.cruise/goal/MILESTONE-CONTROLLER.yaml';
+const MILESTONE_PATH = '.cruise/milestones/M-003-rollout';
+const CONTROLLER_PATH = '.cruise/goal/ctrl.yaml';
 const NOW = '2026-07-13T08:30:00.000Z';
 const DIGEST_A = 'a'.repeat(64);
 const DIGEST_B = 'b'.repeat(64);
@@ -126,7 +126,7 @@ async function writeBuildContract(
     ['ARCHITECTURE.md', '# Architecture\n'],
     ['ROADMAP.md', '# Project roadmap\n\nM-003\n'],
     ['DECISIONS.md', '# Project decisions\n'],
-    ['ID-REGISTRY.yaml', 'schema_version: 1\nkind: cruise_build_id_registry\n'],
+    ['ids.yaml', 'schema_version: 1\nkind: cruise_build_id_registry\n'],
     ['QUEUE.yaml', 'schema_version: 1\nqueue: {}\n'],
   ]);
   const milestoneFiles = new Map([
@@ -887,7 +887,7 @@ test('milestone Goal objective is hierarchical and preserves the legacy objectiv
 
   const objective = buildGoalObjective('Complete the milestone.', controller);
   assert.match(objective, /hierarchical milestone controller for M-003/);
-  assert.match(objective, /MILESTONE-CONTROLLER\.yaml/);
+  assert.match(objective, /ctrl\.yaml/);
   assert.match(objective, /just-in-time plan for only the next ready phase/);
   assert.match(objective, /Do not flatten the milestone/);
   assert.doesNotMatch(objective, /Execute only the current slice/);
@@ -1113,7 +1113,7 @@ test('persisted phase state advances only through current closeout/evidence atte
   state = closeMilestoneControllerPhase({ state, ...bindings, closeoutAttestation: p2Proof });
   const aggregate = completedEvidence(state.run_id, ['E-01', 'E-02'], 'E-03');
   await writeFile(
-    join(fixture.cwd, MILESTONE_PATH, 'MILESTONE-EVIDENCE.yaml'),
+    join(fixture.cwd, MILESTONE_PATH, 'mile-evid.yaml'),
     stringifyYaml(aggregate),
   );
   const fence = await attestMilestoneCompletionFence({
@@ -1480,11 +1480,11 @@ test('controller history recovers every interrupted multi-file commit point', as
       const historyDirectory = join(
         fixture.cwd,
         MILESTONE_PATH,
-        'CONTROLLER-STATE-HISTORY',
+        'ctrl-hist',
       );
       assert.equal((await stat(historyDirectory)).mode & 0o777, 0o700);
       assert.equal(
-        (await stat(join(historyDirectory, 'REV-000000000001.yaml'))).mode & 0o777,
+        (await stat(join(historyDirectory, 'step-1.yaml'))).mode & 0o777,
         0o400,
       );
     });
@@ -1633,7 +1633,7 @@ test('mandatory failure blocks completion while optional failure does not', asyn
   assert.equal(state.hard_stop, null);
   const aggregate = completedEvidence(state.run_id, ['E-01'], 'E-02');
   await writeFile(
-    join(optional.cwd, MILESTONE_PATH, 'MILESTONE-EVIDENCE.yaml'),
+    join(optional.cwd, MILESTONE_PATH, 'mile-evid.yaml'),
     stringifyYaml(aggregate),
   );
   const fence = await attestMilestoneCompletionFence({

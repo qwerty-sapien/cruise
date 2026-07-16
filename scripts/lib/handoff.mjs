@@ -74,7 +74,11 @@ export const HANDOFF_SCHEMA = Object.freeze({
     authorizes_goal_activation: { const: false },
     goal_activation_requirement: {
       type: 'string',
-      enum: ['not_applicable', 'separate_Approve_Plan_then_Start_Cruise_required'],
+      enum: [
+        'not_applicable',
+        'combined_Plan_and_Goal_Approve_required',
+        'separate_Approve_Plan_then_Start_Cruise_required',
+      ],
     },
   }),
 });
@@ -124,9 +128,9 @@ export function validateHandoff(record, { evidenceRecord = null } = {}) {
   if (record.target_route === 'goal') {
     if (
       record.goal_activation_requirement !==
-      'separate_Approve_Plan_then_Start_Cruise_required'
+      'combined_Plan_and_Goal_Approve_required'
     ) {
-      throw new Error('Goal handoff must retain separate Approve Plan and Start Cruise authority');
+      throw new Error('Goal handoff must retain one combined Plan-and-Goal Approve both authority');
     }
   } else if (record.goal_activation_requirement !== 'not_applicable') {
     throw new Error('non-Goal handoff cannot claim a Goal activation requirement');
@@ -181,7 +185,7 @@ export function createHandoff({
     authorizes_product_edits: false,
     authorizes_goal_activation: false,
     goal_activation_requirement: targetRoute === 'goal'
-      ? 'separate_Approve_Plan_then_Start_Cruise_required'
+      ? 'combined_Plan_and_Goal_Approve_required'
       : 'not_applicable',
   };
   validateHandoff(record);

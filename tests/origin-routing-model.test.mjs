@@ -694,7 +694,7 @@ test('low confidence retries exactly once with Terra and persistent uncertainty 
       calls.push(request);
       return calls.length === 1
         ? classifierOutput({ route: 'goal', confidence: 0.4, ambiguity: 'high' })
-        : classifierOutput({ route: 'research', confidence: 0.7, ambiguity: 'medium' });
+        : classifierOutput({ route: 'refine', confidence: 0.7, ambiguity: 'medium' });
     },
   });
   assert.equal(calls.length, 2);

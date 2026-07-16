@@ -21,7 +21,7 @@ Execute each approved DAG node through a small, evidence-producing plan → exec
 
 Do not enter execution until:
 
-- the suite passed all pre-Start checks, the user chose Start, and its exact bytes are now `Approved (inactive)`;
+- the suite passed all pre-approval checks, the user chose **Approve both**, and its exact Plan and Goal bytes are now `Approved (inactive)`;
 - Start is bound to exact repository and artifact identities;
 - the immediate time-of-use identity recheck passes;
 - the permission envelope names allowed and prohibited effects;
@@ -31,7 +31,7 @@ Do not enter execution until:
 - exactly one execution branch applies: callable native Goal confirmed active, or the separately selected, digest-bound **Execute in Current Thread** fallback with a `D-XX` loss-of-durability decision and no native handoff;
 - `CLOSEOUT.md` is created with activation/fallback provenance.
 
-For a user-invoked native handoff, remain `Approved (inactive)`, output the handoff, and stop without CLOSEOUT or implementation until active state is confirmed. If any prerequisite fails, remain inactive and reconcile. Never use implementation progress to retroactively justify a missing Start.
+For a user-invoked native handoff, remain `Approved (inactive)`, output the handoff, and stop without CLOSEOUT or implementation until active state is confirmed. If any prerequisite fails, remain inactive and reconcile. Never use implementation progress to retroactively justify a missing combined approval.
 
 ## 2. Node state machine
 

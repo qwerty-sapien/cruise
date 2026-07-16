@@ -388,7 +388,7 @@ function request(overrides = {}) {
   return createCapabilityRequest({
     id: overrides.id ?? 'CAPREQ-001',
     originatingRun: overrides.originatingRun ?? 'run-001',
-    publicSkill: overrides.publicSkill ?? 'research',
+    publicSkill: overrides.publicSkill ?? 'debug',
     originSha256: ORIGIN_SHA256,
     repositoryRoot: overrides.repositoryRoot ?? process.cwd(),
     permissionDecisions: overrides.permissionDecisions ?? [{
@@ -689,8 +689,8 @@ async function externalSelection(capabilityRequest, {
   });
 }
 
-test('CAPREQ records are strict, concrete, normalized, and admit exactly six public callers', () => {
-  assert.deepEqual(PROVISION_PUBLIC_CALLERS, ['build', 'quick', 'refine', 'goal', 'debug', 'research']);
+test('CAPREQ records are strict, concrete, normalized, and admit exactly five public callers', () => {
+  assert.deepEqual(PROVISION_PUBLIC_CALLERS, ['build', 'quick', 'refine', 'goal', 'debug']);
   for (const publicSkill of PROVISION_PUBLIC_CALLERS) {
     const value = request({ publicSkill });
     assert.equal(validateCapabilityRequest(value), value);
@@ -699,14 +699,14 @@ test('CAPREQ records are strict, concrete, normalized, and admit exactly six pub
     assert.equal(value.request.gap.minimum_improvement_required, 0.1);
     assert.equal(value.request.constraints.maximum_install_scope, 'repository-local');
   }
-  assert.throws(() => request({ publicSkill: '_provision' }), /six public Cruise skills/);
+  assert.throws(() => request({ publicSkill: '_provision' }), /five public Cruise skills/);
   assert.throws(() => request({ id: 'request-1' }), /CAPREQ/);
   assert.throws(() => request({ task: { summary: '' } }), /summary/);
   assert.throws(
     () => createCapabilityRequest({
       id: 'CAPREQ-777',
       originatingRun: 'run-root-test',
-      publicSkill: 'research',
+      publicSkill: 'debug',
       originSha256: ORIGIN_SHA256,
       repositoryRoot: 'relative/repository',
       permissionDecisions: [],
@@ -1256,7 +1256,7 @@ test('external acquisition uses hosting metadata, pins one commit, fetches selec
   ]) assert.equal(acquired.acquisition[field], false, field);
   assert.equal(acquired.quarantine.discoverable_skill_files_created, false);
   assert.equal(acquired.quarantine.blobs.every(({ quarantine_name }) =>
-    /^[a-f0-9]{64}\.blob$/u.test(quarantine_name)), true);
+    /^[a-z][a-z0-9-]{0,9}\.blob$/u.test(quarantine_name)), true);
   assert.equal(Object.isFrozen(acquired), true);
   assert.equal(Object.isFrozen(acquired.acquisition), true);
   assert.throws(() => { acquired.acquisition.commit_sha = '../../escape'; }, /read only|Cannot assign/iu);
@@ -2281,7 +2281,7 @@ test('privileged context contains only approved identity, digest, role, and prop
   }), {
     capability: {
       request_id: 'CAPREQ-001',
-      public_skill: 'research',
+      public_skill: 'debug',
       origin_sha256: ORIGIN_SHA256,
       source: 'official/analyzer',
       commit_sha: COMMIT,
@@ -2461,7 +2461,7 @@ test('auth verification attestations are opaque and exact-context bound', async 
     serverName: 'verified-mcp.server',
     requiredScopes: ['connector:read'],
   });
-  const provisionRunId = 'auth-verification-run';
+  const provisionRunId = 'auth-verify';
   const candidateIdentity = 'verified-mcp.server';
   const authEffect = effectAuthorization(authRequest, 'authenticate', {
     capabilityId: authJob.capability_id,
@@ -2564,7 +2564,7 @@ test('authentication resume is truthful about host continuation support', async 
   const continuationContext = {
     request: authRequest,
     authJob,
-    provisionRunId: 'run-continuation-001',
+    provisionRunId: 'auth-continue',
     candidateIdentity: 'continuation-mcp.server',
     validatedIdentity: 'user@example.invalid',
     validatedScope: ['connector:read'],
@@ -2706,14 +2706,14 @@ test('trusted auth runner preserves argv boundaries, filters environment, redact
     capabilityId: 'CAP-007',
     permissions: ['connector:read'],
     authJob: job,
-    provisionRunId: 'auth-runner-test',
+    provisionRunId: 'auth-runner',
     candidateIdentity: 'safe-mcp.server',
   });
   const runAuth = (options) => runStructuredAuthJob({
     request: authRequest,
     effectAuthorization: authAuthorization,
     job,
-    provisionRunId: 'auth-runner-test',
+    provisionRunId: 'auth-runner',
     candidateIdentity: 'safe-mcp.server',
     ...options,
   });
@@ -2931,43 +2931,43 @@ test('trusted auth runner preserves argv boundaries, filters environment, redact
 });
 
 test('provision effects require exact permission, origin binding, route policy, auth allowance, and Goal approval', async () => {
-  const research = request({ publicSkill: 'research' });
-  const authority = { origin_sha256: ORIGIN_SHA256, public_skill: 'research' };
+  const build = request({ publicSkill: 'build' });
+  const authority = { origin_sha256: ORIGIN_SHA256, public_skill: 'build' };
   const discovery = { kind: 'external_discovery' };
   const authorized = authorizeProvisionEffect({
-    request: research,
+    request: build,
     effect: discovery,
     permission: permission('external_discovery'),
     authority,
   });
   assert.equal(authorized.allowed, true);
   assert.equal(authorized.permission_id, 'D-01');
-  assert.equal(authorized.request_id, research.request.id);
+  assert.equal(authorized.request_id, build.request.id);
   assert.equal(authorized.effect_kind, 'external_discovery');
-  assert.equal(authorized.public_skill, 'research');
+  assert.equal(authorized.public_skill, 'build');
   assert.equal(isProvisionEffectAuthorization(authorized, {
-    request: research,
+    request: build,
     effectKind: 'external_discovery',
-    publicSkill: 'research',
+    publicSkill: 'build',
   }), true);
   assert.equal(isProvisionEffectAuthorization(authorized, {
-    request: structuredClone(research),
+    request: structuredClone(build),
     effectKind: 'external_discovery',
-    publicSkill: 'research',
+    publicSkill: 'build',
   }), false);
   assert.equal(isProvisionEffectAuthorization(authorized, {
-    request: request({ publicSkill: 'research' }),
+    request: request({ publicSkill: 'build' }),
     effectKind: 'external_discovery',
-    publicSkill: 'research',
+    publicSkill: 'build',
   }), false);
   assert.equal(authorizeProvisionEffect({
-    request: research,
+    request: build,
     effect: discovery,
     permission: { id: 'D-01', granted: false, scopes: ['external_discovery'] },
     authority,
   }).reason, 'exact_granted_permission_required');
   assert.equal(authorizeProvisionEffect({
-    request: research,
+    request: build,
     effect: discovery,
     permission: permission('external_discovery'),
     authority: { ...authority, public_skill: 'goal' },
@@ -2982,10 +2982,10 @@ test('provision effects require exact permission, origin binding, route policy, 
     request: request({ constraints: { authentication_allowed: false } }),
     effect: { kind: 'authenticate' },
     permission: permission('authenticate'),
-    authority,
+    authority: { origin_sha256: ORIGIN_SHA256, public_skill: 'debug' },
   }).reason, 'authentication_not_allowed');
   assert.equal(authorizeProvisionEffect({
-    request: research,
+    request: build,
     effect: { kind: 'install', target_application_dependency: true, install_scope: 'repository-local' },
     permission: permission('install'),
     authority,
@@ -3059,7 +3059,7 @@ test('capability loss reconciliation preserves mandatory criteria and never sile
   assert.deepEqual(NECESSITY_LEVELS, ['optional', 'preferred', 'mandatory']);
   assert.equal(reconcileCapabilityLoss({ necessity: 'optional' }).reconciliation.outcome, 'equivalent_fallback');
   const capabilityRequest = request({ id: 'CAPREQ-042' });
-  const provisionRunId = 'provision-loss-test';
+  const provisionRunId = 'cap-loss';
   const nodeId = 'CAP-LOSS';
   const equivalent = {
     approved_before_activation: true,
@@ -3239,7 +3239,7 @@ test('exclusion and immutable rejected-revision matching are shared private boun
     exclude: '.cruise/skills/exclude',
     quarantine: '.cruise/skills/quarantine/',
     adapted: '.cruise/skills/adapted/',
-    rejected: '.cruise/internal/rejected-capabilities.yaml',
+    rejected: '.cruise/internal/rejected.yaml',
   });
   const exclusion = {
     entries: ['blocked-skill', 'owner/blocked-repo'],
@@ -3318,7 +3318,7 @@ test('exclusion authority rejects symlinked and oversized state files', async ()
     /bounded regular non-symlink file/,
   );
   await unlink(excludePath);
-  await symlink(outsideFile, join(internal, 'rejected-capabilities.yaml'));
+  await symlink(outsideFile, join(internal, 'rejected.yaml'));
   await assert.rejects(
     loadProvisionExclusionSnapshot({ root }),
     /bounded regular non-symlink file|escapes the repository root/,

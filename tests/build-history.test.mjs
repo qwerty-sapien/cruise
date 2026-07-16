@@ -109,7 +109,7 @@ async function initialRegistry(root) {
 async function persistedRegistryPair(prefix = 'cruise-build-persistence-') {
   const root = await mkdtemp(join(tmpdir(), prefix));
   const { captured, registry } = await initialRegistry(root);
-  const path = join(root, '.cruise', 'project', 'ID-REGISTRY.yaml');
+  const path = join(root, '.cruise', 'project', 'ids.yaml');
   const firstSnapshot = await writeBuildIdRegistry(path, registry, {
     initialBuildOriginAttestation: captured.attestation,
     originRecord: captured.origin_record,
@@ -570,7 +570,7 @@ test('allocation remains monotonic across supersession and superseded IDs must r
 test('persistent snapshots use CAS and resume authorities are exact-revision and one-use', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-build-resume-'));
   const { captured, registry } = await initialRegistry(root);
-  const path = join(root, '.cruise', 'project', 'ID-REGISTRY.yaml');
+  const path = join(root, '.cruise', 'project', 'ids.yaml');
   const firstSnapshot = await writeBuildIdRegistry(path, registry, {
     initialBuildOriginAttestation: captured.attestation,
     originRecord: captured.origin_record,
@@ -642,7 +642,7 @@ test('legacy standalone registries remain readable and migrate on an authorized 
   const root = await mkdtemp(join(tmpdir(), 'cruise-build-registry-legacy-'));
   const { captured, registry } = await initialRegistry(root);
   const projectDirectory = join(root, '.cruise', 'project');
-  const path = join(projectDirectory, 'ID-REGISTRY.yaml');
+  const path = join(projectDirectory, 'ids.yaml');
   await mkdir(projectDirectory, { recursive: true });
   await writeFile(path, stringifyYaml(registry));
 
@@ -651,7 +651,7 @@ test('legacy standalone registries remain readable and migrate on an authorized 
     originRecord: captured.origin_record,
   });
   assert.equal(loaded.revision, registry.revision);
-  await assert.rejects(readFile(join(projectDirectory, 'ID-REGISTRY-HEAD.yaml')), {
+  await assert.rejects(readFile(join(projectDirectory, 'id-head.yaml')), {
     code: 'ENOENT',
   });
 
@@ -668,9 +668,9 @@ test('legacy standalone registries remain readable and migrate on an authorized 
     originRecord: captured.origin_record,
     expectedSnapshot: createBuildIdRegistrySnapshot(loaded),
   });
-  assert.equal((await readdir(join(projectDirectory, 'ID-REGISTRY-HISTORY'))).length, 2);
+  assert.equal((await readdir(join(projectDirectory, 'id-hist'))).length, 2);
   assert.equal(
-    (await readdir(join(root, '.cruise', 'ID-REGISTRY-COMMITMENTS'))).length,
+    (await readdir(join(root, '.cruise', 'id-locks'))).length,
     1,
   );
 });
@@ -682,11 +682,11 @@ test('immutable registry history recovers canonical deletion after a process res
     originRecord: fixture.captured.origin_record,
     expectedSnapshot: fixture.firstSnapshot,
   });
-  const historyDirectory = join(fixture.root, '.cruise', 'project', 'ID-REGISTRY-HISTORY');
+  const historyDirectory = join(fixture.root, '.cruise', 'project', 'id-hist');
   const generations = (await readdir(historyDirectory)).sort();
-  assert.deepEqual(generations.map((name) => name.slice(0, 16)), [
-    `REV-${String(fixture.predecessor.revision).padStart(12, '0')}`,
-    `REV-${String(fixture.candidate.revision).padStart(12, '0')}`,
+  assert.deepEqual(generations, [
+    `id-${fixture.predecessor.revision}.yaml`,
+    `id-${fixture.candidate.revision}.yaml`,
   ]);
 
   await rm(fixture.path);
@@ -707,7 +707,7 @@ test('registry persistence rejects a symlink alias of the Origin-bound canonical
   const aliasDirectory = join(fixture.root, '.cruise', 'project-alias');
   await symlink(join(fixture.root, '.cruise', 'project'), aliasDirectory);
   await assert.rejects(
-    readBuildIdRegistry(join(aliasDirectory, 'ID-REGISTRY.yaml'), {
+    readBuildIdRegistry(join(aliasDirectory, 'ids.yaml'), {
       initialBuildOriginAttestation: fixture.captured.attestation,
       originRecord: fixture.captured.origin_record,
     }),
@@ -741,7 +741,7 @@ test('registry fences reject canonical rollback, history truncation, and restart
       originRecord: fixture.captured.origin_record,
       expectedSnapshot: fixture.firstSnapshot,
     });
-    const historyDirectory = join(fixture.root, '.cruise', 'project', 'ID-REGISTRY-HISTORY');
+    const historyDirectory = join(fixture.root, '.cruise', 'project', 'id-hist');
     const generations = (await readdir(historyDirectory)).sort();
     await rm(join(historyDirectory, generations.at(-1)));
     await assert.rejects(
@@ -760,7 +760,7 @@ test('registry fences reject canonical rollback, history truncation, and restart
       originRecord: fixture.captured.origin_record,
       expectedSnapshot: fixture.firstSnapshot,
     });
-    const commitmentRoot = join(fixture.root, '.cruise', 'ID-REGISTRY-COMMITMENTS');
+    const commitmentRoot = join(fixture.root, '.cruise', 'id-locks');
     const [lineageName] = await readdir(commitmentRoot);
     const lineageDirectory = join(commitmentRoot, lineageName);
     const commitments = (await readdir(lineageDirectory)).sort();
@@ -783,8 +783,8 @@ test('registry fences reject canonical rollback, history truncation, and restart
     });
     const projectDirectory = join(fixture.root, '.cruise', 'project');
     await rm(fixture.path);
-    await rm(join(projectDirectory, 'ID-REGISTRY-HEAD.yaml'));
-    await rm(join(projectDirectory, 'ID-REGISTRY-HISTORY'), { recursive: true });
+    await rm(join(projectDirectory, 'id-head.yaml'));
+    await rm(join(projectDirectory, 'id-hist'), { recursive: true });
     const denial = await attemptRegistryResetInFreshProcess(fixture.root, fixture.path);
     assert.match(
       denial,
@@ -835,12 +835,12 @@ test('registry pending intent recovers every injected persistence interruption e
       assert.equal(recovered.records.some(({ id }) => id === 'Q-02'), true);
 
       const projectDirectory = join(fixture.root, '.cruise', 'project');
-      const history = await readdir(join(projectDirectory, 'ID-REGISTRY-HISTORY'));
+      const history = await readdir(join(projectDirectory, 'id-hist'));
       assert.equal(history.length, 2);
-      await assert.rejects(readFile(join(projectDirectory, 'ID-REGISTRY-PENDING.yaml')), {
+      await assert.rejects(readFile(join(projectDirectory, 'id-pend.yaml')), {
         code: 'ENOENT',
       });
-      await assert.rejects(readFile(join(projectDirectory, 'ID-REGISTRY.yaml.lock')), {
+      await assert.rejects(readFile(join(projectDirectory, 'ids.yaml.lock')), {
         code: 'ENOENT',
       });
     });
@@ -866,20 +866,20 @@ test('a fresh writer reclaims a process-killed lock and rolls its durable intent
   });
   assert.equal(recovered.revision, fixture.candidate.revision);
   await assert.rejects(
-    readFile(join(fixture.root, '.cruise', 'project', 'ID-REGISTRY.yaml.lock')),
+    readFile(join(fixture.root, '.cruise', 'project', 'ids.yaml.lock')),
     { code: 'ENOENT' },
   );
 });
 
 test('registry writer reclaims only a validated dead PID/nonce lock', async () => {
   const fixture = await persistedRegistryPair('cruise-build-registry-dead-lock-');
-  const lockPath = join(fixture.root, '.cruise', 'project', 'ID-REGISTRY.yaml.lock');
+  const lockPath = join(fixture.root, '.cruise', 'project', 'ids.yaml.lock');
   const metadata = (pid, nonce) => ({
     schema_version: 1,
     kind: 'cruise_build_id_registry_writer_lock',
     origin_identity_sha256: fixture.predecessor.origin_identity_sha256,
     project_id: fixture.predecessor.project_id,
-    registry_path: 'ID-REGISTRY.yaml',
+    registry_path: 'ids.yaml',
     pid,
     nonce,
     acquired_at: '2026-07-13T00:00:04.000Z',

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import {
   lstat,
@@ -15,6 +14,11 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  allocateRunName,
+  REPOSITORY_ARTIFACTS,
+  RUN_ARTIFACTS,
+} from './lib/artifact-naming.mjs';
 import {
   captureRepositoryBaseline,
   createOriginRecord,
@@ -64,12 +68,13 @@ import {
   readYamlFile,
   writeYamlFile,
 } from './lib/yaml-state.mjs';
+import { runWorkerSession } from './lib/worker-session.mjs';
 
 const MAX_INPUT_BYTES = 4 * 1024 * 1024;
 const BOOLEAN_OPTIONS = new Set(['stdin', 'final']);
 
 const COMMAND_OPTIONS = Object.freeze({
-  begin: new Set(['skill', 'root', 'run-dir', 'stdin', 'prompt-file']),
+  begin: new Set(['skill', 'root', 'stdin', 'prompt-file']),
   'enrich-probe': new Set(['run-dir', 'facts']),
   route: new Set([
     'skill',
@@ -100,7 +105,7 @@ const COMMAND_OPTIONS = Object.freeze({
 const HELP = `Cruise internal runtime
 
 Usage:
-  cruise-runtime begin --skill <skill> --root <repo> --run-dir <dir> (--stdin | --prompt-file <file>)
+  cruise-runtime begin --skill <skill> --root <repo> (--stdin | --prompt-file <file>)
   cruise-runtime enrich-probe --run-dir <dir> --facts <yaml>
   cruise-runtime route --skill <skill> --run-dir <dir> --classifier <yaml> [--retry-classifier <yaml>] [--catalog-json <json>]
   cruise-runtime validate-origin --file <yaml> [--expected-origin <yaml>]
@@ -234,15 +239,48 @@ async function pathExists(path) {
   }
 }
 
+async function ensureRepositoryNaming(root, naming) {
+  const controlRoot = join(root, '.cruise');
+  await mkdir(controlRoot, { recursive: true, mode: 0o700 });
+  const path = join(controlRoot, REPOSITORY_ARTIFACTS.naming);
+  const record = {
+    schema_version: 1,
+    kind: 'cruise_repository_name',
+    name: naming.repository_name,
+    repository_root: root,
+    assigned_by: naming.agent_type,
+    worker_level: naming.level,
+    model: naming.model,
+    reasoning_effort: naming.reasoning_effort,
+  };
+  if (await pathExists(path)) {
+    const existing = await readYamlFile(await regularFile(path, 'repository name YAML'));
+    if (
+      existing?.schema_version !== 1
+      || existing?.kind !== 'cruise_repository_name'
+      || existing?.name !== naming.repository_name
+      || existing?.repository_root !== root
+      || existing?.assigned_by !== 'cruise_l1'
+      || existing?.worker_level !== 1
+    ) {
+      fail('level-1 repository name differs from the immutable repo.yaml authority');
+    }
+    return existing;
+  }
+  await writeYamlFile(path, record);
+  return record;
+}
+
 async function stageRunDirectory(requestedPath, write) {
   const absolute = resolve(requestedPath);
   const name = basename(absolute);
-  if (!name || name === '.' || name === '..') fail('--run-dir must name a new directory');
+  if (!name || name === '.' || name === '..') fail('run name must identify a new directory');
   await mkdir(dirname(absolute), { recursive: true });
   const parent = await realDirectory(dirname(absolute), 'run-directory parent');
   const target = join(parent, name);
   if (await pathExists(target)) fail(`run directory already exists: ${target}`);
-  const staging = join(parent, `.${name}.tmp-${process.pid}-${randomUUID()}`);
+  const staging = join(parent, '.run-stage');
+  if (await pathExists(staging)) fail(`run staging directory already exists: ${staging}`);
   await mkdir(staging, { mode: 0o700 });
   try {
     await write(staging, target);
@@ -255,7 +293,7 @@ async function stageRunDirectory(requestedPath, write) {
 }
 
 async function withRunLock(runDirectory, name, callback) {
-  const path = join(runDirectory, `.${name}.lock`);
+  const path = join(runDirectory, `${name}.lock`);
   let handle;
   try {
     handle = await open(path, 'wx', 0o600);
@@ -276,10 +314,10 @@ async function withForeignDiffGuardLock(runDirectory, callback) {
   // then every callback revalidates the pair while that lock is held. A
   // workspace writer can corrupt the mirror and force a fail-closed result,
   // but cannot redirect or remove this lock from inside the worker sandbox.
-  const guard = await readForeignDiffGuardState(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const guard = await readForeignDiffGuardState(join(runDirectory, 'drift.yaml'));
   const lockPath = join(
     dirname(foreignDiffAuthorityPath(guard.repository_root, guard.run_id)),
-    'foreign-diff-guard.lock',
+    'drift.lock',
   );
   return withHostAuthorityLock({
     lockPath,
@@ -325,12 +363,20 @@ function guardInitializationDriftBlock() {
 
 async function beginCommand(options, output, {
   afterForeignDiffGuardInitialized = null,
+  invokeNameWorker = runWorkerSession,
 } = {}) {
   const selectedSkill = assertSkill(required(options, 'skill'));
   const root = await realDirectory(required(options, 'root'), 'repository root');
-  const runPath = required(options, 'run-dir');
-  const runId = basename(resolve(runPath));
   const rawPrompt = await readRawPrompt(options);
+  const naming = await allocateRunName({
+    root,
+    prompt: rawPrompt,
+    skill: selectedSkill,
+    invokeWorker: invokeNameWorker,
+  });
+  await ensureRepositoryNaming(root, naming);
+  const runPath = join(root, '.cruise', 'runs', naming.name);
+  const runId = basename(resolve(runPath));
   const capturedAt = new Date().toISOString();
   const baseline = captureRepositoryBaseline(root);
   const probe = probeRepository({ repositoryRoot: root });
@@ -367,8 +413,20 @@ async function beginCommand(options, output, {
     : null;
   let guardStatus = initializationBlock === null ? 'monitoring' : 'blocked';
   const runDirectory = await stageRunDirectory(runPath, async (staging, target) => {
-    await writeYamlFile(join(staging, 'probe.yaml'), probe);
-    await writeYamlFile(join(staging, 'evidence.yaml'), evidence);
+    await writeYamlFile(join(staging, RUN_ARTIFACTS.naming), {
+      schema_version: 1,
+      kind: 'cruise_run_name',
+      name: runId,
+      repository_name: naming.repository_name,
+      purpose: selectedSkill,
+      assigned_by: naming.agent_type,
+      worker_level: naming.level,
+      model: naming.model,
+      reasoning_effort: naming.reasoning_effort,
+      prompt_sha256: origin.origin.prompt_sha256,
+    });
+    await writeYamlFile(join(staging, RUN_ARTIFACTS.probe), probe);
+    await writeYamlFile(join(staging, RUN_ARTIFACTS.evidence), evidence);
     if (initializationBlock === null) {
       const immediatelyBeforeGuard = recaptureRepositoryBaseline(origin.repository_baseline);
       if (!sameRepositoryBaseline(immediatelyBeforeGuard, origin.repository_baseline)) {
@@ -376,7 +434,7 @@ async function beginCommand(options, output, {
       }
     }
     await createForeignDiffGuard({
-      statePath: join(staging, 'foreign-diff-guard.yaml'),
+      statePath: join(staging, RUN_ARTIFACTS.drift),
       runId,
       repositoryRoot: root,
       originPromptSha256: origin.origin.prompt_sha256,
@@ -395,7 +453,7 @@ async function beginCommand(options, output, {
       if (!sameRepositoryBaseline(immediatelyAfterGuard, origin.repository_baseline)) {
         initializationBlock = guardInitializationDriftBlock();
         await createForeignDiffGuard({
-          statePath: join(staging, 'foreign-diff-guard.yaml'),
+          statePath: join(staging, RUN_ARTIFACTS.drift),
           runId,
           repositoryRoot: root,
           originPromptSha256: origin.origin.prompt_sha256,
@@ -405,7 +463,7 @@ async function beginCommand(options, output, {
         });
       }
     }
-    const initializedGuard = await readForeignDiffGuardState(join(staging, 'foreign-diff-guard.yaml'));
+    const initializedGuard = await readForeignDiffGuardState(join(staging, RUN_ARTIFACTS.drift));
     guardStatus = initializedGuard.status;
     if (guardStatus === 'blocked' && initializationBlock === null) {
       initializationBlock = initializedGuard.block ?? {
@@ -420,9 +478,9 @@ async function beginCommand(options, output, {
         now: new Date(),
       });
     }
-    await writeYamlFile(join(staging, 'state.yaml'), state);
+    await writeYamlFile(join(staging, RUN_ARTIFACTS.state), state);
     if (state.status === 'routing_pending') {
-      await writeYamlFile(join(staging, 'semantic-mapping-packet.yaml'), createSemanticMappingPacket({
+      await writeYamlFile(join(staging, RUN_ARTIFACTS.mapPacket), createSemanticMappingPacket({
         runDirectory: target,
         repositoryRoot: root,
         promptSha256: origin.origin.prompt_sha256,
@@ -430,7 +488,7 @@ async function beginCommand(options, output, {
       }));
     }
     // origin.yaml is the commit marker for a successfully staged begin.
-    await writeYamlFile(join(staging, 'origin.yaml'), origin);
+    await writeYamlFile(join(staging, RUN_ARTIFACTS.origin), origin);
   });
   output.write(`created ${runDirectory}\nrepository baseline ${baselineDigest}\nforeign-diff monitoring ${guardStatus === 'monitoring' ? 'active' : 'blocked'}\n`);
   if (initializationBlock?.code === GUARD_INITIALIZATION_DRIFT_CODE) {
@@ -553,13 +611,13 @@ async function directRunNewOutput(runDirectory, requestedPath, label) {
 function requireForeignDiffControlName(requestedPath, label) {
   const name = basename(resolve(requestedPath));
   if (!isForeignDiffControlName(name)) {
-    fail(`${label} must use a direct foreign-diff-* control filename`);
+    fail(`${label} must use a direct drift-* control filename of at most 15 characters`);
   }
   return name;
 }
 
 async function assertForeignDiffBinding(runDirectory, state = null) {
-  const guard = state ?? await readForeignDiffGuardState(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const guard = state ?? await readForeignDiffGuardState(join(runDirectory, 'drift.yaml'));
   const origin = await readYamlFile(await regularFile(join(runDirectory, 'origin.yaml'), 'origin YAML'));
   validateOriginRecord(origin);
   if (
@@ -588,7 +646,7 @@ async function assertForeignDiffReady(runDirectory) {
     throw new Error(`foreign-diff guard is ${guard.status}; workers, routing, and writes remain paused`);
   }
   return throwForeignDiffPause(await checkForForeignDiff({
-    statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+    statePath: join(runDirectory, 'drift.yaml'),
   }));
 }
 
@@ -659,7 +717,7 @@ async function foreignDiffProjectCommand(options, output) {
       fail('foreign-diff projection output must not replace its intent or content files');
     }
     const action = await projectCruiseAction({
-      statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+      statePath: join(runDirectory, 'drift.yaml'),
       actionId: intent.action_id,
       changes,
     });
@@ -691,7 +749,7 @@ async function foreignDiffOpenCommand(options, output) {
   return withForeignDiffGuardLock(runDirectory, async () => {
     await assertForeignDiffBinding(runDirectory);
     const result = await beginCruiseAction({
-      statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+      statePath: join(runDirectory, 'drift.yaml'),
       actionId: action.action_id,
       ownedPaths: action.owned_paths,
       expectedChanges: action.expected_changes,
@@ -715,7 +773,7 @@ async function foreignDiffCloseCommand(options, output) {
   return withForeignDiffGuardLock(runDirectory, async () => {
     await assertForeignDiffBinding(runDirectory);
     const result = await completeCruiseAction({
-      statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+      statePath: join(runDirectory, 'drift.yaml'),
       receipt,
     });
     throwForeignDiffPause(result);
@@ -729,7 +787,7 @@ async function foreignDiffCheckCommand(options, output) {
   return withForeignDiffGuardLock(runDirectory, async () => {
     await assertForeignDiffBinding(runDirectory);
     const result = await checkForForeignDiff({
-      statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+      statePath: join(runDirectory, 'drift.yaml'),
     });
     throwForeignDiffPause(result);
     output.write('foreign-diff inventory clean\n');
@@ -756,7 +814,7 @@ async function foreignDiffResolveCommand(options, output) {
   return withForeignDiffGuardLock(runDirectory, async () => {
     await assertForeignDiffBinding(runDirectory);
     const result = await resolveForeignDiffIncident({
-      statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+      statePath: join(runDirectory, 'drift.yaml'),
       incidentId: resolution.incident_id,
       decisionId: resolution.decision_id,
       selection: resolution.selection,
@@ -772,7 +830,7 @@ async function foreignDiffFinalizeCommand(options, output) {
   return withForeignDiffGuardLock(runDirectory, async () => {
     await assertForeignDiffBinding(runDirectory);
     const result = await finalizeForeignDiffGuard({
-      statePath: join(runDirectory, 'foreign-diff-guard.yaml'),
+      statePath: join(runDirectory, 'drift.yaml'),
       expectedInventorySha256: required(options, 'expected-inventory-sha256'),
     });
     await assertForeignDiffBinding(runDirectory, result.state);
@@ -786,11 +844,11 @@ async function enrichProbeCommand(options, output) {
   const enrichmentPath = await realpath(
     await regularFile(required(options, 'facts'), 'probe enrichment YAML'),
   );
-  const expectedEnrichmentPath = join(runDirectory, 'semantic-facts.yaml');
+  const expectedEnrichmentPath = join(runDirectory, 'map-facts.yaml');
   if (enrichmentPath !== expectedEnrichmentPath) {
-    fail('--facts must name the runtime packet-declared semantic-facts.yaml in --run-dir');
+    fail('--facts must name the runtime packet-declared map-facts.yaml in --run-dir');
   }
-  return withForeignDiffGuardedControlWrite(runDirectory, 'enrich-probe', async () => {
+  return withForeignDiffGuardedControlWrite(runDirectory, 'enrich', async () => {
     if (await pathExists(join(runDirectory, 'route.yaml'))) {
       fail('probe enrichment is forbidden after routing');
     }

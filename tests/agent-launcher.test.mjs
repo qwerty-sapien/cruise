@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
 import { runWorker as runWorkerBound } from '../scripts/cruise.mjs';
+import { runRuntimeCli } from '../scripts/cruise-runtime.mjs';
 import {
   WORKER_HOST_PATH_LOST,
   WORKER_INFERENCE_STREAM_FAILED,
@@ -43,8 +44,25 @@ async function runWorker(options, dependencies) {
   return runWorkerBound({ ...options, packetSha256 }, dependencies);
 }
 
-async function initializeWorkerGuard(root, runDirectory, { blockedReason = null } = {}) {
-  const statePath = join(runDirectory, 'foreign-diff-guard.yaml');
+async function initializeWorkerGuard(root, runDirectory, {
+  blockedReason = null,
+  repositoryName,
+} = {}) {
+  if (typeof repositoryName !== 'string') throw new TypeError('test repositoryName is required');
+  await mkdir(join(root, '.cruise'), { recursive: true });
+  await writeYamlFile(join(root, '.cruise', 'repo.yaml'), {
+    schema_version: 1,
+    kind: 'cruise_repository_name',
+    name: repositoryName,
+    repository_root: await realpath(root),
+    assigned_by: 'cruise_l1',
+    worker_level: 1,
+  });
+  await rm(dirname(foreignDiffAuthorityPath(root, basename(runDirectory))), {
+    recursive: true,
+    force: true,
+  });
+  const statePath = join(runDirectory, 'drift.yaml');
   await createForeignDiffGuard({
     statePath,
     runId: basename(runDirectory),
@@ -54,6 +72,40 @@ async function initializeWorkerGuard(root, runDirectory, { blockedReason = null 
     blockedReason,
   });
   return statePath;
+}
+
+async function beginRuntime(root, prompt, repositoryName) {
+  const promptPath = join(root, '.test-prompt');
+  await writeFile(promptPath, prompt);
+  await mkdir(join(root, '.cruise'), { recursive: true });
+  await writeYamlFile(join(root, '.cruise', 'repo.yaml'), {
+    schema_version: 1,
+    kind: 'cruise_repository_name',
+    name: repositoryName,
+    repository_root: await realpath(root),
+    assigned_by: 'cruise_l1',
+    worker_level: 1,
+  });
+  await rm(dirname(foreignDiffAuthorityPath(root, 'run-1')), { recursive: true, force: true });
+  let stdout = '';
+  await runRuntimeCli([
+    'begin', '--skill', 'quick', '--root', root, '--prompt-file', promptPath,
+  ], {
+    output: { write(value) { stdout += value; } },
+    runtimeHooks: {
+      async invokeNameWorker({ level }) {
+        return {
+          launch: {
+            recommended_level: level,
+            agent_type: 'cruise_l1',
+            resolved: { model: MODEL_IDS.luna, reasoning_effort: 'low' },
+          },
+          model_output: JSON.stringify({ run_name: 'run-1', repo_name: repositoryName }),
+        };
+      },
+    },
+  });
+  return stdout;
 }
 
 function catalog() {
@@ -456,10 +508,10 @@ test('terminal worker durably writes the complete sanitized failure report', asy
   t.after(() => rm(directory, { recursive: true, force: true }));
   const runDirectory = join(directory, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-  await initializeWorkerGuard(directory, runDirectory);
+  await initializeWorkerGuard(directory, runDirectory, { repositoryName: 'fail-report' });
   const reconnectHistory = [
     { sequence: 1, will_retry: true, message: 'Reconnecting... 1/5 token=sensitive' },
     {
@@ -508,10 +560,10 @@ test('terminal worker persists complete reconnect history after its packet disap
   t.after(() => rm(directory, { recursive: true, force: true }));
   const runDirectory = join(directory, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-  await initializeWorkerGuard(directory, runDirectory);
+  await initializeWorkerGuard(directory, runDirectory, { repositoryName: 'del-packet' });
   const sessionError = new WorkerSessionError('terminal failure after reconnects', {
     runtime: { thread_id: 'thread-1', turn_id: 'turn-1' },
     reconnectHistory: [
@@ -550,10 +602,10 @@ test('failure-report persistence errors never mask the original worker error', a
   t.after(() => rm(directory, { recursive: true, force: true }));
   const runDirectory = join(directory, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-  await initializeWorkerGuard(directory, runDirectory);
+  await initializeWorkerGuard(directory, runDirectory, { repositoryName: 'lost-parent' });
   const sessionError = new WorkerSessionError('terminal failure with lost report parent', {
     reconnectHistory: [{ sequence: 1, will_retry: false, message: 'stream ended' }],
   });
@@ -579,10 +631,10 @@ test('terminal success and failure attempts cannot relaunch after their reports 
     t.after(() => rm(root, { recursive: true, force: true }));
     const runDirectory = join(root, '.cruise', 'runs', 'run-1');
     await mkdir(runDirectory, { recursive: true });
-    const packet = join(runDirectory, 'worker-packet.yaml');
-    const report = join(runDirectory, 'worker-report.yaml');
+    const packet = join(runDirectory, 'task-pkt.yaml');
+    const report = join(runDirectory, 'task-rpt.yaml');
     await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-    await initializeWorkerGuard(root, runDirectory);
+    await initializeWorkerGuard(root, runDirectory, { repositoryName: `replay-${outcome}` });
     let inferenceCalls = 0;
     const dependencies = {
       invocationCwd: root,
@@ -631,10 +683,10 @@ test('worker report is absent at admission and a swapped parent cannot redirect 
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   const movedRunDirectory = join(root, '.cruise', 'runs', 'run-1-original');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-  await initializeWorkerGuard(root, runDirectory);
+  await initializeWorkerGuard(root, runDirectory, { repositoryName: 'parent-swap' });
 
   let inferenceCalls = 0;
   await assert.rejects(runWorker({ cwd: root, level: 2, packet, report }, {
@@ -643,7 +695,7 @@ test('worker report is absent at admission and a swapped parent cannot redirect 
     async runSession() {
       inferenceCalls += 1;
       await rename(runDirectory, movedRunDirectory);
-      await writeFile(join(outside, 'worker-report.yaml'), 'user-owned sentinel\n');
+      await writeFile(join(outside, 'task-rpt.yaml'), 'user-owned sentinel\n');
       await symlink(outside, runDirectory);
       return {
         schema_version: 1,
@@ -657,24 +709,24 @@ test('worker report is absent at admission and a swapped parent cannot redirect 
   }), (error) => {
     assert.match(
       error.message,
-      /run-control directory identity changed|worker launch requires .*foreign-diff-guard/u,
+      /run-control directory identity changed|worker launch requires .*drift/u,
     );
     assert.equal(error.reportPersistenceError instanceof Error, true);
     return true;
   });
   assert.equal(inferenceCalls, 1);
-  assert.equal(await readFile(join(outside, 'worker-report.yaml'), 'utf8'), 'user-owned sentinel\n');
-  await assert.rejects(readFile(join(movedRunDirectory, 'worker-report.yaml')), /ENOENT/u);
+  assert.equal(await readFile(join(outside, 'task-rpt.yaml'), 'utf8'), 'user-owned sentinel\n');
+  await assert.rejects(readFile(join(movedRunDirectory, 'task-rpt.yaml')), /ENOENT/u);
 
   const untouchedRoot = await mkdtemp(join(tmpdir(), 'cruise-worker-preexisting-report-'));
   t.after(() => rm(untouchedRoot, { recursive: true, force: true }));
   const untouchedRun = join(untouchedRoot, '.cruise', 'runs', 'run-1');
   await mkdir(untouchedRun, { recursive: true });
-  const untouchedPacket = join(untouchedRun, 'worker-packet.yaml');
-  const preexistingReport = join(untouchedRun, 'worker-report.yaml');
+  const untouchedPacket = join(untouchedRun, 'task-pkt.yaml');
+  const preexistingReport = join(untouchedRun, 'task-rpt.yaml');
   await writeFile(untouchedPacket, 'task_id: T-01\n');
   await writeFile(preexistingReport, 'user-owned report\n');
-  await initializeWorkerGuard(untouchedRoot, untouchedRun);
+  await initializeWorkerGuard(untouchedRoot, untouchedRun, { repositoryName: 'preexist-rpt' });
   await assert.rejects(runWorker({
     cwd: untouchedRoot,
     level: 2,
@@ -695,10 +747,10 @@ test('worker report is absent at admission and a swapped parent cannot redirect 
   t.after(() => rm(racedRoot, { recursive: true, force: true }));
   const racedRun = join(racedRoot, '.cruise', 'runs', 'run-1');
   await mkdir(racedRun, { recursive: true });
-  const racedPacket = join(racedRun, 'worker-packet.yaml');
-  const racedReport = join(racedRun, 'worker-report.yaml');
+  const racedPacket = join(racedRun, 'task-pkt.yaml');
+  const racedReport = join(racedRun, 'task-rpt.yaml');
   await writeFile(racedPacket, 'task_id: T-01\n');
-  await initializeWorkerGuard(racedRoot, racedRun);
+  await initializeWorkerGuard(racedRoot, racedRun, { repositoryName: 'race-report' });
   await assert.rejects(runWorker({
     cwd: racedRoot,
     level: 2,
@@ -733,13 +785,13 @@ test('worker readiness receives custom codexHome and immutable control mutation 
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   const origin = join(runDirectory, 'origin.yaml');
   const customCodexHome = join(root, 'custom-codex-home');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
   await writeFile(origin, 'schema_version: 1\nimmutable: true\n');
-  await initializeWorkerGuard(root, runDirectory);
+  await initializeWorkerGuard(root, runDirectory, { repositoryName: 'ctrl-mutate' });
   let readinessOptions = null;
   let sessionOptions = null;
 
@@ -801,6 +853,7 @@ test('worker readiness receives custom codexHome and immutable control mutation 
   assert.deepEqual(runtimeOptions, {
     extensionProfile: 'worker',
     codexHome: customCodexHome,
+    runtimeRoot: null,
   });
 });
 
@@ -813,11 +866,11 @@ test('worker host scope rejects cwd, packet, report, and symlink escapes before 
   ]));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-  await initializeWorkerGuard(root, runDirectory);
-  const outsidePacket = join(outside, 'outside-packet.yaml');
+  await initializeWorkerGuard(root, runDirectory, { repositoryName: 'scope-check' });
+  const outsidePacket = join(outside, 'ext-pkt.yaml');
   await writeFile(outsidePacket, 'secret host text\n');
   let calls = 0;
   const runSession = async () => {
@@ -839,7 +892,7 @@ test('worker host scope rejects cwd, packet, report, and symlink escapes before 
     cwd: root,
     level: 2,
     packet,
-    report: join(outside, 'outside-report.yaml'),
+    report: join(outside, 'ext-rpt.yaml'),
   }, {
     invocationCwd: root,
     runtimeReadiness: async () => ({}),
@@ -848,19 +901,19 @@ test('worker host scope rejects cwd, packet, report, and symlink escapes before 
 
   const externalRun = join(outside, 'external-run');
   await mkdir(externalRun);
-  await writeFile(join(externalRun, 'linked-packet.yaml'), 'task_id: T-01\n');
+  await writeFile(join(externalRun, 'link-pkt.yaml'), 'task_id: T-01\n');
   await symlink(externalRun, join(root, '.cruise', 'runs', 'linked-run'));
   await assert.rejects(runWorker({
     cwd: root,
     level: 2,
-    packet: join(root, '.cruise', 'runs', 'linked-run', 'linked-packet.yaml'),
+    packet: join(root, '.cruise', 'runs', 'linked-run', 'link-pkt.yaml'),
     report,
   }, {
     invocationCwd: root,
     runtimeReadiness: async () => ({}),
     runSession,
   }), /must not traverse a symlinked file or parent|direct, named artifact under \.cruise\/runs/u);
-  const identical = join(runDirectory, 'packet-report.yaml');
+  const identical = join(runDirectory, 'pkt-rpt.yaml');
   await writeFile(identical, 'task_id: T-01\n');
   await assert.rejects(runWorker({
     cwd: root,
@@ -889,8 +942,8 @@ test('worker guard monitors automatically and persists unexplained drift before 
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
   let inferenceCalls = 0;
   const dependencies = {
@@ -904,10 +957,10 @@ test('worker guard monitors automatically and persists unexplained drift before 
 
   await assert.rejects(
     runWorker({ cwd: root, level: 2, packet, report }, dependencies),
-    /worker launch requires .*foreign-diff-guard\.yaml/u,
+    /worker launch requires .*drift\.yaml/u,
   );
 
-  const statePath = await initializeWorkerGuard(root, runDirectory);
+  const statePath = await initializeWorkerGuard(root, runDirectory, { repositoryName: 'drift-watch' });
   const monitoring = await readYamlFile(statePath);
   assert.equal(monitoring.status, 'monitoring');
   assert.equal('permission' in monitoring, false);
@@ -934,10 +987,11 @@ test('worker launch fails closed when the foreign-diff guard is blocked', async 
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
   await initializeWorkerGuard(root, runDirectory, {
+    repositoryName: 'blocked-guard',
     blockedReason: { code: 'TEST_BLOCK', message: 'inventory unavailable' },
   });
   let inferenceCalls = 0;
@@ -958,11 +1012,11 @@ test('worker releases the guard lock during inference and rejects unexplained dr
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
   await writeFile(packet, 'task_id: T-01\nread_paths: []\nwrite_paths: []\n');
-  const statePath = await initializeWorkerGuard(root, runDirectory);
-  const guardLock = join(dirname(foreignDiffAuthorityPath(root, 'run-1')), 'foreign-diff-guard.lock');
+  const statePath = await initializeWorkerGuard(root, runDirectory, { repositoryName: 'infer-drift' });
+  const guardLock = join(dirname(foreignDiffAuthorityPath(root, 'run-1')), 'drift.lock');
   let calls = 0;
 
   await assert.rejects(runWorker({ cwd: root, level: 2, packet, report }, {
@@ -999,11 +1053,11 @@ test('a foreign-diff control filename alone cannot replace completed action auth
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const packet = join(runDirectory, 'worker-packet.yaml');
-  const report = join(runDirectory, 'worker-report.yaml');
-  const unproven = join(runDirectory, 'foreign-diff-unproven.yaml');
+  const packet = join(runDirectory, 'task-pkt.yaml');
+  const report = join(runDirectory, 'task-rpt.yaml');
+  const unproven = join(runDirectory, 'drift-bad.yaml');
   await writeFile(packet, 'task_id: T-01\n');
-  await initializeWorkerGuard(root, runDirectory);
+  await initializeWorkerGuard(root, runDirectory, { repositoryName: 'bad-control' });
 
   await assert.rejects(runWorker({ cwd: root, level: 2, packet, report }, {
     invocationCwd: root,
@@ -1021,7 +1075,7 @@ test('a foreign-diff control filename alone cannot replace completed action auth
     },
   }), (error) => {
     assert.equal(error.code, 'CRUISE_WORKER_CONTROL_MUTATION');
-    assert.deepEqual(error.changedPaths, ['foreign-diff-unproven.yaml']);
+    assert.deepEqual(error.changedPaths, ['drift-bad.yaml']);
     return true;
   });
   assert.equal(await readFile(unproven, 'utf8'), 'kind: not_authority\n');
@@ -1045,26 +1099,22 @@ test('implementation worker completes a projected edit and retains only bounded 
     resolve('scripts/cruise-runtime.mjs'),
     ...args,
   ], { encoding: 'utf8' });
-  const began = spawnSync(process.execPath, [
-    resolve('scripts/cruise-runtime.mjs'),
-    'begin', '--skill', 'quick', '--root', root, '--run-dir', runDirectory, '--stdin',
-  ], { input: 'Implement one attributed edit.', encoding: 'utf8' });
-  assert.equal(began.status, 0, began.stderr);
-  assert.match(began.stdout, /foreign-diff monitoring active/u);
-  assert.doesNotMatch(began.stdout, /permission pending|Preserve only|Allow exact restore/u);
-  assert.equal((await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'))).status, 'monitoring');
-  const packet = join(runDirectory, 'implementation-packet.yaml');
-  const report = join(runDirectory, 'implementation-report.yaml');
+  const began = await beginRuntime(root, 'Implement one attributed edit.', 'action-repo');
+  assert.match(began, /foreign-diff monitoring active/u);
+  assert.doesNotMatch(began, /permission pending|Preserve only|Allow exact restore/u);
+  assert.equal((await readYamlFile(join(runDirectory, 'drift.yaml'))).status, 'monitoring');
+  const packet = join(runDirectory, 'impl-pkt.yaml');
+  const report = join(runDirectory, 'impl-rpt.yaml');
   await writeFile(packet, 'task_id: T-IMPLEMENT-01\nwrite_paths:\n  - app.txt\n');
 
   const result = await runWorker({ cwd: root, level: 4, packet, report }, {
     invocationCwd: root,
     runtimeReadiness: async () => ({}),
     async runSession() {
-      const contentPath = join(runDirectory, 'foreign-diff-A-01-content.bin');
-      const intentPath = join(runDirectory, 'foreign-diff-A-01-intent.yaml');
-      const actionPath = join(runDirectory, 'foreign-diff-A-01-action.yaml');
-      const receiptPath = join(runDirectory, 'foreign-diff-A-01-receipt.yaml');
+      const contentPath = join(runDirectory, 'drift-src.bin');
+      const intentPath = join(runDirectory, 'drift-int.yaml');
+      const actionPath = join(runDirectory, 'drift-act.yaml');
+      const receiptPath = join(runDirectory, 'drift-rct.yaml');
       await writeFile(contentPath, 'worker-owned edit\n');
       await writeYamlFile(intentPath, {
         schema_version: 1,
@@ -1117,17 +1167,17 @@ test('implementation worker completes a projected edit and retains only bounded 
   assert.equal(result, 0);
   assert.equal(await readFile(join(root, 'app.txt'), 'utf8'), 'worker-owned edit\n');
   assert.equal((await readYamlFile(report)).kind, 'cruise_app_server_worker_report');
-  const guard = await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const guard = await readYamlFile(join(runDirectory, 'drift.yaml'));
   assert.equal(guard.status, 'monitoring');
   assert.equal(guard.checkpoint.sequence, 1);
   assert.equal(guard.history.filter(({ action }) => action === 'action_completed').length, 1);
   assert.deepEqual(
-    (await readdir(runDirectory)).filter((name) => name.includes('A-01')).sort(),
+    (await readdir(runDirectory)).filter((name) => name.startsWith('drift-')).sort(),
     [
-      'foreign-diff-A-01-action.yaml',
-      'foreign-diff-A-01-content.bin',
-      'foreign-diff-A-01-intent.yaml',
-      'foreign-diff-A-01-receipt.yaml',
+      'drift-act.yaml',
+      'drift-int.yaml',
+      'drift-rct.yaml',
+      'drift-src.bin',
     ],
   );
 });
@@ -1136,18 +1186,14 @@ test('runtime-generated mapping packet preflights before one injected inference 
   const root = await mkdtemp(join(tmpdir(), 'cruise-worker-mapping-preflight-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
-  const began = spawnSync(process.execPath, [
-    resolve('scripts/cruise-runtime.mjs'),
-    'begin', '--skill', 'quick', '--root', root, '--run-dir', runDirectory, '--stdin',
-  ], { input: 'Map this bounded request.', encoding: 'utf8' });
-  assert.equal(began.status, 0, began.stderr);
-  assert.equal((await readYamlFile(join(runDirectory, 'foreign-diff-guard.yaml'))).status, 'monitoring');
-  const packetPath = join(runDirectory, 'semantic-mapping-packet.yaml');
+  await beginRuntime(root, 'Map this bounded request.', 'mapping-repo');
+  assert.equal((await readYamlFile(join(runDirectory, 'drift.yaml'))).status, 'monitoring');
+  const packetPath = join(runDirectory, 'map-pkt.yaml');
   const validPacket = await readYamlFile(packetPath);
   let calls = 0;
   const runSession = async () => {
     calls += 1;
-    await writeYamlFile(join(runDirectory, 'semantic-facts.yaml'), {
+    await writeYamlFile(join(runDirectory, 'map-facts.yaml'), {
       enrichment_template: validPacket.enrichment_template,
       model_note: 'untrusted envelope fields are discarded by the host canonicalizer',
     });
@@ -1164,11 +1210,11 @@ test('runtime-generated mapping packet preflights before one injected inference 
     cwd: root,
     level: 2,
     packet: packetPath,
-    report: join(runDirectory, 'mapping-report.yaml'),
+    report: join(runDirectory, 'map-rpt.yaml'),
   }, { invocationCwd: root, runtimeReadiness: async () => ({}), runSession });
   assert.equal(calls, 1);
   assert.deepEqual(
-    await readYamlFile(join(runDirectory, 'semantic-facts.yaml')),
+    await readYamlFile(join(runDirectory, 'map-facts.yaml')),
     validPacket.enrichment_template,
   );
 
@@ -1176,7 +1222,7 @@ test('runtime-generated mapping packet preflights before one injected inference 
     cwd: root,
     level: 7,
     packet: packetPath,
-    report: join(runDirectory, 'mapping-level-report.yaml'),
+    report: join(runDirectory, 'level-rpt.yaml'),
   }, { invocationCwd: root, runtimeReadiness: async () => ({}), runSession }),
   /semantic mapping packet requires exactly worker level 2/u);
   assert.equal(calls, 1);
@@ -1189,7 +1235,7 @@ test('runtime-generated mapping packet preflights before one injected inference 
     cwd: root,
     level: 2,
     packet: packetPath,
-    report: join(runDirectory, 'malformed-report.yaml'),
+    report: join(runDirectory, 'bad-rpt.yaml'),
   }, {
     invocationCwd: root,
     runtimeReadiness: async () => ({}),
@@ -1203,15 +1249,15 @@ test('a prior worker cannot replace a later host-digest-bound packet', async (t)
   t.after(() => rm(root, { recursive: true, force: true }));
   const runDirectory = join(root, '.cruise', 'runs', 'run-1');
   await mkdir(runDirectory, { recursive: true });
-  const firstPacket = join(runDirectory, 'first-packet.yaml');
-  const secondPacket = join(runDirectory, 'second-packet.yaml');
-  const firstReport = join(runDirectory, 'first-report.yaml');
-  const secondReport = join(runDirectory, 'second-report.yaml');
+  const firstPacket = join(runDirectory, 'first-pkt.yaml');
+  const secondPacket = join(runDirectory, 'second-pkt.yaml');
+  const firstReport = join(runDirectory, 'first-rpt.yaml');
+  const secondReport = join(runDirectory, 'second-rpt.yaml');
   const firstBytes = 'task_id: T-01\nread_paths: []\nwrite_paths: []\n';
   const secondBytes = 'task_id: T-02\nread_paths: []\nwrite_paths: []\n';
   await writeFile(firstPacket, firstBytes);
   await writeFile(secondPacket, secondBytes);
-  await initializeWorkerGuard(root, runDirectory);
+  await initializeWorkerGuard(root, runDirectory, { repositoryName: 'packet-bind' });
   const digest = (value) => createHash('sha256').update(value).digest('hex');
   let inferenceCalls = 0;
   await assert.rejects(runWorkerBound({
@@ -1235,7 +1281,7 @@ test('a prior worker cannot replace a later host-digest-bound packet', async (t)
         warnings: [],
       };
     },
-  }), /mutated immutable run-control artifacts: second-packet\.yaml/u);
+  }), /mutated immutable run-control artifacts: second-pkt\.yaml/u);
   const firstFailure = await readYamlFile(firstReport);
   assert.equal(firstFailure.kind, 'cruise_app_server_worker_failure');
   await assert.rejects(runWorkerBound({

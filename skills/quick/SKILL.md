@@ -39,9 +39,9 @@ Read [the shared invocation contract](../../internal/shared/invocation-contract.
 
 At terminal success, perform the shared final clean check and call `foreign-diff-finalize --run-dir <run-dir> --expected-inventory-sha256 <checkpoint-sha256>` before the final response. Never finalize a failed, dirty, active, blocked, or waiting run.
 
-Use the exact `semantic-mapping-packet.yaml` generated atomically by `begin`; do not hand-write, replace, or repair it. The deterministic `probe.yaml` is schema version 2 and also carries `durable_continuation_required` and `cross_system_program`; the packet's enrichment template is schema version 1 and deliberately excludes those two routing-only signals. That 20-field probe versus 18-gate enrichment is expected, not a conflict.
+Use the exact `map-pkt.yaml` generated atomically by `begin`; do not hand-write, replace, or repair it. The deterministic `probe.yaml` is schema version 2 and also carries `durable_continuation_required` and `cross_system_program`; the packet's enrichment template is schema version 1 and deliberately excludes those two routing-only signals. That 20-field probe versus 18-gate enrichment is expected, not a conflict.
 
-Give that worker write ownership only for the packet-declared immutable `semantic-facts.yaml`. It copies the complete `enrichment_template` and changes only `facts[*].value` and `facts[*].basis` when evidence requires it. The packet forbids `enrich-probe` and `route`; both mutate canonical run-control files and remain root-coordinator mechanics. After persisting and auditing the worker report, the root alone invokes `enrich-probe` through the exact installed runtime path. Never spend a second inference repairing packet shape; launcher preflight makes tagged packet/template drift a local error.
+Give that worker write ownership only for the packet-declared immutable `map-facts.yaml`. It copies the complete `enrichment_template` and changes only `facts[*].value` and `facts[*].basis` when evidence requires it. The packet forbids `enrich-probe` and `route`; both mutate canonical run-control files and remain root-coordinator mechanics. After persisting and auditing the worker report, the root alone invokes `enrich-probe` through the exact installed runtime path. Never spend a second inference repairing packet shape; launcher preflight makes tagged packet/template drift a local error.
 
 Admit Quick only when all of these are true:
 
@@ -52,12 +52,18 @@ Admit Quick only when all of these are true:
 
 A typo, known config value, closed-caller private rename/removal, or already-defined compatibility patch can fit. File count is only corroborating evidence, never the admission rule.
 
+For one local fact that verifies an already-admitted implementation without changing its scope,
+use the private [Research Cell procedure](../../internal/research/WORKFLOW.md#use-a-research-cell)
+inside this run and record its evidence card. If its answer changes the implementation choice or
+needs external evidence, promote before editing; the helper never turns unresolved discovery into
+a hidden Quick change.
+
 Promote before editing:
 
 - to `cruise:debug` when an observed failure has an unknown root cause;
 - to `cruise:refine` when a finite outcome needs a material design, behavior, evidence, or sequencing decision;
 - to `cruise:goal` when the change is consequential, cross-cutting, permission-heavy, multi-slice, or needs durable recovery;
-- to `cruise:research` when evidence must be acquired before an implementation can be chosen.
+- to `cruise:refine` when evidence must be acquired before an implementation can be chosen.
 
 State the deterministic promotion reason and preserve the same Origin Record. Never recursively reroute.
 

@@ -21,7 +21,8 @@ properties:
     type: string
   run_id:
     type: string
-    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    maxLength: 15
+    pattern: "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
   origin_yaml:
     type: string
     minLength: 1

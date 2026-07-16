@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
@@ -110,7 +109,7 @@ export async function readCruiseClass({ codexHome = null } = {}) {
 }
 
 async function atomicWrite(path, bytes) {
-  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  const temporary = join(dirname(path), '.class-stage');
   try {
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
     await rename(temporary, path);

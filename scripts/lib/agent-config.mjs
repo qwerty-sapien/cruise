@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -129,7 +129,7 @@ export async function inspectManagedAgentConfigs({ codexHome = null } = {}) {
 }
 
 async function atomicWrite(path, bytes) {
-  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  const temporary = join(dirname(path), '.agent-stage');
   try {
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
     await rename(temporary, path);

@@ -35,8 +35,8 @@ function modelAttempt(attempt = 1, overrides = {}) {
   };
 }
 
-test('run state exposes exactly six selected skills and every required status', () => {
-  assert.deepEqual(RUN_STATE_SKILLS, ['build', 'quick', 'refine', 'goal', 'debug', 'research']);
+test('run state exposes exactly five selected public skills and every required status', () => {
+  assert.deepEqual(RUN_STATE_SKILLS, ['build', 'quick', 'refine', 'goal', 'debug']);
   assert.deepEqual(RUN_STATE_STATUSES, [
     'routing_pending',
     'routed',
@@ -170,8 +170,8 @@ test('route promotion is ledgered while selected_skill remains authoritative his
 
 test('waiting_auth names capability IDs, clears on resume, and rejects malformed or secret values', () => {
   const routed = transitionRunState(
-    createRunState({ runId: 'run-auth', selectedSkill: 'research', now: T0 }),
-    { status: 'routed', reason: 'research route selected', at: T1 },
+    createRunState({ runId: 'run-auth', selectedSkill: 'debug', now: T0 }),
+    { status: 'routed', reason: 'debug route selected', at: T1 },
   );
   assert.throws(() => transitionRunState(routed, {
     status: 'waiting_auth',
@@ -282,7 +282,8 @@ test('repair attempts cannot decrease in live transitions or parsed history', ()
 
 test('blocked and completion states are terminal and cannot reopen', () => {
   for (const terminal of TERMINAL_RUN_STATUSES) {
-    const initial = createRunState({ runId: `run-${terminal}`, selectedSkill: 'build', now: T0 });
+    const runId = terminal === 'completed_waiver_qualified' ? 'waiver-done' : `run-${terminal}`;
+    const initial = createRunState({ runId, selectedSkill: 'build', now: T0 });
     const routed = transitionRunState(initial, {
       status: 'routed',
       reason: 'build route selected',

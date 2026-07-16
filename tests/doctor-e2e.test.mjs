@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
+import { runRuntimeCli } from '../scripts/cruise-runtime.mjs';
+
 import {
   answerDoctorServerRequest,
   bindDoctorWorkerInvocations,
@@ -16,6 +18,7 @@ import {
   createDoctorRuntimeHostGate,
   createDoctorTurnController,
   deepSmokeCollaborationMode,
+  deepSmokeResponseMatches,
   createDeepDoctorSmokePrompt,
   deepSmokeClientMetadata,
   DEEP_DOCTOR_SKILL_TIMEOUT_MS,
@@ -119,6 +122,15 @@ function terminalEvidence(runId, status = 'PASS') {
 }
 
 async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 } = {}) {
+  await mkdir(join(root, '.cruise'), { recursive: true });
+  await writeYamlFile(join(root, '.cruise', 'repo.yaml'), {
+    schema_version: 1,
+    kind: 'cruise_repository_name',
+    name: 'doctor-repo',
+    repository_root: await realpath(root),
+    assigned_by: 'cruise_l1',
+    worker_level: 1,
+  });
   const runId = `doctor-${skill}`;
   const run = join(root, '.cruise', 'runs', runId);
   const rawPrompt = `Doctor ${skill} canary.`;
@@ -195,13 +207,13 @@ async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 
   await mkdir(run, { recursive: true });
   await writeYamlFile(join(run, 'origin.yaml'), origin);
   await writeYamlFile(join(run, 'probe.yaml'), probe);
-  await writeYamlFile(join(run, 'semantic-mapping-packet.yaml'), mappingPacket);
-  await writeYamlFile(join(run, 'semantic-facts.yaml'), semanticFacts);
+  await writeYamlFile(join(run, 'map-pkt.yaml'), mappingPacket);
+  await writeYamlFile(join(run, 'map-facts.yaml'), semanticFacts);
   await writeYamlFile(join(run, 'route.yaml'), route);
   await writeYamlFile(join(run, 'state.yaml'), terminalState(skill, runId));
   await writeYamlFile(join(run, 'evidence.yaml'), terminalEvidence(runId));
   const substantivePacket = 'task_id: T-01\nread_paths: []\nwrite_paths: []\n';
-  await writeFile(join(run, 'packet.yaml'), substantivePacket);
+  await writeFile(join(run, 'work-pkt.yaml'), substantivePacket);
   const report = ({ packetSha256, suffix }) => ({
     schema_version: 1,
     kind: 'cruise_app_server_worker_report',
@@ -226,18 +238,18 @@ async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 
       status: 'completed',
     },
   });
-  await writeYamlFile(join(run, 'mapping-report.yaml'), report({
+  await writeYamlFile(join(run, 'map-rpt.yaml'), report({
     packetSha256: createHash('sha256')
-      .update(await readFile(join(run, 'semantic-mapping-packet.yaml')))
+      .update(await readFile(join(run, 'map-pkt.yaml')))
       .digest('hex'),
     suffix: 'mapping',
   }));
-  await writeYamlFile(join(run, 'worker-report.yaml'), report({
+  await writeYamlFile(join(run, 'work-rpt.yaml'), report({
     packetSha256: createHash('sha256').update(substantivePacket).digest('hex'),
     suffix: 'substantive',
   }));
   if (skill === 'quick') {
-    await writeFile(join(root, 'DOCTOR-QUICK.txt'), 'Cruise Doctor quick probe passed.\n');
+    await writeFile(join(root, 'doctor-ok.txt'), 'Cruise Doctor quick probe passed.\n');
   } else if (skill === 'build') {
     await mkdir(join(root, '.cruise', 'project'), { recursive: true });
     await mkdir(join(root, '.cruise', 'milestones', 'M-001-doctor'), { recursive: true });
@@ -247,7 +259,7 @@ async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 
   } else if (skill === 'refine') {
     await mkdir(join(root, 'docs'), { recursive: true });
     await writeFile(
-      join(root, 'docs', 'DOCTOR-REFINE.md'),
+      join(root, 'docs', 'refine-ok.md'),
       '# Verified\n\nUse inspect_spatial_inputs.py for structural triage and semantic fixture validation separately.\n',
     );
   } else if (skill === 'goal') {
@@ -258,7 +270,7 @@ async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 
     );
   } else if (skill === 'debug') {
     await writeFile(
-      join(root, 'tests', 'doctor-failure.test.mjs'),
+      join(root, 'tests', 'fail.test.mjs'),
       DOCTOR_DEBUG_REPAIRED_TEST,
     );
   } else if (skill === 'research') {
@@ -267,7 +279,7 @@ async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 
       '# Research\n\nThe spatiomics-skill uses inspect_spatial_inputs.py and distinguishes STOmics GEF from Zarr GEFF.\n',
     );
   }
-  const foreignDiffStatePath = join(run, 'foreign-diff-guard.yaml');
+  const foreignDiffStatePath = join(run, 'drift.yaml');
   await createForeignDiffGuard({
     statePath: foreignDiffStatePath,
     runId,
@@ -281,8 +293,8 @@ async function writeCompletedDoctorRun(root, skill, { routeRecommendedLevel = 2 
 function completedWorkerCommand(root, skill, overrides = {}) {
   const { executable = 'cruise', ...recordOverrides } = overrides;
   const run = join(root, '.cruise', 'runs', `doctor-${skill}`);
-  const packet = join(run, 'packet.yaml');
-  const report = join(run, 'worker-report.yaml');
+  const packet = join(run, 'work-pkt.yaml');
+  const report = join(run, 'work-rpt.yaml');
   const packetSha256 = createHash('sha256').update(readFileSync(packet)).digest('hex');
   const command = `${executable} worker --level 2 -C ${root} --packet ${packet} --packet-sha256 ${packetSha256} --report ${report}`;
   return {
@@ -303,8 +315,8 @@ function completedWorkerCommand(root, skill, overrides = {}) {
 function completedMappingWorkerCommand(root, skill, overrides = {}) {
   const { executable = 'cruise', ...recordOverrides } = overrides;
   const run = join(root, '.cruise', 'runs', `doctor-${skill}`);
-  const packet = join(run, 'semantic-mapping-packet.yaml');
-  const report = join(run, 'mapping-report.yaml');
+  const packet = join(run, 'map-pkt.yaml');
+  const report = join(run, 'map-rpt.yaml');
   const packetSha256 = createHash('sha256').update(readFileSync(packet)).digest('hex');
   const command = `${executable} worker --level 2 -C ${root} --packet ${packet} --packet-sha256 ${packetSha256} --report ${report}`;
   return {
@@ -333,7 +345,7 @@ function completedRuntimeCommand(root, skill, installedPluginRoot, overrides = {
   const runtimePath = join(installedPluginRoot, 'scripts', 'cruise-runtime.mjs');
   const runDirectory = join(root, '.cruise', 'runs', `doctor-${skill}`);
   return {
-    command: `${realpathSync(process.execPath)} ${runtimePath} begin --skill ${skill} --root ${root} --run-dir ${runDirectory} --prompt-file ${join(runDirectory, 'prompt.txt')}`,
+    command: `${realpathSync(process.execPath)} ${runtimePath} begin --skill ${skill} --root ${root} --prompt-file ${join(runDirectory, 'prompt.txt')}`,
     status: 'completed',
     exitCode: 0,
     output: '',
@@ -391,15 +403,15 @@ function completedApprovals(skill) {
       runtimeHostPath,
       {
         method: 'item/tool/requestUserInput',
-        answers: { plan_review: { answers: ['Approve Plan'] } },
+        answers: { needs: { answers: ['Reject all'] } },
         worker: false,
-        phase: 'plan-approval',
+        phase: 'plan-draft',
       },
       {
         method: 'item/tool/requestUserInput',
-        answers: { goal_review: { answers: ['Start Cruise'] } },
+        answers: { combined_review: { answers: ['Approve both'] } },
         worker: false,
-        phase: 'goal-approval',
+        phase: 'plan-approval',
       },
     ];
   }
@@ -419,15 +431,14 @@ test('public deep Doctor fixture is a real skill repository with Cruise state', 
     'refine',
     'goal',
     'debug',
-    'research',
   ]);
 });
 
-test('Deep Doctor smoke manifest is six focused probes with a fixed one-minute per-skill bound', () => {
+test('Deep Doctor smoke manifest is five focused probes with a fixed one-minute per-skill bound', () => {
   assert.equal(DEEP_DOCTOR_SKILL_TIMEOUT_MS, 60_000);
   assert.deepEqual(
     DEEP_DOCTOR_SMOKE_CASES.map(({ skill }) => skill),
-    ['build', 'quick', 'refine', 'goal', 'debug', 'research'],
+    ['build', 'quick', 'refine', 'goal', 'debug'],
   );
   for (const scenario of DEEP_DOCTOR_SMOKE_CASES) {
     assert.equal(scenario.tests.length >= 1 && scenario.tests.length <= 2, true, scenario.skill);
@@ -445,6 +456,23 @@ test('Deep Doctor smoke parser tolerates JSON fencing but rejects prose', () => 
     () => parseDeepDoctorSmokeResponse('Result: {"skill":"quick"}'),
     /not one JSON object/u,
   );
+});
+
+test('Deep Doctor accepts only the documented full Build auto-approval directive equivalent', () => {
+  const expected = {
+    skill: 'cruise:build',
+    approval_labels: ['Approve Foundation', 'Approve Milestone'],
+    auto_approval_directive: '--auto-approve',
+    implements_product_code: false,
+  };
+  assert.equal(deepSmokeResponseMatches({
+    ...expected,
+    auto_approval_directive: '$cruise:build --auto-approve',
+  }, expected), true);
+  assert.equal(deepSmokeResponseMatches({
+    ...expected,
+    auto_approval_directive: '$cruise:build --auto-approve --extra',
+  }, expected), false);
 });
 
 test('Deep Doctor serializes every app-server metadata value as a string', () => {
@@ -493,7 +521,7 @@ test('Deep Doctor installed smoke selections execute every exact high-signal tes
   }
 });
 
-test('Deep Doctor orchestrates all six probes through one shared conversation', async (t) => {
+test('Deep Doctor orchestrates all five probes through one shared conversation', async (t) => {
   let calls = 0;
   const progress = [];
   const report = await runDeepDoctor({
@@ -503,7 +531,7 @@ test('Deep Doctor orchestrates all six probes through one shared conversation', 
     },
     async runConversation({ installedPluginRoot, scenarios, timeoutMs, onProgress }) {
       calls += 1;
-      assert.match(installedPluginRoot, /\.installed-plugin-snapshot\/cruise$/u);
+      assert.match(installedPluginRoot, /\.plugin-snap\/cruise$/u);
       assert.equal(timeoutMs, 60_000);
       const results = scenarios.map((scenario) => {
         onProgress(`deep Doctor: ${scenario.skill}`);
@@ -527,9 +555,9 @@ test('Deep Doctor orchestrates all six probes through one shared conversation', 
   t.after(() => rm(report.workspace, { recursive: true, force: true }));
   assert.equal(calls, 1);
   assert.equal(report.ok, true);
-  assert.equal(report.checks.length, 7);
-  assert.equal(new Set(report.checks.map(({ id }) => id)).size, 7);
-  assert.equal(progress.length, 6);
+  assert.equal(report.checks.length, 6);
+  assert.equal(new Set(report.checks.map(({ id }) => id)).size, 6);
+  assert.equal(progress.length, 5);
   assert.equal(report.conversation.thread_id, 'thread-smoke');
 });
 
@@ -567,6 +595,60 @@ test('deep Doctor answers structured reviews deterministically', () => {
     context: () => ({ phase: 'plan-approval' }),
   });
   assert.deepEqual(response, { answers: { review: { answers: ['Approve Plan'] } } });
+});
+
+test('deep Doctor resolves the bounded Goal-needs envelope before combined review', () => {
+  const approvals = [];
+  const response = answerDoctorServerRequest({
+    method: 'item/tool/requestUserInput',
+    params: {
+      questions: [{
+        id: 'needs',
+        question: 'Which Goal-specific needs should this fixture allow?',
+        options: [
+          { label: 'Approve all' },
+          { label: 'Select some' },
+          { label: 'Reject all' },
+          { label: 'Discuss' },
+        ],
+      }],
+    },
+  }, {
+    approvals,
+    skill: 'goal',
+    context: () => ({ phase: 'plan-draft' }),
+  });
+
+  assert.deepEqual(response, { answers: { needs: { answers: ['Reject all'] } } });
+  assert.equal(hasNativeGoalApprovals(approvals), false);
+});
+
+test('deep Doctor accepts only the exact ordered combined Goal review', () => {
+  const message = (options) => ({
+    method: 'item/tool/requestUserInput',
+    params: {
+      questions: [{
+        id: 'combined',
+        question: 'Approve the Plan and Goal together?',
+        options,
+      }],
+    },
+  });
+  const context = () => ({ phase: 'plan-approval' });
+  const exact = [
+    { label: 'Approve both' },
+    { label: 'Refine' },
+    { label: 'Reject both' },
+  ];
+
+  assert.deepEqual(
+    answerDoctorServerRequest(message(exact), { skill: 'goal', context }),
+    { answers: { combined: { answers: ['Approve both'] } } },
+  );
+  assert.throws(
+    () => answerDoctorServerRequest(message([...exact].reverse()), { skill: 'goal', context }),
+    /unexpected native structured input/u,
+  );
 });
 
 test('deep Doctor rejects speculative foreign-diff questions in a clean fixture', () => {
@@ -746,7 +828,7 @@ test('deep Doctor makes worker-boundary UX a hard Debug incident', () => {
 
 test('deep Doctor allows benign negative network evidence', () => {
   const result = evaluateDoctorSkillResult({
-    skill: 'research',
+    skill: 'debug',
     result: {
       status: 'failed',
       output: 'No network access was used; all evidence was repository-local.',
@@ -858,7 +940,16 @@ test('deep Doctor admits only the exact installed runtime begin within its dispo
   const prompt = '$cruise:quick host authority regression canary\n';
   await writeFile(promptFile, prompt, { mode: 0o400 });
   const promptSha256 = createHash('sha256').update(prompt).digest('hex');
-  const command = `/bin/zsh -lc '${nodePath} ${runtimePath} begin --skill quick --root ${presentedRoot} --run-dir ${runDirectory} --prompt-file ${promptFile}'`;
+  await mkdir(join(canonicalRoot, '.cruise'), { recursive: true });
+  await writeYamlFile(join(canonicalRoot, '.cruise', 'repo.yaml'), {
+    schema_version: 1,
+    kind: 'cruise_repository_name',
+    name: 'doctor-host',
+    repository_root: canonicalRoot,
+    assigned_by: 'cruise_l1',
+    worker_level: 1,
+  });
+  const command = `/bin/zsh -lc '${nodePath} ${runtimePath} begin --skill quick --root ${presentedRoot} --prompt-file ${promptFile}'`;
   const authorityDirectory = dirname(foreignDiffAuthorityPath(canonicalRoot, 'doctor-quick'));
   t.after(() => Promise.all([
     rm(root, { recursive: true, force: true }),
@@ -943,11 +1034,27 @@ test('deep Doctor admits only the exact installed runtime begin within its dispo
     params: { ...request.params, itemId: 'parallel-item' },
   }), null);
 
-  const execution = spawnSync('/bin/zsh', ['-lc', command.slice("/bin/zsh -lc '".length, -1)], {
-    cwd: canonicalRoot,
-    encoding: 'utf8',
+  await rm(authorityDirectory, { recursive: true, force: true });
+  let runtimeOutput = '';
+  await runRuntimeCli([
+    'begin',
+    '--skill', 'quick',
+    '--root', presentedRoot,
+    '--prompt-file', promptFile,
+  ], {
+    output: { write(value) { runtimeOutput += value; } },
+    runtimeHooks: {
+      invokeNameWorker: async () => ({
+        launch: {
+          recommended_level: 1,
+          agent_type: 'cruise_l1',
+          resolved: { model: 'gpt-test', reasoning_effort: 'low' },
+        },
+        model_output: JSON.stringify({ run_name: 'doctor-quick', repo_name: 'doctor-host' }),
+      }),
+    },
   });
-  assert.equal(execution.status, 0, execution.stderr);
+  assert.match(runtimeOutput, /^created /u);
   const binding = gate.bindCompletion({
     method: 'item/completed',
     params: {
@@ -978,7 +1085,7 @@ test('deep Doctor admits only the exact installed runtime begin within its dispo
       },
     },
   }), null);
-  const guard = await readForeignDiffGuardState(join(runDirectory, 'foreign-diff-guard.yaml'));
+  const guard = await readForeignDiffGuardState(join(runDirectory, 'drift.yaml'));
   assert.equal(guard.repository_root, canonicalRoot);
   assert.equal(guard.status, 'monitoring');
 });
@@ -1014,8 +1121,8 @@ test('deep Doctor rejects runtime host path, option, and authority-scope escapes
   assert.equal(parse(`${nodePath} ${runtimePath} begin --skill debug --root ${canonicalRoot} --run-dir ${runDirectory} --prompt-file ${promptFile}`), null);
   assert.equal(parse(`${nodePath} ${runtimePath} begin --skill quick --root ${outside} --run-dir ${runDirectory} --prompt-file ${promptFile}`), null);
   assert.equal(parse(`${nodePath} ${runtimePath} begin --skill quick --root ${canonicalRoot} --run-dir ${outside} --prompt-file ${promptFile}`), null);
-  assert.equal(parse(`${nodePath} ${runtimePath} begin --skill quick --root ${canonicalRoot} --run-dir ${runDirectory} --prompt-file prompt.txt`), null);
-  assert.equal(parse(`${nodePath} ${runtimePath} foreign-diff-resolve --run-dir ${runDirectory} --resolution foreign-diff-resolution.yaml`), null);
+  assert.equal(parse(`${nodePath} ${runtimePath} begin --skill quick --root ${canonicalRoot} --prompt-file prompt.txt`), null);
+  assert.equal(parse(`${nodePath} ${runtimePath} foreign-diff-resolve --run-dir ${runDirectory} --resolution drift-res.yaml`), null);
   assert.equal(parse(`${nodePath} ${runtimePath} foreign-diff-permission --run-dir ${runDirectory} --decision-id D-01 --selection preserve_only --selected-label 'Preserve only'`), null);
   assert.equal(parse(`${nodePath} ${runtimePath} route --skill quick --run-dir ${runDirectory} --classifier ${join(runDirectory, 'classifier.yaml')} --catalog-json ${outside}`), null);
   assert.equal(parse(`${nodePath} ${runtimePath} route --skill quick --run-dir ${runDirectory} --classifier ${join(runDirectory, 'classifier.yaml')} --catalog-json ${join(runDirectory, 'models.json')}`)?.subcommand, 'route');
@@ -1034,7 +1141,7 @@ test('deep Doctor rejects runtime host path, option, and authority-scope escapes
   assert.deepEqual(answerDoctorServerRequest({
     method: 'item/commandExecution/requestApproval',
     params: {
-      command: `${nodePath} ${runtimePath} begin --skill quick --root ${outside} --run-dir ${runDirectory} --prompt-file ${promptFile}`,
+      command: `${nodePath} ${runtimePath} begin --skill quick --root ${outside} --prompt-file ${promptFile}`,
       cwd: canonicalRoot,
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -1091,7 +1198,7 @@ test('deep Doctor Quick prompt does not self-trigger the conservative conflict g
   assert.match(prompt, /exact 18 schema-v1 enrichment gates/u);
   assert.match(prompt, /expected run-control state/u);
   assert.match(prompt, /`cruise-runtime` is not on PATH and a bare invocation will fail/u);
-  assert.match(prompt, /`semantic-mapping-packet\.yaml` was generated atomically/u);
+  assert.match(prompt, /`map-pkt\.yaml` was generated atomically/u);
   assert.match(prompt, /Pass that tagged packet unchanged/u);
   assert.match(prompt, /preflights the executable packet and embedded 18-fact template before inference/u);
   assert.match(prompt, /root coordinator alone runs `enrich-probe`/u);
@@ -1118,7 +1225,7 @@ test('deep Doctor Quick prompt does not self-trigger the conservative conflict g
     runtimePromptFile,
   });
   assert.match(exactPrompt, new RegExp(
-    `${nodeExecutable} ${installedRuntime} begin --skill quick --root ${repositoryRoot} --run-dir ${repositoryRoot}/\\.cruise/runs/doctor-quick --prompt-file ${runtimePromptFile}`,
+    `${nodeExecutable} ${installedRuntime} begin --skill quick --root ${repositoryRoot} --prompt-file ${runtimePromptFile}`,
     'u',
   ));
   assert.match(exactPrompt, /`begin --help`[\s\S]*makes this canary fail/u);
@@ -1177,52 +1284,38 @@ test('deep Doctor Debug prompt identifies its intentional tracked failing input'
     skill: 'debug',
     prompt: scenario.prompt,
   });
-  assert.match(prompt, /tracked tests\/doctor-failure\.test\.mjs is an intentional failing canary input committed in the fixture baseline/u);
+  assert.match(prompt, /tracked tests\/fail\.test\.mjs is an intentional failing canary input committed in the fixture baseline/u);
   assert.match(prompt, /only allowed repair target/u);
   assert.doesNotMatch(prompt, /requested output is intentionally absent/u);
 });
 
-test('deep Doctor stages Goal through two separate native reviews and writable continuations', () => {
+test('deep Doctor stages Goal through one deterministic combined review and writable continuation', () => {
   const scenario = DOCTOR_SKILL_CASES.find(({ skill }) => skill === 'goal');
   const planDraft = createDoctorCanaryPrompt({
     skill: 'goal',
     prompt: scenario.prompt,
   });
-  assert.match(planDraft, /Plan-draft phase is a writable\/default turn/u);
-  assert.match(planDraft, /Approve Plan/u);
+  assert.match(planDraft, /combined-draft phase is a writable\/default turn/u);
+  assert.match(planDraft, /deterministic combined preview with full-file links and bound revisions/u);
+  assert.match(planDraft, /exactly \*\*Approve both\*\*/u);
+  assert.match(planDraft, /\*\*Reject all\*\*/u);
   assert.match(planDraft, /sole-write evidence gate untracked-aware/u);
-  assert.match(planDraft, /Do not ask \*\*Start Cruise\*\* in the same request/u);
 
   const planApproval = createDoctorCanaryPrompt({
     skill: 'goal',
     prompt: scenario.prompt,
     phase: 'plan-approval',
   });
-  assert.match(planApproval, /Plan-approval phase is read-only/u);
+  assert.match(planApproval, /combined-approval phase is read-only/u);
+  assert.match(planApproval, /PLAN\.md and GOAL\.md/u);
   assert.doesNotMatch(planApproval, /^\$cruise:goal/u);
-
-  const goalDraft = createDoctorCanaryPrompt({
-    skill: 'goal',
-    prompt: scenario.prompt,
-    phase: 'goal-draft',
-  });
-  assert.match(goalDraft, /writable\/default continuation after native \*\*Approve Plan\*\*/u);
-  assert.match(goalDraft, /new native structured input request/u);
-
-  const goalApproval = createDoctorCanaryPrompt({
-    skill: 'goal',
-    prompt: scenario.prompt,
-    phase: 'goal-approval',
-  });
-  assert.match(goalApproval, /Start approval phase is read-only/u);
-  assert.match(goalApproval, /request exactly \*\*Start Cruise\*\*/u);
 
   const execute = createDoctorCanaryPrompt({
     skill: 'goal',
     prompt: scenario.prompt,
     phase: 'execute',
   });
-  assert.match(execute, /writable\/default continuation after separate native/u);
+  assert.match(execute, /writable\/default continuation after one exact combined/u);
   assert.match(execute, /native Goal control plane/u);
   assert.doesNotMatch(execute, /^\$cruise:goal/u);
 });
@@ -1286,35 +1379,30 @@ test('deep Doctor recognizes only native exact Build approval labels', () => {
   }]), false);
 });
 
-test('deep Doctor requires exact ordered native Refine and Goal approvals', () => {
+test('deep Doctor requires exact native Refine and combined Goal approvals', () => {
   const plan = {
     method: 'item/tool/requestUserInput',
     answers: { plan: { answers: ['Approve Plan'] } },
     phase: 'plan-approval',
   };
-  const start = {
+  const combined = {
     method: 'item/tool/requestUserInput',
-    answers: { goal: { answers: ['Start Cruise'] } },
-    phase: 'goal-approval',
+    answers: { goal: { answers: ['Approve both'] } },
+    phase: 'plan-approval',
   };
   assert.equal(hasNativeExactApproval([plan], 'Approve Plan'), true);
   assert.equal(hasNativeRefineApproval([plan]), true);
   assert.equal(hasNativeRefineApproval([{ ...plan, phase: 'execute' }]), false);
-  assert.equal(hasNativeGoalApprovals([plan, start]), true);
-  assert.equal(hasNativeApprovalSequence([plan, start], ['Approve Plan', 'Start Cruise']), true);
-  assert.equal(hasNativeGoalApprovals([start, plan]), false);
-  assert.equal(hasNativeGoalApprovals([
-    plan,
-    { ...start, phase: 'plan-draft' },
-  ]), false);
+  assert.equal(hasNativeGoalApprovals([combined]), true);
+  assert.equal(hasNativeApprovalSequence([combined], ['Approve both']), true);
+  assert.equal(hasNativeGoalApprovals([{ ...combined, phase: 'execute' }]), false);
   assert.equal(hasNativeGoalApprovals([{
     method: 'item/tool/requestUserInput',
-    answers: { combined: { answers: ['Approve Plan', 'Start Cruise'] } },
+    answers: { combined: { answers: ['Approve', 'Reject all'] } },
     phase: 'plan-draft',
   }]), false);
   assert.equal(hasNativeGoalApprovals([
-    plan,
-    { method: 'mcpServer/elicitation/request', answers: start.answers },
+    { method: 'mcpServer/elicitation/request', answers: combined.answers },
   ]), false);
   assert.equal(hasNativeGoalControlUpdate([
     { id: 'goal-1', status: 'active', phase: 'execute' },
@@ -1701,7 +1789,7 @@ test('deep Doctor rejects protocol-completed turns with blocked workflow semanti
   await writeYamlFile(join(run, 'state.yaml'), terminalState('build', runId, 'blocked'));
   await writeYamlFile(join(run, 'evidence.yaml'), terminalEvidence(runId, 'BLOCK'));
   await writeFile(
-    join(run, 'worker-report.yaml'),
+    join(run, 'work-rpt.yaml'),
     'schema_version: 1\nkind: "cruise_app_server_worker_report"\nmodel_output: "draft"\nruntime:\n  status: "completed"\n',
   );
   await assert.rejects(
@@ -1728,7 +1816,7 @@ test('deep Doctor rejects a later completed run beside a prior blocked canonical
   const root = await mkdtemp(join(tmpdir(), 'cruise-doctor-multiple-runs-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeCompletedDoctorRun(root, 'quick');
-  const blockedRunId = 'doctor-quick-blocked';
+  const blockedRunId = 'quick-blocked';
   const blockedRun = join(root, '.cruise', 'runs', blockedRunId);
   await mkdir(blockedRun, { recursive: true });
   await writeYamlFile(
@@ -1750,7 +1838,7 @@ test('troubleshoot runs every skill in an isolated real repository', async (t) =
     installedPluginRoot: resolve('.'),
     workerExecutable: DOCTOR_WORKER_EXECUTABLE,
     async runSkill({ root, skill, installedPluginRoot, collaborationMode }) {
-      assert.match(installedPluginRoot, /\.installed-plugin-snapshot\/cruise$/u);
+      assert.match(installedPluginRoot, /\.plugin-snap\/cruise$/u);
       assert.equal(collaborationMode, null);
       await writeCompletedDoctorRun(root, skill);
       return {
@@ -1772,8 +1860,8 @@ test('troubleshoot runs every skill in an isolated real repository', async (t) =
   });
   t.after(() => rm(report.workspace, { recursive: true, force: true }));
   assert.equal(report.ok, true, JSON.stringify(report.checks, null, 2));
-  assert.equal(report.checks.length, 7);
-  assert.equal(new Set(report.checks.map(({ id }) => id)).size, 7);
+  assert.equal(report.checks.length, 6);
+  assert.equal(new Set(report.checks.map(({ id }) => id)).size, 6);
   assert.equal(report.checks.at(-1).id, 'installed-skill-inference-canary');
   assert.match(report.installedPluginSnapshotDigest.digest, /^[a-f0-9]{64}$/u);
   for (const { skill } of DOCTOR_SKILL_CASES) {
@@ -1784,7 +1872,7 @@ test('troubleshoot runs every skill in an isolated real repository', async (t) =
       '.cruise',
       'runs',
       `doctor-${skill}`,
-      'foreign-diff-guard.yaml',
+      'drift.yaml',
     ));
     assert.equal(guard.status, 'stopped');
     assert.equal(guard.history.at(-1).action, 'guard_finalized');
@@ -1822,7 +1910,7 @@ test('troubleshoot pins one installed snapshot across a concurrent cache replace
     workerExecutable: DOCTOR_WORKER_EXECUTABLE,
     async runSkill({ root, skill, installedPluginRoot }) {
       calls += 1;
-      assert.match(installedPluginRoot, /\.installed-plugin-snapshot\//u);
+      assert.match(installedPluginRoot, /\.plugin-snap\//u);
       if (calls === 1) await rm(plugin, { recursive: true, force: true });
       await writeCompletedDoctorRun(root, skill);
       return {
@@ -1843,7 +1931,7 @@ test('troubleshoot pins one installed snapshot across a concurrent cache replace
     },
   });
   t.after(() => rm(report.workspace, { recursive: true, force: true }));
-  assert.equal(calls, 6);
+  assert.equal(calls, 5);
   assert.equal(report.ok, true);
 });
 
@@ -1890,14 +1978,14 @@ test('deep Doctor binds the exact completed invocation to its same-run report', 
     root,
     workflowProof: proof,
     commands: [completedWorkerCommand(root, 'quick', {
-      command: `echo cruise worker --level 2 -C ${root} --packet p --report ${join(root, '.cruise', 'runs', 'doctor-quick', 'worker-report.yaml')}`,
+      command: `echo cruise worker --level 2 -C ${root} --packet p --report ${join(root, '.cruise', 'runs', 'doctor-quick', 'work-rpt.yaml')}`,
     })],
   }).length, 0);
   assert.equal(bindDoctorWorkerInvocations({
     root,
     workflowProof: proof,
     commands: [completedWorkerCommand(root, 'quick', {
-      command: `cruise worker --level 2 -C ${root} --packet p --report ${join(root, '.cruise', 'runs', 'other-run', 'worker-report.yaml')}`,
+      command: `cruise worker --level 2 -C ${root} --packet p --report ${join(root, '.cruise', 'runs', 'other-run', 'work-rpt.yaml')}`,
     })],
   }).length, 0);
 });
@@ -1986,13 +2074,13 @@ test('deep Doctor rejects a mapping report overwritten after command completion'
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeCompletedDoctorRun(root, 'quick');
   const commands = completedWorkerCommands(root, 'quick');
-  const reportPath = join(root, '.cruise', 'runs', 'doctor-quick', 'mapping-report.yaml');
+  const reportPath = join(root, '.cruise', 'runs', 'doctor-quick', 'map-rpt.yaml');
   const report = await readYamlFile(reportPath);
   await writeYamlFile(reportPath, { ...report, warnings: ['written after mapper completion'] });
   const proof = await inspectDoctorWorkflowProof(root, 'quick');
   const bindings = bindDoctorWorkerInvocations({ root, commands, workflowProof: proof });
   assert.equal(bindings.length, 1);
-  assert.equal(bindings[0].packetPath.endsWith('/packet.yaml'), true);
+  assert.equal(bindings[0].packetPath.endsWith('/work-pkt.yaml'), true);
   const evaluated = evaluateDoctorSkillResult({
     skill: 'quick',
     root,
@@ -2076,8 +2164,8 @@ test('deep Doctor preserves failed workers but rejects duplicate inference for t
   const distinctFailure = {
     ...failed,
     command: failed.command
-      .replace('packet.yaml', 'failed-packet.yaml')
-      .replace('worker-report.yaml', 'failed-report.yaml'),
+      .replace('map-pkt.yaml', 'fail-pkt.yaml')
+      .replace('map-rpt.yaml', 'fail-rpt.yaml'),
   };
   const recovered = evaluateDoctorSkillResult({
     skill: 'quick',
@@ -2180,11 +2268,11 @@ test('deep Doctor rejects a second mapping packet copy as substantive inference'
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeCompletedDoctorRun(root, 'quick');
   const run = join(root, '.cruise', 'runs', 'doctor-quick');
-  await copyFile(join(run, 'semantic-mapping-packet.yaml'), join(run, 'packet.yaml'));
+  await copyFile(join(run, 'map-pkt.yaml'), join(run, 'dup-pkt.yaml'));
   const mappingDigest = createHash('sha256')
-    .update(await readFile(join(run, 'packet.yaml')))
+    .update(await readFile(join(run, 'dup-pkt.yaml')))
     .digest('hex');
-  const reportPath = join(run, 'worker-report.yaml');
+  const reportPath = join(run, 'work-rpt.yaml');
   const report = await readYamlFile(reportPath);
   report.launch.packet_sha256 = mappingDigest;
   await writeYamlFile(reportPath, report);
@@ -2199,27 +2287,13 @@ test('deep Doctor rejects a second mapping packet copy as substantive inference'
       output: '',
       stderr: '',
       approvals: [],
-      commands: completedWorkerCommands(root, 'quick'),
+      commands: completedWorkerCommands(root, 'quick').map((command, index) => index === 1
+        ? { ...command, command: command.command.replace('work-pkt.yaml', 'dup-pkt.yaml') }
+        : command),
     },
   });
   assert.equal(result.status, 'fail');
   assert.match(result.detail, /distinct routed level-2 worker invocation after mapping/u);
-});
-
-test('Research outcome requires RESEARCH.md and cannot pass from a packet decoy', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'cruise-doctor-research-outcome-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await writeCompletedDoctorRun(root, 'research');
-  const run = join(root, '.cruise', 'runs', 'doctor-research');
-  await rm(join(run, 'RESEARCH.md'));
-  await writeFile(
-    join(run, 'implementation-packet.md'),
-    'spatiomics-skill inspect_spatial_inputs.py GEF GEFF\n',
-  );
-  await assert.rejects(
-    inspectDoctorScenarioOutcome(root, 'research'),
-    /no canonical run Markdown artifact/u,
-  );
 });
 
 test('deep Doctor evaluator enforces Refine and Goal native approval boundaries', async (t) => {
@@ -2265,7 +2339,7 @@ test('deep Doctor evaluator enforces Refine and Goal native approval boundaries'
     },
   });
   assert.equal(planOnly.status, 'fail');
-  assert.match(planOnly.detail, /Approve Plan then Start Cruise/u);
+  assert.match(planOnly.detail, /combined Plan-and-Goal Approve both/u);
 
   const noActivation = evaluateDoctorSkillResult({
     skill: 'goal',
@@ -2299,7 +2373,7 @@ test('troubleshoot keeps terminal reconnect evidence outside worker-writable roo
         await mkdir(legacyEvidenceDirectory, { recursive: true });
         await writeFile(join(legacyEvidenceDirectory, 'session.log'), 'ATTACKER-TAIL\n');
         await rm(
-          join(resolve(root, '..'), '.doctor-evidence', 'quick', 'session.log'),
+          join(resolve(root, '..'), '.doc-evidence', 'quick', 'session.log'),
           { force: true },
         );
         const failure = new WorkerSessionError('terminal stream failure', {
@@ -2351,7 +2425,7 @@ test('troubleshoot keeps terminal reconnect evidence outside worker-writable roo
   );
 });
 
-test('deep Doctor discovers exactly the six enabled cache-rooted public skills', async (t) => {
+test('deep Doctor discovers exactly the five enabled cache-rooted public skills', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'cruise-skill-cache-'));
   const workspace = await mkdtemp(join(tmpdir(), 'cruise-skill-workspace-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
