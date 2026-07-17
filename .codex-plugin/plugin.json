@@ -1,7 +1,7 @@
 {
   "name": "cruise",
-  "version": "0.1.0+codex.20260716144235",
-  "description": "Plan, review, and carry out software work with Codex.",
+  "version": "0.2.0+codex.20260717",
+  "description": "Direct Codex coding workflows with a prompt-only request note.",
   "author": {
     "name": "qwerty-sapien"
   },
@@ -10,24 +10,17 @@
   "license": "MIT",
   "keywords": [
     "codex",
-    "routing",
     "origin",
     "debugging",
-    "milestones",
-    "discovery",
-    "research",
     "goals",
     "planning",
-    "staged-qna",
-    "long-running",
-    "verification",
-    "workflow"
+    "verification"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Cruise",
-    "shortDescription": "Guided coding workflows",
-    "longDescription": "Cruise helps turn a coding request into the right-sized plan, change, investigation, or research task. It asks only the questions that change the result and keeps Codex's normal safety checks in charge.",
+    "shortDescription": "Direct coding workflows",
+    "longDescription": "Cruise starts a normal Codex task with the right-sized planning or coding guidance and keeps only the original request as a local note.",
     "developerName": "qwerty-sapien",
     "category": "Developer Tools",
     "capabilities": [

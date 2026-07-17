@@ -1,6 +1,0 @@
-interface:
-  display_name: "Cruise Debug"
-  short_description: "Unknown failure diagnosed and repaired"
-  default_prompt: "Use $cruise:debug to reproduce this observed failure, prove its root cause, make the smallest repair, and verify it."
-policy:
-  allow_implicit_invocation: false

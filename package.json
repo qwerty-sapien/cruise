@@ -1,6 +1,6 @@
 {
   "name": "cruise-codex-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Cruise Codex plugin and terminal client",
@@ -15,16 +15,9 @@
   "bin": {
     "cruise": "scripts/cruise.mjs"
   },
-  "exports": {
-    "./session": "./scripts/lib/session.mjs",
-    "./milestone-controller-host": "./scripts/lib/milestone-controller-host.mjs"
-  },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "validate": "node scripts/validate-suite.mjs",
-    "test:evals": "node --test tests/suite-static.test.mjs tests/build-contract.test.mjs tests/build-discovery.test.mjs tests/build-queue-coordinator.test.mjs tests/build-queue-persistence.test.mjs tests/milestone-controller.test.mjs tests/workflow-policy.test.mjs",
-    "test:evals:static": "node --test tests/suite-static.test.mjs",
-    "test:evals:behavior": "node --test tests/build-contract.test.mjs tests/build-discovery.test.mjs tests/build-queue-coordinator.test.mjs tests/build-queue-persistence.test.mjs tests/milestone-controller.test.mjs tests/workflow-policy.test.mjs"
+    "test": "node --test tests/app-server-client.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/simple-worker.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs",
+    "validate": "npm test"
   },
   "engines": {
     "node": ">=20"

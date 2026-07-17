@@ -1,6 +1,0 @@
-interface:
-  display_name: "Cruise Goal"
-  short_description: "Durable consequential work with two locked approvals"
-  default_prompt: "Use $cruise:goal to preserve this request, approve the Plan and Goal separately, then start durable verified execution."
-policy:
-  allow_implicit_invocation: false

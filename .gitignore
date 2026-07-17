@@ -36,7 +36,7 @@ dist/
 /tmp/
 /temp/
 
-# Cruise runtime state
+# Local Cruise request note
 /.cruise/
 
 # Local audits and raw evaluation output

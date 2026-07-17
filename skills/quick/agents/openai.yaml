@@ -1,6 +1,0 @@
-interface:
-  display_name: "Cruise Quick"
-  short_description: "Known small change with focused verification"
-  default_prompt: "Use $cruise:quick for this already-defined, bounded, low-risk change and verify the smallest coherent edit."
-policy:
-  allow_implicit_invocation: false

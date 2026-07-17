@@ -1,6 +1,0 @@
-interface:
-  display_name: "Cruise Build"
-  short_description: "Create a durable project or milestone contract"
-  default_prompt: "Use $cruise:build to establish this project foundation or define its next coherent milestone."
-policy:
-  allow_implicit_invocation: false

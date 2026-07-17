@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -254,9 +254,13 @@ test('doctor fails closed on an invalid or unreadable model catalog shape', () =
   assert.match(result.detail, /worker selection is blocked/);
 });
 
-test('static Doctor model probe bounds a never-resolving model/list and stops its client', async () => {
+test('static Doctor model probe clears a stale owned runtime and bounds a never-resolving model/list', async (t) => {
   let stopCalls = 0;
   let runtimeOptions;
+  const runtimeRoot = join(tmpdir(), 'cruise-model-catalog');
+  await rm(runtimeRoot, { recursive: true, force: true });
+  await mkdir(join(runtimeRoot, 'app-home'), { recursive: true });
+  t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   const client = new EventEmitter();
   client.start = async () => {};
   client.request = () => new Promise(() => {});
@@ -270,6 +274,7 @@ test('static Doctor model probe bounds a never-resolving model/list and stops it
     codexHome: '/tmp/cruise-explicit-codex-home',
     async runtimeFactory(options) {
       runtimeOptions = options;
+      await assert.rejects(lstat(join(runtimeRoot, 'app-home')), { code: 'ENOENT' });
       return {
         appServerArgs: [],
         spawnOptions: {},
