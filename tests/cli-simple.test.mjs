@@ -21,26 +21,31 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
     json: false,
     help: false,
     version: false,
+    level: null,
     promptParts: ['Fix', 'it'],
     prompt: 'Fix it',
   });
-  assert.deepEqual(parseArgs(['worker', 'Run', 'tests']), {
+  assert.deepEqual(parseArgs(['worker', '--level', '6', 'Run', 'tests']), {
     command: 'worker',
     skill: 'goal',
     cwd: process.cwd(),
     json: false,
     help: false,
     version: false,
+    level: 6,
     promptParts: ['Run', 'tests'],
     prompt: 'Run tests',
   });
+  assert.throws(() => parseArgs(['config', 'class']), /no persistent config command/u);
+  assert.throws(() => parseArgs(['worker', '--level', '8', 'Run']), /integer from 1 through 7/u);
+  assert.throws(() => parseArgs(['quick', '--level', '5', 'Fix']), /only by cruise worker/u);
   assert.throws(() => parseArgs(['goal', '--packet', 'task.yaml']), /not supported/u);
   assert.throws(() => parseArgs(['doctor', '--install-worker-rule']), /not supported/u);
 });
 
-test('workers receive ordinary text and never require packet or report paths', async () => {
+test('workers receive ordinary text and an explicit, request-scoped level', async () => {
   const calls = [];
-  const result = await runWorker({ cwd: process.cwd(), prompt: 'Run one check.' }, {
+  const result = await runWorker({ cwd: process.cwd(), prompt: 'Run one check.', level: 5 }, {
     async worker(input) {
       calls.push(input);
       return { output: '', effectsObserved: false };
@@ -50,6 +55,7 @@ test('workers receive ordinary text and never require packet or report paths', a
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cwd, process.cwd());
   assert.equal(calls[0].task, 'Run one check.');
+  assert.equal(calls[0].level, 5);
   assert.equal(typeof calls[0].onOutput, 'function');
   assert.equal(typeof calls[0].onServerRequest, 'function');
 });

@@ -1,4 +1,5 @@
 import { AppServerClient } from './app-server-client.mjs';
+import { normalizeRecommendedLevel, resolveWorkerPolicy } from './worker-policy.mjs';
 
 const DNS_ERROR = /\b(?:EAI_AGAIN|EAI_NONAME|ENOTFOUND|DNS_PROBE_FINISHED_NXDOMAIN)\b|getaddrinfo/iu;
 const CONNECTION_ERROR = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up)\b|connection (?:closed|reset|refused)/iu;
@@ -59,7 +60,7 @@ function hasEffectNotification(message) {
   return /(?:commandExecution|fileChange|applyPatch|tool)/iu.test(`${method} ${type}`);
 }
 
-async function oneAttempt({ cwd, task, clientFactory, onOutput, onServerRequest }) {
+async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerRequest }) {
   const client = clientFactory({
     spawnOptions: { cwd },
     clientInfo: { name: 'cruise-worker', title: 'Cruise Worker', version: '0.1.0' },
@@ -94,11 +95,25 @@ async function oneAttempt({ cwd, task, clientFactory, onOutput, onServerRequest 
   client.on('exit', exited);
   try {
     await client.start();
+    let policy = null;
+    if (level !== null) {
+      const catalog = await client.request('model/list', { limit: 100 });
+      policy = resolveWorkerPolicy({ recommendedLevel: level, catalog });
+      if (policy.degraded || !policy.worker.resolved.model || !policy.worker.resolved.reasoning_effort) {
+        throw new Error(`required worker pair is unavailable: ${policy.degradation_reasons.join('; ')}`);
+      }
+    }
     const started = await client.request('thread/start', {
       cwd,
       runtimeWorkspaceRoots: [],
       approvalPolicy: 'on-request',
       sandbox: 'workspace-write',
+      ...(policy
+        ? {
+            model: policy.worker.resolved.model,
+            allowProviderModelFallback: false,
+          }
+        : {}),
       serviceName: 'cruise_worker',
       ephemeral: true,
       developerInstructions: 'Execute the requested bounded task. Use normal Codex approvals. Do not create Cruise reports, packets, archives, or workflow state.',
@@ -111,6 +126,16 @@ async function oneAttempt({ cwd, task, clientFactory, onOutput, onServerRequest 
       runtimeWorkspaceRoots: [],
       approvalPolicy: 'on-request',
       sandboxPolicy: { type: 'workspaceWrite', writableRoots: [cwd] },
+      ...(policy
+        ? {
+            model: policy.worker.resolved.model,
+            effort: policy.worker.resolved.reasoning_effort,
+            responsesapiClientMetadata: {
+              cruise_level: String(level),
+              cruise_agent_type: policy.worker.agent_type,
+            },
+          }
+        : {}),
     });
     turnId = turn.turn.id;
     const terminal = await completion.promise;
@@ -143,15 +168,17 @@ async function oneAttempt({ cwd, task, clientFactory, onOutput, onServerRequest 
 export async function runSimpleWorker({
   cwd,
   task,
+  level = null,
   clientFactory = (options) => new AppServerClient(options),
   onOutput = null,
   onServerRequest = null,
 } = {}) {
   if (typeof cwd !== 'string' || !cwd) throw new TypeError('worker cwd is required');
   if (typeof task !== 'string' || !task.trim()) throw new TypeError('worker task is required');
+  if (level !== null) normalizeRecommendedLevel(level);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return await oneAttempt({ cwd, task, clientFactory, onOutput, onServerRequest });
+      return await oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerRequest });
     } catch (cause) {
       const failure = classifyWorkerFailure(cause);
       const effectsObserved = cause?.effectsObserved === true;

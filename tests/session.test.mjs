@@ -408,6 +408,9 @@ function createSession(client, cwd, overrides = {}) {
       output,
       errorOutput,
       continuationGraceMs: 20,
+      // These regression fixtures cover the retired manual-review adapter.
+      // Production CruiseSession defaults to implicit Goal authorization.
+      implicitGoalAuthorization: false,
       ...overrides,
     }),
   };
@@ -667,6 +670,24 @@ test('one combined Plan-and-Goal approval activates native Goal without an inter
     ).length,
     1,
   );
+});
+
+test('explicit Cruise Goal invocation auto-activates a validated legacy candidate without a review picker', async () => {
+  const { cwd } = await createContract();
+  const client = new FakeAppServer({ labels: ['Reject all', 'Approve both'] });
+  const { session, errorOutput } = createSession(client, cwd, {
+    implicitGoalAuthorization: true,
+    pickOne: async () => {
+      throw new Error('an in-scope Plan/Goal transition must not open a picker');
+    },
+  });
+
+  const result = await session.run();
+
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(client.responses[0].result.answers.q0.answers, ['Select some']);
+  assert.deepEqual(client.responses[1].result.answers.q1.answers, ['Approve both']);
+  assert.match(errorOutput.value, /invocation authorizes activation/i);
 });
 
 test('Refine and Reject both apply to the Plan-and-Goal pair and keep execution inactive', async (t) => {

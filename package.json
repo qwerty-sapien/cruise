@@ -1,6 +1,6 @@
 {
   "name": "cruise-codex-plugin",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Cruise Codex plugin and terminal client",
@@ -16,7 +16,7 @@
     "cruise": "scripts/cruise.mjs"
   },
   "scripts": {
-    "test": "node --test tests/app-server-client.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/simple-worker.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs",
+    "test": "node --test tests/app-server-client.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs",
     "validate": "npm test"
   },
   "engines": {

@@ -15,7 +15,7 @@ import {
 } from './lib/simple-session.mjs';
 import { runSimpleWorker } from './lib/simple-worker.mjs';
 
-export const CLI_VERSION = '0.2.0';
+export const CLI_VERSION = '0.2.1';
 export const PUBLIC_SKILLS = Object.freeze(['build', 'quick', 'refine', 'goal', 'debug']);
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -26,7 +26,7 @@ const HELP = `Cruise ${CLI_VERSION} — a thin Codex task launcher
 Usage:
   cruise [start] [-C <directory>] <request...>
   cruise <build|quick|refine|goal|debug> [-C <directory>] <request...>
-  cruise worker [-C <directory>] <task...>
+  cruise worker [--level <1-7>] [-C <directory>] <task...>
   cruise doctor [--json]
   cruise picker-demo
 
@@ -45,6 +45,9 @@ function displayError(value) {
 
 export function parseArgs(argv) {
   const args = [...argv];
+  if (args[0] === 'config') {
+    throw new Error('Cruise has no persistent config command. State worker-level or communication-style preferences in the current $cruise:<skill> request.');
+  }
   let command = 'start';
   if (['start', ...PUBLIC_SKILLS, 'worker', 'doctor', 'picker-demo', 'help'].includes(args[0])) {
     command = args.shift();
@@ -56,6 +59,7 @@ export function parseArgs(argv) {
     json: false,
     help: false,
     version: false,
+    level: null,
     promptParts: [],
   };
   for (let index = 0; index < args.length; index += 1) {
@@ -67,6 +71,16 @@ export function parseArgs(argv) {
     if (arg === '-h' || arg === '--help') options.help = true;
     else if (arg === '-V' || arg === '--version') options.version = true;
     else if (arg === '--json' && command === 'doctor') options.json = true;
+    else if (arg === '--level') {
+      if (command !== 'worker') throw new Error('--level is supported only by cruise worker.');
+      if (options.level !== null) throw new Error('--level may be supplied only once.');
+      const value = args[++index];
+      if (!/^\d+$/u.test(value ?? '')) throw new Error('--level requires an integer from 1 through 7.');
+      options.level = Number(value);
+      if (options.level < 1 || options.level > 7) {
+        throw new Error('--level requires an integer from 1 through 7.');
+      }
+    }
     else if (arg === '-C' || arg === '--cwd') {
       const value = args[++index];
       if (!value) throw new Error(`${arg} requires a directory.`);
@@ -144,6 +158,7 @@ export async function runWorker(options, { worker = runSimpleWorker } = {}) {
   const result = await worker({
     cwd,
     task: options.prompt,
+    level: options.level ?? null,
     onOutput(delta) {
       process.stdout.write(delta);
     },

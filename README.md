@@ -17,12 +17,20 @@ native Goal state continue to govern all work and effects.
 | `quick` | The requested change is small, understood, and low risk. |
 | `refine` | The outcome is finite but needs a short plan first. |
 | `goal` | The work is consequential or multi-step and should run to completion. |
-| `debug` | You have an observed failure whose cause is not yet clear. |
+| `debug` | You have a clear or vague failure, or want adversarial UX quality control. |
 
-`goal` is the autonomous lane: Codex advances ready, in-scope work until the
-native Goal is complete. It still asks for material product decisions, secrets,
-scope changes, and any approval Codex requires for an external or destructive
-action.
+`goal` is the autonomous lane: it starts with a compact codebase-aware plan for
+the first micro-goal, then implements, verifies, realigns, and advances ready,
+in-scope work until the native Goal is complete. Plans launch implementation;
+they are not a completion boundary. For risky changes, Cruise can use bounded
+independent breakage probes before advancing. It still asks for material product
+decisions, secrets, scope changes, and any approval Codex requires for an
+external or destructive action.
+
+Invoking `cruise goal` is itself the authorization for ordinary in-scope plan,
+Goal, contract, and phase transitions. Cruise never asks you to copy a digest or
+magic approval phrase back to it. That does not bypass Codex approvals for real
+external, destructive, or otherwise sensitive effects.
 
 ## Install
 
@@ -98,8 +106,25 @@ The terminal launcher starts a normal Codex task in the target directory:
 cruise quick -C ~/src/app "Fix the failing parser test"
 cruise refine -C ~/src/app "Add bounded retry handling"
 cruise goal -C ~/src/app "Migrate the API without breaking existing clients"
-cruise worker -C ~/src/app "Run the focused verification"
+cruise worker --level 6 -C ~/src/app "Run the focused verification"
 ```
+
+Cruise preferences are request-scoped, not persistent configuration. In Codex,
+put a preference directly in the invocation—for example, “Use a higher-level
+worker for this run” or “Respond professionally” after `$cruise:quick`. The
+terminal worker leaves Codex's model choice untouched unless `--level <1-7>` is
+explicitly present; that flag takes priority for that worker invocation only.
+The retired `cruise config` command exits immediately with this guidance and
+never launches a task.
+
+Debug also accepts request-scoped swarm controls in natural language, such as
+“swarm always, size 8, depth 3, aggressive, fix related confirmed bugs.” A clear
+reproduction uses Focused mode; a symptom without a reliable path or a general
+quality-control request uses Swarm mode to exercise distinct UX paths in
+adversarial waves. Once a cause is confirmed, Debug searches semantically
+similar code paths for related instances and verifies each before grouping any
+authorized repair. Swarm depth is separate from worker level and is always
+capped at 4.
 
 Every invocation replaces `.cruise/ORIGIN.md` with that invocation's exact
 request. Cruise does not create run directories, YAML workflows, approval

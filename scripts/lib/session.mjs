@@ -47,6 +47,8 @@ const TERMINAL_GOAL_STATUSES = new Set([
 ]);
 
 const HIGH_RISK_AUTO_APPROVAL = /\b(?:credential|secret|password|token|destructive|delete|remove|reset|rewrite|force|sudo|production|deploy|publish|release|purchase|payment|message|email|sensitive|private data)\b/iu;
+const ROUTINE_GOAL_AUTHORIZATION = /\b(?:plan(?:\s+and\s+goal)?|goal|cruise|contract|phase|micro[-\s]?goal|next\s+(?:step|phase|micro[-\s]?goal))\b/iu;
+const MATERIAL_GOAL_DECISION = /\b(?:not\s+requested|out(?:side)?\s+(?:the\s+)?scope|scope\s+(?:change|expansion)|which\s+(?:option|approach)|user\s+preference)\b/iu;
 
 export const CRUISE_PREPARATION_INSTRUCTIONS = `
 You are preparing a Cruise contract. You
@@ -54,17 +56,19 @@ may inspect the repository and may create or update planning artifacts only
 under .cruise/goal/. Do not modify target repository files, start
 implementation, or cause external effects before native Goal activation.
 
-Use the attached Cruise Goal skill. Ask one compact Goal-needs/autonomy question,
-branch only when its answer requires detail, and adapt any branch to that answer.
-Do not use autoResolutionMs. Preserve the exact triggering request in immutable
+Use the attached Cruise Goal skill. The explicit Cruise Goal invocation already
+authorizes ordinary in-scope planning and execution; derive routine autonomy
+from that request. Do not ask for a Plan, Goal, contract, digest, phase, or
+autonomy approval unless a concrete material product decision cannot be
+resolved from repository evidence. Do not use autoResolutionMs. Preserve the exact triggering request in immutable
 ORIGIN.yaml before deriving intent. Write and validate ORIGIN.yaml, SPEC.md,
 DECISIONS.md, ALIGNMENT.md, PLAN.md, and GOAL.md before review. A native Codex
 Plan item is best-effort and only available when the GUI host has explicitly
 enabled Plan collaboration mode. Cruise owns the deterministic combined preview
-and the decision state. Ask one combined structured review whose options are
-exactly "Approve both", "Refine", and "Reject both" in that order. Approval
-locks the complete suite and authorizes native Goal activation; Refine and
-Reject both apply to Plan and Goal together.
+and automatically validates its artifact snapshot before native Goal activation.
+Never request a copied approval phrase or an approval choice for that routine
+transition. A host-required approval for an external, destructive, sensitive,
+or otherwise material effect remains a real approval.
 Single-slice execution remains the default. Activate milestone-controller mode
 only when the user explicitly supplied or selected an approved milestone-wide
 handoff; never infer it from ROADMAP.md or the existence of Build artifacts. In
@@ -73,9 +77,9 @@ closed milestone blockers, and explicit permission/autonomy envelope; write
 ctrl.yaml in .cruise/goal/ and keep all Build source artifacts
 read-only. PLAN.md is then a hierarchical controller plan for just-in-time phase
 planning, not one flat milestone implementation plan.
-The client mechanically binds the one combined approval to every Plan and Goal
-artifact digest plus the repository baseline. Never edit a candidate artifact
-after offering the combined review.
+The client mechanically validates the Plan and Goal artifact snapshot plus the
+repository baseline immediately before activation. Never edit a candidate
+artifact after it is complete.
 
 Remain the root coordinator. Delegate substantive planning, execution, and
 verification by recommended level through the Cruise worker launcher. Supply
@@ -83,10 +87,10 @@ only the bounded task packet and selected level; persist the launcher-owned
 receipt with the returned report. The root owns routing, questions, approvals,
 integration, and native Goal activation; workers never authorize themselves.
 
-The client—not the model—owns native Goal activation. After Approve both,
-make no further artifact or repository write; end this preparation turn
-without calling create_goal or implementing. The client will recheck the
-digests, switch the thread to Default mode, and set the persisted native Goal.
+The client—not the model—owns native Goal activation. After the candidate is
+complete, make no further artifact or repository write; end this preparation
+turn without calling create_goal or implementing. The client will recheck the
+snapshot, switch the thread to Default mode, and set the persisted native Goal.
 `.trim();
 
 export const CRUISE_CLIENT_INSTRUCTIONS = CRUISE_PREPARATION_INSTRUCTIONS;
@@ -154,11 +158,11 @@ function preparationPrompt(
     ? 'Only for an explicitly supplied or selected approved milestone-wide handoff, also write ctrl.yaml, validate its locked Build contract manifest, and keep the referenced project/milestone files read-only; never infer controller mode from ROADMAP.md.'
     : 'This installed terminal entrypoint has no persistent Build-approval resolver, so it is single-slice Goal only: do not offer Use Milestone Controller, do not write ctrl.yaml, and direct milestone-wide execution to ordinary Codex with the approved Build run still in scope.';
   const system = [
-    'Use $cruise:goal, attached as the goal skill input, to prepare this work. Inspect the repository first, resolve the compact Goal-needs/autonomy choice, then compile the complete Plan and Goal before review.',
+    'Use $cruise:goal, attached as the goal skill input, to prepare this work. Inspect the repository first, then compile the complete Plan and Goal. The explicit Cruise Goal invocation already authorizes ordinary in-scope planning and execution.',
     nativePlanPresentation
       ? 'This host has explicitly enabled experimental native Plan presentation. Produce one native Plan item containing Plan and Goal, but do not assume it rendered; Cruise will fall back unless the item is observed.'
       : 'This CLI host does not expose Codex native Plan presentation. Do not claim to create a native frame; Cruise will render the captured PLAN.md and GOAL.md revisions itself.',
-    'Make one blocking request_user_input call whose combined-review options are exactly Approve both, Refine, and Reject both in that order. End after Approve both or Reject both; the client owns native Goal activation.',
+    'Do not request Plan, Goal, contract, digest, or routine phase approval. When the candidate is complete, end the preparation turn; the client validates it and owns native Goal activation. Ask only when a material product decision cannot be resolved from repository evidence or a host requires approval for an external, destructive, or sensitive effect.',
     `The target repository root is ${repositoryRoot}. Your shell cwd is the isolated planning directory ${planningDirectory}; inspect the target with absolute paths or git -C, and write the Cruise artifacts as ORIGIN.yaml, SPEC.md, DECISIONS.md, ALIGNMENT.md, optional ROADMAP.md, PLAN.md, and GOAL.md directly in the current planning directory. Single-slice mode is the default. ${controllerBoundary}`,
     'ORIGIN.yaml origin.raw_prompt must contain the exact request bytes from the user section, with no trimming, wrapper text, or delimiter.',
   ].join('\n');
@@ -217,6 +221,7 @@ export class CruiseSession extends EventEmitter {
     communicationStyle = null,
     renderPlan = renderCombinedPlanGoalPreview,
     nativePlanPresentation = false,
+    implicitGoalAuthorization = true,
   }) {
     super();
     if (!client) throw new TypeError('client is required');
@@ -247,6 +252,7 @@ export class CruiseSession extends EventEmitter {
     this.communicationStyle = communicationStyle;
     this.renderPlan = renderPlan;
     this.nativePlanPresentation = nativePlanPresentation === true;
+    this.implicitGoalAuthorization = implicitGoalAuthorization !== false;
     this.sessionId = `cruise-session-${randomUUID()}`;
 
     this.phase = 'idle';
@@ -417,6 +423,14 @@ export class CruiseSession extends EventEmitter {
         throw new Error(
           `Cruise preparation ended with turn status ${preparation.status}.`,
         );
+      }
+
+      if ((!this.startRequested || !this.goalApproval) && this.implicitGoalAuthorization) {
+        try {
+          await this._captureImplicitGoalApproval();
+        } catch (error) {
+          this._writeStatus(`Cruise could not validate the prepared Plan and Goal: ${error.message}`);
+        }
       }
 
       if (!this.startRequested || !this.goalApproval) {
@@ -814,9 +828,35 @@ export class CruiseSession extends EventEmitter {
     }
   }
 
+  async _captureImplicitGoalApproval() {
+    const goalCandidate = await capturePlanGoalApproval(this.cwd, {
+      expectedBaseline: this.initialBaseline,
+      expectedRawPrompt: this.originPrompt,
+      controllerAuthority: this.controllerAuthority,
+    });
+    if (!(this.nativePlanPresentation && this._nativePlanItemSeen)) {
+      this.renderPlan(goalCandidate, this.output);
+      this._writeStatus('Showing the validated Cruise Plan and Goal preview.');
+    } else {
+      this._writeStatus('Using the observed native Plan item for Plan and Goal presentation.');
+    }
+    await verifyPlanGoalApproval(this.cwd, goalCandidate);
+    this.goalApproval = goalCandidate;
+    this.startRequested = true;
+    this._writeStatus('Plan and Goal snapshot validated; the Cruise Goal invocation authorizes activation.');
+    return goalCandidate;
+  }
+
+  _implicitQuestionAnswer(question, preferredLabel = null) {
+    const options = Array.isArray(question?.options) ? question.options : [];
+    const approved = preferredLabel ?? options.find(({ label } = {}) =>
+      /^(?:approve(?:\s+(?:both|the\s+(?:plan|goal|contract)))?|start\s+cruise|continue|proceed|execute)\b/iu.test(String(label ?? '')),
+    )?.label;
+    if (typeof approved !== 'string' || approved.length === 0) return null;
+    return { answers: { [question.id]: { answers: [approved] } } };
+  }
+
   async _handleUserInput(params, signal, interactionId = 'request-user-input') {
-    this.startRequested = false;
-    this.goalApproval = null;
     const questions = params.questions ?? [];
     const reviewQuestion = questions.find((candidate) =>
       isPlanGoalReviewOptions(candidate?.options),
@@ -827,6 +867,56 @@ export class CruiseSession extends EventEmitter {
     const question = questions.length === 1 ? questions[0] : null;
     const options = question?.options ?? [];
     let goalCandidate = null;
+
+    if (this.implicitGoalAuthorization && (reviewQuestion || needsQuestion)) {
+      const answers = {};
+      if (needsQuestion) {
+        this.goalNeedsSelection = 'Select some';
+        this.autoApproveRoutineToolUse = false;
+        answers[needsQuestion.id] = { answers: ['Select some'] };
+        this._writeStatus('Goal autonomy is derived from the Cruise invocation; normal host approvals remain enabled.');
+      }
+      if (reviewQuestion) {
+        try {
+          goalCandidate = await this._captureImplicitGoalApproval();
+          const reviewAnswer = this._implicitQuestionAnswer(reviewQuestion, 'Approve both');
+          if (reviewAnswer === null) {
+            throw new Error('The routine Plan and Goal review did not offer an approval response.');
+          }
+          Object.assign(answers, reviewAnswer.answers);
+        } catch (error) {
+          this.goalApproval = null;
+          this.startRequested = false;
+          this._writeStatus(error.message);
+          return rejectedAnswer(
+            reviewQuestion.id,
+            `Plan and Goal validation failed: ${error.message}`,
+          );
+        }
+      }
+      return { answers };
+    }
+
+    if (this.implicitGoalAuthorization && question) {
+      const visible = [
+        question.header ?? '',
+        question.question ?? '',
+        ...options.map(({ label } = {}) => String(label ?? '')),
+      ].join(' ');
+      const routineAnswer = this._implicitQuestionAnswer(question);
+      if (
+        routineAnswer !== null &&
+        ROUTINE_GOAL_AUTHORIZATION.test(visible) &&
+        !HIGH_RISK_AUTO_APPROVAL.test(visible) &&
+        !MATERIAL_GOAL_DECISION.test(visible)
+      ) {
+        this._writeStatus('The Cruise Goal invocation authorizes this routine in-scope transition.');
+        return routineAnswer;
+      }
+    }
+
+    this.startRequested = false;
+    this.goalApproval = null;
 
     if (reviewQuestion) {
       if (this.goalNeedsSelection === null) {

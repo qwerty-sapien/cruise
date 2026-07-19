@@ -1,6 +1,6 @@
 {
   "name": "cruise",
-  "version": "0.2.0+codex.20260717",
+  "version": "0.2.1+codex.20260717",
   "description": "Direct Codex coding workflows with a prompt-only request note.",
   "author": {
     "name": "qwerty-sapien"
