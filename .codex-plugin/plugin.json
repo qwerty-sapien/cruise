@@ -1,7 +1,7 @@
 {
   "name": "cruise",
-  "version": "0.2.1+codex.20260717",
-  "description": "Direct Codex coding workflows with a prompt-only request note.",
+  "version": "0.3.0",
+  "description": "Advisory execution envelopes with evidence-based Goal supervision.",
   "author": {
     "name": "qwerty-sapien"
   },
@@ -19,8 +19,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Cruise",
-    "shortDescription": "Direct coding workflows",
-    "longDescription": "Cruise starts a normal Codex task with the right-sized planning or coding guidance and keeps only the original request as a local note.",
+    "shortDescription": "Supervised coding workflows",
+    "longDescription": "Cruise compiles user-editable flight plans and milestone queues, then supervises native Goal progress without replacing Codex permissions or approvals.",
     "developerName": "qwerty-sapien",
     "category": "Developer Tools",
     "capabilities": [

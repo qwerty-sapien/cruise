@@ -1,22 +1,36 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
+  CLI_VERSION,
   localDoctorReport,
   parseArgs,
+  runOneGoal,
   runStart,
   runWorker,
-} from '../scripts/cruise.mjs';
+} from '../index.js';
 import { readOriginPrompt } from '../scripts/lib/origin-note.mjs';
+
+test('the npm package entry runs the Cruise CLI', () => {
+  const result = spawnSync(process.execPath, [resolve('index.js'), '--version'], {
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout.trim(), CLI_VERSION);
+});
 
 test('the public CLI accepts direct requests and rejects retired control-plane flags', () => {
   assert.deepEqual(parseArgs(['quick', '-C', '/tmp', 'Fix', 'it']), {
     command: 'quick',
     skill: 'quick',
+    provider: 'codex',
     cwd: '/tmp',
     json: false,
     help: false,
@@ -28,6 +42,7 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
   assert.deepEqual(parseArgs(['worker', '--level', '6', 'Run', 'tests']), {
     command: 'worker',
     skill: 'goal',
+    provider: 'codex',
     cwd: process.cwd(),
     json: false,
     help: false,
@@ -41,6 +56,16 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
   assert.throws(() => parseArgs(['quick', '--level', '5', 'Fix']), /only by cruise worker/u);
   assert.throws(() => parseArgs(['goal', '--packet', 'task.yaml']), /not supported/u);
   assert.throws(() => parseArgs(['doctor', '--install-worker-rule']), /not supported/u);
+  assert.throws(() => parseArgs(['picker-demo']), /was removed/u);
+});
+
+test('provider selectors are request-scoped, mutually exclusive, and default to Codex', () => {
+  assert.equal(parseArgs(['quick', 'Fix'], { env: {} }).provider, 'codex');
+  assert.equal(parseArgs(['--claude', 'quick', 'Fix'], { env: {} }).provider, 'claude');
+  assert.equal(parseArgs(['quick', '--provider', 'claude', 'Fix'], { env: {} }).provider, 'claude');
+  assert.equal(parseArgs(['quick', 'Fix'], { env: { CRUISE_PROVIDER: 'claude' } }).provider, 'claude');
+  assert.throws(() => parseArgs(['--codex', '--claude', 'quick', 'Fix'], { env: {} }), /only one provider/u);
+  assert.throws(() => parseArgs(['--provider', 'other', 'quick', 'Fix'], { env: {} }), /provider must be one of/u);
 });
 
 test('workers receive ordinary text and an explicit, request-scoped level', async () => {
@@ -58,6 +83,28 @@ test('workers receive ordinary text and an explicit, request-scoped level', asyn
   assert.equal(calls[0].level, 5);
   assert.equal(typeof calls[0].onOutput, 'function');
   assert.equal(typeof calls[0].onServerRequest, 'function');
+});
+
+test('Claude workers use the Claude adapter without touching Codex app-server', async () => {
+  const calls = [];
+  const result = await runWorker({
+    cwd: process.cwd(),
+    prompt: 'Run one check.',
+    level: 6,
+    provider: 'claude',
+  }, {
+    async worker() {
+      throw new Error('Codex worker must not run');
+    },
+    async claudeWorker(input) {
+      calls.push(input);
+      return { output: '', effectsObserved: false };
+    },
+  });
+  assert.equal(result, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].task, 'Run one check.');
+  assert.equal(calls[0].level, 6);
 });
 
 class StartClient extends EventEmitter {
@@ -86,6 +133,62 @@ test('starting Cruise persists only the exact ORIGIN.md request before the norma
   assert.equal(await readOriginPrompt(root), prompt);
 });
 
+test('the run-one-goal seam does not replace ORIGIN.md', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-one-goal-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await runOneGoal({ cwd: root, prompt: 'Execute M1.', provider: 'codex' }, {
+    clientFactory: () => ({}),
+    sessionFactory() {
+      return {
+        async run() { return { status: 'complete' }; },
+        async interrupt() {},
+      };
+    },
+  });
+  assert.deepEqual(result, { status: 'complete', exitCode: 0 });
+  await assert.rejects(readOriginPrompt(root), { code: 'ENOENT' });
+});
+
+test('a supervised Goal stall maps to exit code 3', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-start-stalled-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const canonicalRoot = await realpath(root);
+  const result = await runStart({ cwd: root, prompt: 'Finish it.', skill: 'goal' }, {
+    clientFactory: () => ({}),
+    sessionFactory(input) {
+      assert.equal(input.cwd, canonicalRoot);
+      return {
+        async run() { return { status: 'stalled' }; },
+        async interrupt() {},
+      };
+    },
+  });
+  assert.equal(result, 3);
+});
+
+test('Claude start uses the native Claude adapter and preserves the ORIGIN note', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-start-claude-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls = [];
+  const result = await runStart({
+    cwd: root,
+    prompt: 'Implement it.',
+    skill: 'goal',
+    provider: 'claude',
+  }, {
+    async claudeRunner(input) {
+      calls.push(input);
+      return { status: 'complete', exitCode: 0 };
+    },
+  });
+  assert.equal(result, 0);
+  assert.equal(await readOriginPrompt(root), 'Implement it.');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cwd, await realpath(root));
+  assert.equal(calls[0].skill, 'goal');
+  assert.match(calls[0].pluginRoot, /cruise$/u);
+});
+
 test('Doctor only checks local Codex availability, not profiles, rules, digests, or network health', () => {
   const calls = [];
   const report = localDoctorReport((binary, args) => {
@@ -93,9 +196,25 @@ test('Doctor only checks local Codex availability, not profiles, rules, digests,
     return { status: 0, output: args[0] === '--version' ? 'codex 1.0' : 'help', error: '' };
   });
   assert.equal(report.ok, true);
+  assert.equal(report.provider, 'codex');
   assert.deepEqual(report.checks.map(({ id }) => id), ['codex', 'app-server']);
   assert.deepEqual(calls, [
     ['codex', ['--version']],
     ['codex', ['app-server', '--help']],
+  ]);
+});
+
+test('Claude Doctor checks the CLI and validates the Claude plugin', () => {
+  const calls = [];
+  const report = localDoctorReport((binary, args) => {
+    calls.push([binary, args]);
+    return { status: 0, output: args[0] === '--version' ? '2.1.209' : 'valid', error: '' };
+  }, { provider: 'claude', pluginRoot: '/tmp/cruise' });
+  assert.equal(report.ok, true);
+  assert.equal(report.provider, 'claude');
+  assert.deepEqual(report.checks.map(({ id }) => id), ['claude', 'claude-plugin']);
+  assert.deepEqual(calls, [
+    ['claude', ['--version']],
+    ['claude', ['plugin', 'validate', '/tmp/cruise']],
   ]);
 });

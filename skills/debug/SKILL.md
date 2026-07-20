@@ -5,7 +5,7 @@ description: "Diagnose evidenced software failures, vague or intermittent buggy 
 
 # Cruise Debug
 
-Determine the requested outcome and mutation authority first. If the user asks for diagnosis, an audit, quality-control findings, or bug tickets, remain read-only. If the user asks for a repair, implement the smallest justified causal fix and verify it. Use normal Codex permissions and explain evidence directly to the user.
+Determine the requested outcome and mutation authority first. If the user asks for diagnosis, an audit, quality-control findings, or bug tickets, remain read-only. If the user asks for a repair, implement the smallest justified causal fix and verify it. Use the host's native permissions and explain evidence directly to the user.
 
 ## Select one of two debug modes
 
@@ -18,7 +18,7 @@ Do not force Swarm mode after a clear low-risk reproduction. Do not turn a broad
 
 ## Configure the swarm
 
-Use native Codex subagents when available. Treat these controls as request-scoped natural language, including compact forms such as `swarm=always, swarm-size=8, swarm-depth=3`:
+Use native host subagents when available (Codex subagents or Claude Code subagents/agent teams). Treat these controls as request-scoped natural language, including compact forms such as `swarm=always, swarm-size=8, swarm-depth=3`:
 
 - `swarm`: `off`, `auto` (default), or `always`.
 - `swarm-size`: target number of distinct worker probes across waves. Let host concurrency and budget cap simultaneous workers.

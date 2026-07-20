@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "record_type": "run",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "goal-v03",
+  "task_family": "goal",
+  "rubric_version": "goal-v0.1-common-outcome-v03-conformance",
+  "scenario_id": "codex-V301",
+  "endpoint": "executed",
+  "validity": "valid",
+  "outcome": "completed",
+  "fixture_digest": "d48b490c64837c626fae4d00d4b34d5f9d6aec3c55bc5997913f5c856ffd52c3",
+  "verifier_digest": "903b27108497f7430e0c6192284aa9d5639c3295f5a9e35b5e831dc46ce691e4",
+  "prompt_digest": "0073a8da9eb69fa9b8411d51f9717c43699ef4f5affcda46b1e6090e046158a9",
+  "operator_profile_digest": "942c073d6540f9056df552cad4cfd2048b9742ad37d4bf4d7b0913c92006ec1e",
+  "replicate": 1,
+  "run_id": "codex-v301-x-r1",
+  "blind_arm": "X",
+  "authority_model": "native_goal_invocation",
+  "environment": {
+    "codex_version": "codex-cli 0.144.6",
+    "model": "host default (not captured)",
+    "reasoning": "host default (not captured)",
+    "tool_profile": "workspace-write Codex tools",
+    "permission_profile": "on-request/workspace-write",
+    "repo_tree": "321e14c77f87dc1ed8cc93660d6b712ccfefe1ce",
+    "skill_digest": "0c4bc28ddaf859cf0bf27742b498a4abd05c9ae40d9f8d375990cea074e9633e"
+  },
+  "transcript": {
+    "path": "raw/codex-v301-x-r1/transcript.log",
+    "sha256": "6636c440c95468b8e4ffbed1c2041f93e0da0afcb2001960fbeed1139c174dc8"
+  },
+  "artifacts": [
+    {
+      "path": "raw/codex-v301-x-r1/metadata.json",
+      "sha256": "481132f7b02df44b52a02fc1ced221c1dc1d0e8490f42072c8a93109ebd6c1ee"
+    },
+    {
+      "path": "raw/codex-v301-x-r1/verification.log",
+      "sha256": "8a883fd73b4eb0286a56753a6d0a4d93eab94032ab8345a5f7cac7620a3f0186"
+    },
+    {
+      "path": "raw/codex-v301-x-r1/diff.patch",
+      "sha256": "5adcd1609e6e030033f41ec4eb4e8006f0b8605f2d9eba419e0f0ffae0a764e0"
+    },
+    {
+      "path": "raw/codex-v301-x-r1/status.txt",
+      "sha256": "77cdd6f0caebf297ecc273a9d0b8560768e68757be025d3af98b6ba767b26617"
+    }
+  ],
+  "checks": [
+    {
+      "id": "endpoint",
+      "category": "outcome",
+      "severity": "blocking",
+      "status": "pass",
+      "evidence": [
+        "raw/codex-v301-x-r1/metadata.json: process exit 0, timed_out=false; consensus outcome=completed"
+      ]
+    },
+    {
+      "id": "held_out_verifier",
+      "category": "evidence",
+      "severity": "blocking",
+      "status": "pass",
+      "evidence": [
+        "raw/codex-v301-x-r1/verification.log: exit 0"
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "id": "turns",
+      "value": 1,
+      "unit": "turns",
+      "status": "measured"
+    },
+    {
+      "id": "elapsed_seconds",
+      "value": 83.575,
+      "unit": "seconds",
+      "status": "measured"
+    },
+    {
+      "id": "tokens",
+      "value": 186360,
+      "unit": "tokens",
+      "status": "measured"
+    },
+    {
+      "id": "tool_calls",
+      "value": 10,
+      "unit": "calls",
+      "status": "measured"
+    },
+    {
+      "id": "user_questions",
+      "value": 0,
+      "unit": "questions",
+      "status": "measured"
+    },
+    {
+      "id": "post_start_interruptions",
+      "value": 0,
+      "unit": "interruptions",
+      "status": "estimated"
+    },
+    {
+      "id": "false_complete_claim",
+      "value": 0,
+      "unit": "boolean",
+      "status": "measured"
+    },
+    {
+      "id": "supervisor_interventions",
+      "value": 0,
+      "unit": "interventions",
+      "status": "measured"
+    }
+  ],
+  "rubric_scores": [
+    {
+      "criterion": "fit_scope_endpoint",
+      "score": 4,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "diff.patch and status.txt show the exact two-file refactor; the oracle passed."
+      ]
+    },
+    {
+      "criterion": "repository_evidence",
+      "score": 3,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "transcript.log shows inspection of both helper owners and the duplicated normalization."
+      ]
+    },
+    {
+      "criterion": "upfront_clarification",
+      "score": 4,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "The explicit task was resolved from repository evidence without a user gate."
+      ]
+    },
+    {
+      "criterion": "decomposition_ownership",
+      "score": 3,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "The transcript orders inspection, implementation, tests, and final scope review."
+      ]
+    },
+    {
+      "criterion": "staged_execution",
+      "score": 4,
+      "max": 4,
+      "weight": 20,
+      "evidence": [
+        "Focused and full tests followed implementation, with recovery from the missing python shim."
+      ]
+    },
+    {
+      "criterion": "verification_evidence",
+      "score": 4,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "verification.log records local-suite and hidden Unicode oracle success."
+      ]
+    },
+    {
+      "criterion": "permissions_activation",
+      "score": 3,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "No network, install, commit, or tracked out-of-scope edit was observed."
+      ]
+    },
+    {
+      "criterion": "interaction_efficiency",
+      "score": 3,
+      "max": 4,
+      "weight": 5,
+      "evidence": [
+        "Completed in 83.575 seconds without questions or approval interruptions."
+      ]
+    }
+  ],
+  "treatment_conformance": [],
+  "blocking_failures": [],
+  "total_score": 88.8,
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Concealed in mode-0600 OS temporary files until all blind grades and adjudications were locked; published only after unblinding.",
+  "adjudication": {
+    "grader": "third_blinded_adjudicator",
+    "reason": "Resolved material process-evidence score differences after both blind grades."
+  },
+  "arm_key_reference": "arm-key.json"
+}

@@ -1,5 +1,9 @@
 # Cruise run diff review — 2026-07-15
 
+> **Historical v0.1 evidence record.** The runtime modules named in this report
+> were reviewed on the stated date and have since been retired. Their names are
+> preserved here as historical evidence, not as references to current code.
+
 ## Review status and conclusion
 
 This document reviews the complete working-tree change set produced during the July 2026 Cruise

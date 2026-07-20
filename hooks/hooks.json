@@ -1,0 +1,19 @@
+{
+  "description": "Cruise Goal liveness supervision",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/stop-supervisor.mjs"
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,5 +1,4 @@
 import { MODEL_IDS, resolveModelPolicy } from './model-policy.mjs';
-import { assertYamlSchema } from './yaml-state.mjs';
 
 /**
  * The root thread is always the coordinator. Level 1 may be spawned only for
@@ -98,6 +97,26 @@ function deepFreeze(value) {
   return value;
 }
 
+function assertPolicySchema(value, schema, path = '$') {
+  const actual = value === null ? 'null' : Array.isArray(value) ? 'array' : Number.isInteger(value) ? 'integer' : typeof value;
+  const expected = schema.type == null ? [] : Array.isArray(schema.type) ? schema.type : [schema.type];
+  if (expected.length && !expected.includes(actual)) throw new TypeError(`${path} must be ${expected.join(' or ')}`);
+  if (Object.hasOwn(schema, 'const') && !Object.is(value, schema.const)) throw new TypeError(`${path} has an invalid value`);
+  if (schema.enum && !schema.enum.includes(value)) throw new TypeError(`${path} has an invalid value`);
+  if (typeof value === 'string' && schema.minLength && value.length < schema.minLength) throw new TypeError(`${path} must not be empty`);
+  if (typeof value === 'number' && (value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity))) {
+    throw new TypeError(`${path} is outside the allowed range`);
+  }
+  if (Array.isArray(value) && schema.items) value.forEach((item, index) => assertPolicySchema(item, schema.items, `${path}[${index}]`));
+  if (actual !== 'object') return value;
+  for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) throw new TypeError(`${path}.${key} is required`);
+  for (const [key, item] of Object.entries(value)) {
+    if (schema.properties?.[key]) assertPolicySchema(item, schema.properties[key], `${path}.${key}`);
+    else if (schema.additionalProperties === false) throw new TypeError(`${path}.${key} is not allowed`);
+  }
+  return value;
+}
+
 export function normalizeRecommendedLevel(value) {
   if (!Number.isInteger(value) || value < 1 || value > 7) {
     throw new TypeError('recommended_level must be an integer from 1 through 7');
@@ -167,7 +186,7 @@ export function resolveWorkerPolicy({
     degraded: resolution.degraded,
     degradation_reasons: [...resolution.degradation_reasons],
   };
-  assertYamlSchema(record, WORKER_POLICY_RECORD_SCHEMA, { name: 'worker policy record' });
+  assertPolicySchema(record, WORKER_POLICY_RECORD_SCHEMA);
   return deepFreeze(record);
 }
 
@@ -177,7 +196,7 @@ export function resolveWorkerPolicy({
  * reviewed stop conditions permit additional attempts at the strongest level.
  */
 export function escalateWorkerPolicy(previous, { catalog = [], reason } = {}) {
-  assertYamlSchema(previous, WORKER_POLICY_RECORD_SCHEMA, { name: 'previous worker policy' });
+  assertPolicySchema(previous, WORKER_POLICY_RECORD_SCHEMA);
   if (typeof reason !== 'string' || !reason.trim()) {
     throw new TypeError('a soft worker escalation reason is required');
   }

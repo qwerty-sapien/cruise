@@ -1,0 +1,19 @@
+{
+  "captured_at": "2026-07-21",
+  "codex": {
+    "provider": "codex",
+    "ok": true,
+    "checks": [
+      { "id": "codex", "status": "pass", "detail": "codex-cli 0.144.6" },
+      { "id": "app-server", "status": "pass", "detail": "app-server is available" }
+    ]
+  },
+  "claude": {
+    "provider": "claude",
+    "ok": true,
+    "checks": [
+      { "id": "claude", "status": "pass", "detail": "2.1.209 (Claude Code)" },
+      { "id": "claude-plugin", "status": "pass", "detail": "Claude plugin is valid" }
+    ]
+  }
+}

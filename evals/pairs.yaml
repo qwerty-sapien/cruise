@@ -2,7 +2,7 @@ schema_version: 1
 pairs:
   - id: goal-v0
     task_family: goal
-    status: protocol-ready
+    status: historical
     treatment:
       display_name: "Cruise Goal"
       qualified_surface: "cruise:goal"
@@ -28,3 +28,32 @@ pairs:
       - executed
     primary_metric: "blocker_free_paired_rate"
     run_gate: "Materialized fixture manifests and native/treatment smoke checks must pass before a study is labeled ready."
+  - id: goal-v03
+    task_family: goal
+    status: diagnostic-pilot
+    providers:
+      - codex
+      - claude
+    treatment:
+      display_name: "Cruise Goal v0.3"
+      codex_invocation: "cruise --codex goal"
+      claude_invocation: "/cruise:goal"
+      install_contents:
+        - ".codex-plugin/"
+        - ".claude-plugin/"
+        - "hooks/"
+        - "skills/"
+        - "scripts/"
+      exclude:
+        - "evals/"
+    control:
+      display_name: "Native host autonomy"
+      invocation: "native Goal/autonomy phrasing"
+      cruise_installed: false
+    cases: "cases/v03-goal.json"
+    rubric: "rubrics/goal.md"
+    default_replicates: 1
+    endpoints:
+      - executed
+    primary_metric: "correct_endpoint_rate"
+    run_gate: "Provider doctor, isolated smoke, fixture digest, and hidden verifier must pass; infrastructure-invalid trials remain published but are excluded from promotion metrics."

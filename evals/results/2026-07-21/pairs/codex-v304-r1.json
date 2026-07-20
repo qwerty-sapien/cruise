@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "record_type": "pair",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "codex-v304-r1",
+  "scenario_id": "codex-V304",
+  "replicate": 1,
+  "run_ids": [
+    "codex-v304-x-r1",
+    "codex-v304-y-r1"
+  ],
+  "validity": "invalid",
+  "blind_preference": "Y",
+  "blocker_comparison": {
+    "X": 1,
+    "Y": 0
+  },
+  "score_delta": -82.5,
+  "efficiency_deltas": {
+    "elapsed_seconds": 209.8,
+    "turns": null,
+    "tool_calls": -17
+  },
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Locked before unblinding; mapping published after adjudication.",
+  "adjudication": {
+    "phase": "post-unblinding",
+    "reason": "Control loaded a globally installed stale Cruise skill and treatment did not use the v0.3 skill digest; Cruise absence was not preserved."
+  },
+  "arm_key_reference": "arm-key.json"
+}

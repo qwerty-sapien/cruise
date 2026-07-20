@@ -1,6 +1,6 @@
 ---
 name: refine
-description: "Resolve a finite implementation approach with the user, then carry it out with ordinary Codex approvals."
+description: "Resolve a finite implementation approach with the user, then carry it out with ordinary host approvals."
 ---
 
 # Cruise Refine

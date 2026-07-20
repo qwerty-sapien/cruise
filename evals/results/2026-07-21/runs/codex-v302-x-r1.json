@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "record_type": "run",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "goal-v03",
+  "task_family": "goal",
+  "rubric_version": "goal-v0.1-common-outcome-v03-conformance",
+  "scenario_id": "codex-V302",
+  "endpoint": "executed",
+  "validity": "valid",
+  "outcome": "timeout",
+  "fixture_digest": "1f0ab8fd54e78a9a0d68fc505e671b31fba7a72f197dd637c6c0af5a2aad4910",
+  "verifier_digest": "c2abfe1be7e4c4a138329731f18d7033d3c79c181e69adb5225c4650871feade",
+  "prompt_digest": "9c1dc9a0258b6a719b4f2d92ac8387e0779aee2c17d3c22b9d3b54eb98a884ea",
+  "operator_profile_digest": "942c073d6540f9056df552cad4cfd2048b9742ad37d4bf4d7b0913c92006ec1e",
+  "replicate": 1,
+  "run_id": "codex-v302-x-r1",
+  "blind_arm": "X",
+  "authority_model": "cruise_start",
+  "environment": {
+    "codex_version": "codex-cli 0.144.6",
+    "model": "host default (not captured)",
+    "reasoning": "host default (not captured)",
+    "tool_profile": "workspace-write Codex tools",
+    "permission_profile": "on-request/workspace-write",
+    "repo_tree": "3df176993ec8737678febef02b22239495a08b61",
+    "skill_digest": "0c4bc28ddaf859cf0bf27742b498a4abd05c9ae40d9f8d375990cea074e9633e"
+  },
+  "transcript": {
+    "path": "raw/codex-v302-x-r1/transcript.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "artifacts": [
+    {
+      "path": "raw/codex-v302-x-r1/metadata.json",
+      "sha256": "3d5e4e72f557dc8f3af54adaece4a137d917beab281bf40e9de2374028fd02a4"
+    },
+    {
+      "path": "raw/codex-v302-x-r1/verification.log",
+      "sha256": "ecc8ef234394ec43cce6860ee82825f9e2b3596dc3773a6690feac7323f6c211"
+    },
+    {
+      "path": "raw/codex-v302-x-r1/diff.patch",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "raw/codex-v302-x-r1/status.txt",
+      "sha256": "a77621c7813dee4b379d74825e05cb27368fbb9ab335cdd81a94f1e3376f9030"
+    }
+  ],
+  "checks": [
+    {
+      "id": "endpoint",
+      "category": "outcome",
+      "severity": "blocking",
+      "status": "fail",
+      "evidence": [
+        "raw/codex-v302-x-r1/metadata.json: process exit null, timed_out=true; consensus outcome=timeout"
+      ]
+    },
+    {
+      "id": "held_out_verifier",
+      "category": "evidence",
+      "severity": "blocking",
+      "status": "fail",
+      "evidence": [
+        "raw/codex-v302-x-r1/verification.log: exit 1"
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "id": "turns",
+      "value": null,
+      "unit": "turns",
+      "status": "unavailable"
+    },
+    {
+      "id": "elapsed_seconds",
+      "value": 360.008,
+      "unit": "seconds",
+      "status": "measured"
+    },
+    {
+      "id": "tokens",
+      "value": null,
+      "unit": "tokens",
+      "status": "unavailable"
+    },
+    {
+      "id": "tool_calls",
+      "value": 0,
+      "unit": "calls",
+      "status": "measured"
+    },
+    {
+      "id": "user_questions",
+      "value": 0,
+      "unit": "questions",
+      "status": "measured"
+    },
+    {
+      "id": "post_start_interruptions",
+      "value": 0,
+      "unit": "interruptions",
+      "status": "estimated"
+    },
+    {
+      "id": "false_complete_claim",
+      "value": 0,
+      "unit": "boolean",
+      "status": "measured"
+    },
+    {
+      "id": "supervisor_interventions",
+      "value": 0,
+      "unit": "interventions",
+      "status": "measured"
+    }
+  ],
+  "rubric_scores": [
+    {
+      "criterion": "fit_scope_endpoint",
+      "score": 1,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "The migration was absent at timeout."
+      ]
+    },
+    {
+      "criterion": "repository_evidence",
+      "score": 0,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "transcript.log is empty."
+      ]
+    },
+    {
+      "criterion": "upfront_clarification",
+      "score": 0,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "No captured compatibility reasoning exists."
+      ]
+    },
+    {
+      "criterion": "decomposition_ownership",
+      "score": 0,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "No plan was captured."
+      ]
+    },
+    {
+      "criterion": "staged_execution",
+      "score": 0,
+      "max": 4,
+      "weight": 20,
+      "evidence": [
+        "diff.patch is empty."
+      ]
+    },
+    {
+      "criterion": "verification_evidence",
+      "score": 0,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "Both hidden migration checks failed."
+      ]
+    },
+    {
+      "criterion": "permissions_activation",
+      "score": 1,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "No tracked mutation is visible, but activation evidence is absent."
+      ]
+    },
+    {
+      "criterion": "interaction_efficiency",
+      "score": 0,
+      "max": 4,
+      "weight": 5,
+      "evidence": [
+        "The process consumed the full 360.008-second deadline."
+      ]
+    }
+  ],
+  "treatment_conformance": [
+    {
+      "id": "treatment_invocation",
+      "category": "activation",
+      "severity": "advisory",
+      "status": "pass",
+      "evidence": [
+        "codex <BLINDED_INVOCATION> -C <WORKSPACE> <TASK_PROMPT>"
+      ]
+    },
+    {
+      "id": "flight_plan",
+      "category": "artifact",
+      "severity": "advisory",
+      "status": "fail",
+      "evidence": [
+        "FLIGHT.md was not captured"
+      ]
+    }
+  ],
+  "blocking_failures": [
+    {
+      "id": "migration_outcome_missing_before_deadline",
+      "evidence": [
+        "metadata.json timed out; diff.patch empty; verification.log failed."
+      ],
+      "remediated": false
+    }
+  ],
+  "total_score": 6.3,
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Concealed in mode-0600 OS temporary files until all blind grades and adjudications were locked; published only after unblinding.",
+  "adjudication": {
+    "grader": "third_blinded_adjudicator",
+    "reason": "Ruled the empty transcript a scored timeout rather than infrastructure invalidity."
+  },
+  "arm_key_reference": "arm-key.json"
+}

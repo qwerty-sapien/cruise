@@ -1,0 +1,52 @@
+[stdout]
+[harness verifier] python3 -m unittest -v
+[stderr]
+test_loads_legacy_theme (test_settings_store.SettingsStoreTest.test_loads_legacy_theme) ... [stderr]
+ok
+[stderr]
+test_round_trips_version_two_theme (test_settings_store.SettingsStoreTest.test_round_trips_version_two_theme) ... [stderr]
+ok
+[stderr]
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.002s
+
+[stderr]
+OK
+[stdout]
+[harness verifier] python3 -m unittest discover -v -s <PLUGIN_ROOT>/evals/fixtures/v03/V302/oracle -p test_*.py
+[stderr]
+test_legacy_language_defaults_without_losing_theme (test_language_migration.LanguageMigrationOracle.test_legacy_language_defaults_without_losing_theme) ... [stderr]
+FAIL
+[stderr]
+test_version_two_language_round_trips_deterministically (test_language_migration.LanguageMigrationOracle.test_version_two_language_round_trips_deterministically) ... [stderr]
+FAIL
+[stderr]
+
+======================================================================
+FAIL: test_legacy_language_defaults_without_losing_theme (test_language_migration.LanguageMigrationOracle.test_legacy_language_defaults_without_losing_theme)
+----------------------------------------------------------------------
+[stderr]
+Traceback (most recent call last):
+  File "<PLUGIN_ROOT>/evals/fixtures/v03/V302/oracle/test_language_migration.py", line 14, in test_legacy_language_defaults_without_losing_theme
+    self.assertEqual(load_settings(path), {"theme": "dark", "language": "en"})
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'theme': 'dark'} != {'theme': 'dark', 'language': 'en'}
+- {'theme': 'dark'}
++ {'language': 'en', 'theme': 'dark'}
+
+======================================================================
+FAIL: test_version_two_language_round_trips_deterministically (test_language_migration.LanguageMigrationOracle.test_version_two_language_round_trips_deterministically)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<PLUGIN_ROOT>/evals/fixtures/v03/V302/oracle/test_language_migration.py", line 20, in test_version_two_language_round_trips_deterministically
+    self.assertEqual(load_settings(path), {"theme": "dark", "language": "fr"})
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'theme': 'dark'} != {'theme': 'dark', 'language': 'fr'}
+- {'theme': 'dark'}
++ {'language': 'fr', 'theme': 'dark'}
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.003s
+
+FAILED (failures=2)

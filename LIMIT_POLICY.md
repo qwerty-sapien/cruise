@@ -1,68 +1,92 @@
 # Cruise limit policy
 
-Cruise does not use hidden numeric ceilings to decide whether legitimate work may continue.
+Cruise uses limits only for bounded parsing, resource containment, host
+integration, and liveness. It does not impose a universal workload, repair, or
+attempt budget. Repository evidence, the declared scope, host permissions, and
+the requested outcome determine whether legitimate work continues.
 
-A task continues or stops according to:
+## Goal liveness
 
-- its reviewed stop conditions;
-- current evidence;
-- permissions and ownership;
-- resource policy; and
-- actual host capability.
+`.cruise/FLIGHT.md` exposes two positive, user-editable thresholds:
 
-Retry and repair history is append-only. It cannot be erased to manufacture a fresh budget.
+| Field | Default | Trigger evidence |
+| --- | ---: | --- |
+| `stall.quiet_turns` | `3` | Consecutive unchanged workspace fingerprints or oscillation to an earlier fingerprint. |
+| `stall.same_failure` | `3` | Consecutive repetitions of the same normalized failure signature. |
+
+Reaching either threshold starts one ladder: realign, one final experiment,
+then stall. A new workspace fingerprint resets quiet and failure counts and the
+ladder. In signature-only supervision, changed or cleared failure evidence also
+resets it.
+
+Codex evaluates the ladder between native Goal continuation turns. On stall it
+attempts to pause the Goal, emits the observations and interventions, and exits
+`3`. There is no independent wall-clock or total-turn ceiling in this loop.
+
+Claude evaluates the ladder on `Stop` events only when
+`CRUISE_CLAUDE_GOAL=1` and a valid `active` flight is newer than 48 hours. It
+blocks ordinary stops with continuation guidance, then realignment and final
+experiment guidance. The following stop is allowed with a report. A hard
+backstop at `quiet_turns + 2` blocked stops also allows the stop if the normal
+ladder has not finished. New evidence resets the cycle.
+
+Claude supervision is fail-open: a missing, terminal, stale, oversized, or
+malformed flight; unavailable evidence; damaged scratch; or hook exception may
+reduce supervision, but cannot trap the session. The hook command itself has a
+30-second host timeout.
+
+## Advisory input and scratch bounds
+
+| Input or state | Bound | Overflow behavior |
+| --- | ---: | --- |
+| `.cruise/FLIGHT.md` | 1 MB, 1,000 frontmatter tokens, nesting depth 10 | Parser returns no plan; the run continues without artifact-driven supervision. |
+| `.cruise/QUEUE.md` | 1 MB, 5,000 frontmatter tokens, nesting depth 12 | Parser returns no queue; queue commands stop with an invalid/missing-queue error. |
+| Claude Stop-hook JSON input | 1 MB | Hook catches the error, allows the stop, and emits a fail-open system message. |
+| Codex captured agent text per turn | 64 KiB | Additional text is not used for failure-signature supervision. |
+| Claude supervisor history | Last 32 fingerprints and observations | Old derived observations are dropped; authority and repository state are unaffected. |
+
+Flight and queue writers reject symlink targets and require `.cruise` to be a
+real directory. These are path-safety boundaries, not workload budgets.
+
+## Host and command bounds
+
+| Operation | Implemented bound or behavior |
+| --- | --- |
+| `cruise doctor` subprocess checks | 10-second timeout per local CLI check. |
+| Codex app-server shutdown | Bounded graceful/terminate/kill cleanup stages; cancellation remains available. |
+| Worker level | Integer 1–7, mapped request-locally to a provider model/effort pair. |
+| Queue execution | Sequential; stops at active, blocked, stalled, failed, or dependency-deadlocked work. No milestone-attempt budget is stored. |
+| Launcher exits | `0` complete, `2` blocked/failed, `3` stalled, `130` interrupted. |
+
+Service quotas, model context windows, Claude hook timeouts, Codex host limits,
+OS limits, and external API policies remain host or protocol constraints.
+Cruise reports them as such and cannot weaken or extend them.
 
 ## Allowed limit classes
 
-Every executable limit must belong to one of these classes.
+Every new executable limit must fit one of these classes:
 
-| Class | Purpose | Required behavior |
-| --- | --- | --- |
-| Host or protocol | Respect a limit imposed by Codex, the OS, a file format, or an external API | Name the external source truthfully; do not present it as a Cruise preference |
-| Safety or authority | Prevent scope escape, permission expansion, unsafe paths, secret persistence, untrusted installation, or unauthorized effects | Remain fail-closed |
-| Resource containment | Bound untrusted bytes, nodes, depth, files, logs, or parser input | Record overflow/truncation evidence; configuration must not weaken the boundary |
-| Liveness and recovery | Prevent a dead child, stuck registry, or continuously replaced lock from hanging the coordinator | Keep cancellation available; allow trusted deadline overrides only where supported |
-| Semantic consistency | Encode protocol meaning such as one active phase or one exact approval | Explain the invariant rather than treating it as a workload budget |
-
-Service quotas and Codex host-action limits are host/protocol constraints. This repository cannot change them.
-
-## Current liveness rules
-
-| Operation | Rule |
+| Class | Required behavior |
 | --- | --- |
-| Deep Doctor skill probe | Fixed `60000 ms` deadline; performance target below `15000 ms` |
-| Troubleshoot workflow | No workflow deadline; cancellation and bounded process cleanup remain available |
-| Automatic update hook | Waits for active Cruise processes without an attempt ceiling; concurrent hooks coalesce behind a stale-owner-aware lock |
-| Plugin readiness | No poll-count ceiling; configurable wall-clock deadline prevents a completed Git operation from hanging forever |
+| Host or protocol | Name the external source and do not present it as Cruise authority. |
+| Safety or authority | Protect paths, secrets, permissions, or external effects and remain fail-closed where the host requires it. |
+| Resource containment | Bound untrusted bytes, structure, processes, or retained logs and define overflow behavior. |
+| Liveness and recovery | Keep cancellation available and end in pause-with-report or allow-with-report. |
+| Semantic consistency | Protect an artifact invariant such as a positive threshold, unique milestone ID, or one active sequential queue item. |
 
-## Current semantic cardinalities
+## Prohibited ceilings and state
 
-- Goal has one exact combined Plan-and-Goal approval event after its needs/autonomy envelope is resolved.
-- Build accepts either its exact digest-echoing structured selection or an immutable request-header `--auto-approve` directive bound to the later review digest.
-- There is one integration owner and one active controller phase.
-- Worker levels come from the host-advertised catalog.
-- Routing may perform one optional Terra classification retry, then records uncertainty and preserves the user-selected skill.
-- A missing Plan-only UI is not a workload limit and must not be promoted into a blocked native Goal.
-
-## Prohibited arbitrary ceilings
-
-The following histories have no universal Cruise-defined attempt maximum:
-
-| Area | Governing rule |
-| --- | --- |
-| Model and worker escalation | Reviewed workflow stops, evidence, resource policy, and strongest advertised pair |
-| Quick repair | Repair history is telemetry; evidence determines promotion, re-planning, or continuation |
-| Disjoint read-only Research | Dependencies, ownership, and actual host scheduling |
-| Capability provisioning | Optional explicit scheduler policy plus the persisted state-size boundary |
-| Structured authentication | Any explicit positive timeout or explicit `null`; finite default and cancellation remain supported |
+Cruise does not define a universal maximum for model escalation, in-scope
+repair, focused verification, or legitimate queue length. It also does not use
+an append-only retry ledger, approval digest, controller phase, or resettable
+budget. If progress exists and the host still authorizes the work, the
+supervisor resets rather than consuming a hidden allowance.
 
 ## Adding a limit
 
-A new hard limit needs a nearby comment or shared document that names:
+A new hard limit needs nearby documentation and a proving test that name:
 
 1. its allowed class;
 2. the protected resource or invariant;
-3. overflow or timeout behavior; and
-4. the proving test.
-
-Replace limits without that rationale with explicit per-task authority or remove them.
+3. overflow, timeout, or cancellation behavior; and
+4. why the behavior fails safe for host authority.

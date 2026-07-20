@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "record_type": "pair",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "claude-v301-r1",
+  "scenario_id": "claude-V301",
+  "replicate": 1,
+  "run_ids": [
+    "claude-v301-x-r1",
+    "claude-v301-y-r1"
+  ],
+  "validity": "invalid",
+  "blind_preference": "Y",
+  "blocker_comparison": {
+    "X": 1,
+    "Y": 1
+  },
+  "score_delta": -18.8,
+  "efficiency_deltas": {
+    "elapsed_seconds": 40.2,
+    "turns": -1,
+    "tool_calls": -1
+  },
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Locked before unblinding; mapping published after adjudication.",
+  "adjudication": {
+    "phase": "post-unblinding",
+    "reason": "The identical prompt forbade FLIGHT.md while the treatment skill requires it, structurally biasing the paired scope comparison."
+  },
+  "arm_key_reference": "arm-key.json"
+}

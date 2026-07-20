@@ -1,39 +1,57 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { stat, realpath } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AppServerClient } from './lib/app-server-client.mjs';
+import { runClaudeSession, runClaudeWorker } from './lib/claude-cli.mjs';
+import { readFlightPlan, writeFlightPlan } from './lib/flight-plan.mjs';
 import { writeOriginPrompt } from './lib/origin-note.mjs';
 import { pickOne } from './lib/picker.mjs';
+import { providerDefinition, resolveProvider, skillReference } from './lib/provider.mjs';
+import {
+  milestoneToFlightPlan,
+  nextReadyMilestone,
+  readQueue,
+  writeQueue,
+} from './lib/queue.mjs';
 import {
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
 } from './lib/simple-session.mjs';
 import { runSimpleWorker } from './lib/simple-worker.mjs';
 
-export const CLI_VERSION = '0.2.1';
+const require = createRequire(import.meta.url);
+const packageMetadata = require('../package.json');
+
+export const CLI_VERSION = packageMetadata.version;
 export const PUBLIC_SKILLS = Object.freeze(['build', 'quick', 'refine', 'goal', 'debug']);
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const PACKAGE_ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const SKILLS_ROOT = resolve(fileURLToPath(new URL('../skills/', import.meta.url)));
 
-const HELP = `Cruise ${CLI_VERSION} — a thin Codex task launcher
+const HELP = `Cruise ${CLI_VERSION} — a thin Codex and Claude Code task launcher
 
 Usage:
-  cruise [start] [-C <directory>] <request...>
-  cruise <build|quick|refine|goal|debug> [-C <directory>] <request...>
-  cruise worker [--level <1-7>] [-C <directory>] <task...>
-  cruise doctor [--json]
-  cruise picker-demo
+  cruise [--codex|--claude] [start] [-C <directory>] <request...>
+  cruise [--codex|--claude] <build|quick|refine|goal|debug> [-C <directory>] <request...>
+  cruise [--codex|--claude] queue <status|run> [-C <directory>]
+  cruise [--codex|--claude] worker [--level <1-7>] [-C <directory>] <task...>
+  cruise [--codex|--claude] doctor [--json]
 
-Cruise records only the exact request in .cruise/ORIGIN.md. It has no
-Cruise-owned approval authority, archive, YAML workflow, packet, report,
-digest, run directory, or retry ledger. Codex's normal approvals and native
-Goal state remain the authority for work and effects.
+Cruise records exact skill requests in .cruise/ORIGIN.md. Build may compile an
+advisory .cruise/QUEUE.md; queue run turns each ready milestone into an advisory
+.cruise/FLIGHT.md and executes it as a supervised Goal, stopping on failure.
+Codex Goal loops pause with a report after realignment and a final experiment.
+Cruise has no approval authority, archive, run-control YAML, digest, or retry
+ledger. The selected host's native permissions remain the authority for work
+and effects. Codex is the default; CRUISE_PROVIDER may set a request-scoped
+default to codex or claude.
 `;
 
 function displayError(value) {
@@ -43,18 +61,54 @@ function displayError(value) {
     .trim();
 }
 
-export function parseArgs(argv) {
-  const args = [...argv];
+function extractProviderArgs(argv, env) {
+  const args = [];
+  let selected = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--') {
+      args.push(...argv.slice(index));
+      break;
+    }
+    let candidate = null;
+    if (arg === '--codex') candidate = 'codex';
+    else if (arg === '--claude') candidate = 'claude';
+    else if (arg === '--provider') {
+      candidate = argv[++index];
+      if (!candidate) throw new Error('--provider requires codex or claude.');
+    }
+    if (candidate === null) {
+      args.push(arg);
+      continue;
+    }
+    const normalized = resolveProvider(candidate, { env: {} });
+    if (selected !== null && selected !== normalized) {
+      throw new Error('Choose only one provider: --codex or --claude.');
+    }
+    selected = normalized;
+  }
+  return { args, provider: resolveProvider(selected, { env }) };
+}
+
+export function parseArgs(argv, { env = process.env } = {}) {
+  const extracted = extractProviderArgs([...argv], env);
+  const args = extracted.args;
+  const provider = extracted.provider;
+  if (args[0] === 'picker-demo') {
+    throw new Error('picker-demo was removed; Cruise selectors are available only when the active host requests a real choice.');
+  }
   if (args[0] === 'config') {
-    throw new Error('Cruise has no persistent config command. State worker-level or communication-style preferences in the current $cruise:<skill> request.');
+    throw new Error(`Cruise has no persistent config command. State worker-level or communication-style preferences in the current ${skillReference(provider, '<skill>')} request.`);
   }
   let command = 'start';
-  if (['start', ...PUBLIC_SKILLS, 'worker', 'doctor', 'picker-demo', 'help'].includes(args[0])) {
+  if (['start', ...PUBLIC_SKILLS, 'queue', 'worker', 'doctor', 'help'].includes(args[0])) {
     command = args.shift();
   }
+  let queueAction = null;
   const options = {
     command,
     skill: PUBLIC_SKILLS.includes(command) ? command : 'goal',
+    provider,
     cwd: process.cwd(),
     json: false,
     help: false,
@@ -65,6 +119,9 @@ export function parseArgs(argv) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--') {
+      if (command === 'queue' && args.length > index + 1) {
+        throw new Error(`Unexpected queue argument: ${args[index + 1]}`);
+      }
       options.promptParts.push(...args.slice(index + 1));
       break;
     }
@@ -87,16 +144,24 @@ export function parseArgs(argv) {
       options.cwd = resolve(value);
     } else if (arg.startsWith('-')) {
       throw new Error(`${arg} is not supported by the prompt-only Cruise runtime.`);
-    } else if (command === 'doctor' || command === 'picker-demo') {
+    } else if (command === 'doctor') {
       throw new Error(`Unexpected ${command} argument: ${arg}`);
+    } else if (command === 'queue') {
+      if (queueAction !== null || !['status', 'run'].includes(arg)) {
+        throw new Error(`Unexpected queue argument: ${arg}`);
+      }
+      queueAction = arg;
     } else options.promptParts.push(arg);
   }
   if (options.json && command !== 'doctor') throw new Error('--json is supported only by cruise doctor.');
   const prompt = options.promptParts.join(' ');
-  if (!options.help && !options.version && !['doctor', 'picker-demo', 'help'].includes(command) && !prompt) {
+  if (!options.help && !options.version && command === 'queue' && queueAction === null) {
+    throw new Error('cruise queue requires status or run.');
+  }
+  if (!options.help && !options.version && !['doctor', 'help', 'queue'].includes(command) && !prompt) {
     throw new Error('Cruise requires a request.');
   }
-  return { ...options, prompt };
+  return command === 'queue' ? { ...options, queueAction, prompt } : { ...options, prompt };
 }
 
 export async function readLineOnce({ prompt, input = process.stdin, output = process.stderr }) {
@@ -118,12 +183,28 @@ async function validateWorkingDirectory(cwd) {
   return realpath(cwd);
 }
 
-export async function runStart(
+async function runHostedSession(
   options,
-  { clientFactory = (input) => new AppServerClient(input) } = {},
+  cwd,
+  {
+    clientFactory = (input) => new AppServerClient(input),
+    claudeRunner = runClaudeSession,
+    sessionFactory = (input) => new SimpleCruiseSession(input),
+  } = {},
 ) {
-  const cwd = await validateWorkingDirectory(options.cwd);
-  await writeOriginPrompt(cwd, options.prompt);
+  const provider = resolveProvider(options.provider);
+  if (provider === 'claude') {
+    const result = await claudeRunner({
+      cwd,
+      pluginRoot: PACKAGE_ROOT,
+      prompt: options.prompt,
+      skill: options.skill,
+    });
+    return {
+      status: result.status ?? (result.exitCode === 0 ? 'complete' : result.exitCode === 3 ? 'stalled' : 'failed'),
+      exitCode: result.exitCode,
+    };
+  }
   const client = clientFactory({
     spawnOptions: { cwd },
     clientInfo: { name: 'cruise', title: 'Cruise', version: CLI_VERSION },
@@ -131,7 +212,7 @@ export async function runStart(
       process.stderr.write(`Cruise warning: ${displayError(error.message)}\n`);
     },
   });
-  const session = new SimpleCruiseSession({
+  const session = sessionFactory({
     client,
     cwd,
     prompt: options.prompt,
@@ -144,18 +225,164 @@ export async function runStart(
   process.on('SIGINT', onSigint);
   try {
     const result = await session.run();
-    return result.status === 'complete' ? 0 : 2;
+    return {
+      status: result.status,
+      exitCode: result.status === 'complete' ? 0 : result.status === 'stalled' ? 3 : 2,
+    };
   } catch (error) {
-    if (error instanceof SimpleCruiseInterruptedError) return 130;
+    if (error instanceof SimpleCruiseInterruptedError) return { status: 'interrupted', exitCode: 130 };
     throw error;
   } finally {
     process.removeListener('SIGINT', onSigint);
   }
 }
 
-export async function runWorker(options, { worker = runSimpleWorker } = {}) {
+export async function runStart(options, dependencies = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
-  const result = await worker({
+  await writeOriginPrompt(cwd, options.prompt);
+  return (await runHostedSession(options, cwd, dependencies)).exitCode;
+}
+
+// Queue execution needs one ordinary supervised Goal without replacing the
+// user's original build request in ORIGIN.md.
+export async function runOneGoal(options, dependencies = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  return runHostedSession({ ...options, skill: 'goal' }, cwd, dependencies);
+}
+
+function queueSummary(queue) {
+  const counts = new Map();
+  for (const milestone of queue.milestones) {
+    counts.set(milestone.status, (counts.get(milestone.status) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([status, count]) => `${status}=${count}`).join(', ') || 'empty';
+}
+
+function writeQueueStatus(queue, output) {
+  for (const milestone of queue.milestones) {
+    output.write(`${milestone.id}\t${milestone.status}\tdepends: ${milestone.depends.join(', ') || '-'}\n`);
+  }
+  output.write(`Queue summary: ${queueSummary(queue)}\n`);
+}
+
+async function requireQueue(cwd, queueReader) {
+  const queue = await queueReader(cwd);
+  if (!queue) throw new Error(`No valid .cruise/QUEUE.md found in ${cwd}.`);
+  return queue;
+}
+
+export async function runQueueStatus(options, {
+  queueReader = readQueue,
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  writeQueueStatus(await requireQueue(cwd, queueReader), output);
+  return 0;
+}
+
+function normalizedQueueResult(result) {
+  const status = typeof result === 'string' ? result : result?.status;
+  if (status === 'complete') return { status: 'complete', reason: result?.reason ?? 'completed' };
+  if (status === 'stalled') return { status: 'stalled', reason: result?.reason ?? 'supervision stalled' };
+  if (status === 'blocked') return { status: 'blocked', reason: result?.reason ?? 'reported a blocker' };
+  return {
+    status: 'blocked',
+    reason: result?.reason ?? (status ? `session ended with ${status}` : 'session failed without a status'),
+  };
+}
+
+export async function runQueueGoal({ cwd, provider, milestone, prompt }, {
+  goalRunner = runOneGoal,
+  flightReader = readFlightPlan,
+} = {}) {
+  const result = await goalRunner({ cwd, provider, prompt });
+  if (result.status === 'stalled') return result;
+  if (result.status !== 'complete') return result;
+  const flight = await flightReader(cwd);
+  if (flight?.status === 'blocked') return { status: 'blocked', reason: 'flight plan reported a blocker' };
+  if (provider === 'claude' && flight?.status === 'active') {
+    return { status: 'stalled', reason: 'Claude stopped after bounded supervision with the flight plan still active' };
+  }
+  if (flight?.status !== 'complete') {
+    return { status: 'failed', reason: 'session ended before the flight plan recorded completion' };
+  }
+  return { status: 'complete', reason: `milestone ${milestone.id} completed` };
+}
+
+export async function runQueue(options, {
+  queueReader = readQueue,
+  queueWriter = writeQueue,
+  flightWriter = writeFlightPlan,
+  milestoneRunner = runQueueGoal,
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  for (;;) {
+    let queue = await requireQueue(cwd, queueReader);
+    const priorStop = queue.milestones.find(({ status }) => ['active', 'blocked', 'stalled'].includes(status));
+    if (priorStop) {
+      output.write(`Queue cannot advance past ${priorStop.id} (${priorStop.status}); edit the advisory queue before resuming.\n`);
+      writeQueueStatus(queue, output);
+      return priorStop.status === 'stalled' ? 3 : 2;
+    }
+
+    const pending = queue.milestones.filter(({ status }) => status === 'pending');
+    if (!pending.length) {
+      writeQueueStatus(queue, output);
+      return 0;
+    }
+
+    const milestone = nextReadyMilestone(queue, {
+      warn(message) { output.write(`Queue warning: ${message}\n`); },
+    });
+    if (!milestone) {
+      output.write('Queue has pending milestones but none have complete dependencies.\n');
+      writeQueueStatus(queue, output);
+      return 2;
+    }
+
+    milestone.status = 'active';
+    queue = await queueWriter(cwd, queue);
+    const prompt = [
+      milestone.outcome,
+      `This is queue milestone ${milestone.id}. Reconcile and execute the active plan in .cruise/FLIGHT.md, then keep its status truthful.`,
+    ].join('\n\n');
+
+    let rawResult;
+    try {
+      await flightWriter(cwd, milestoneToFlightPlan(milestone, queue.body));
+      output.write(`Running queue milestone ${milestone.id}: ${milestone.outcome}\n`);
+      rawResult = await milestoneRunner({ cwd, provider: options.provider, milestone, prompt });
+    } catch (error) {
+      rawResult = { status: 'failed', reason: displayError(error?.message) };
+    }
+    const result = normalizedQueueResult(rawResult);
+
+    // Preserve edits made in the between-milestone window before recording
+    // the just-finished milestone's terminal status.
+    queue = await requireQueue(cwd, queueReader);
+    const current = queue.milestones.find(({ id }) => id === milestone.id);
+    if (!current) throw new Error(`Queue milestone ${milestone.id} disappeared while it was running.`);
+    current.status = result.status;
+    await queueWriter(cwd, queue);
+
+    if (result.status === 'complete') {
+      output.write(`Completed queue milestone ${milestone.id}.\n`);
+      continue;
+    }
+    output.write(`Queue stopped at ${milestone.id} (${result.status}): ${result.reason}.\n`);
+    return result.status === 'stalled' ? 3 : 2;
+  }
+}
+
+export async function runWorker(options, {
+  worker = runSimpleWorker,
+  claudeWorker = runClaudeWorker,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  const provider = resolveProvider(options.provider);
+  const selectedWorker = provider === 'claude' ? claudeWorker : worker;
+  const result = await selectedWorker({
     cwd,
     task: options.prompt,
     level: options.level ?? null,
@@ -217,33 +444,36 @@ function command(command, args) {
   };
 }
 
-export function localDoctorReport(run = command) {
-  const version = run('codex', ['--version']);
+export function localDoctorReport(
+  run = command,
+  { provider = 'codex', pluginRoot = PACKAGE_ROOT } = {},
+) {
+  const definition = providerDefinition(provider);
+  const version = run(definition.command, ['--version']);
+  if (definition.id === 'claude') {
+    const plugin = run('claude', ['plugin', 'validate', pluginRoot]);
+    const checks = [
+      { id: 'claude', status: version.status === 0 ? 'pass' : 'fail', detail: version.output || version.error || 'Claude Code is unavailable' },
+      { id: 'claude-plugin', status: plugin.status === 0 ? 'pass' : 'fail', detail: plugin.status === 0 ? 'Claude plugin is valid' : plugin.error || plugin.output || 'Claude plugin validation failed' },
+    ];
+    return { provider: definition.id, ok: checks.every(({ status }) => status === 'pass'), checks };
+  }
   const appServer = run('codex', ['app-server', '--help']);
   const checks = [
     { id: 'codex', status: version.status === 0 ? 'pass' : 'fail', detail: version.output || version.error || 'Codex is unavailable' },
     { id: 'app-server', status: appServer.status === 0 ? 'pass' : 'fail', detail: appServer.status === 0 ? 'app-server is available' : appServer.error || 'app-server is unavailable' },
   ];
-  return { ok: checks.every(({ status }) => status === 'pass'), checks };
+  return { provider: definition.id, ok: checks.every(({ status }) => status === 'pass'), checks };
 }
 
-async function runDoctor({ json }) {
-  const report = localDoctorReport();
+async function runDoctor({ json, provider }) {
+  const report = localDoctorReport(command, { provider });
   if (json) process.stdout.write(`${JSON.stringify(report)}\n`);
   else {
-    for (const check of checks) process.stdout.write(`${check.status === 'pass' ? 'ok' : 'fail'}    ${check.id}: ${check.detail}\n`);
+    for (const check of report.checks) process.stdout.write(`${check.status === 'pass' ? 'ok' : 'fail'}    ${check.id}: ${check.detail}\n`);
     process.stdout.write(report.ok ? 'Cruise is ready.\n' : 'Cruise doctor found local issues.\n');
   }
   return report.ok ? 0 : 1;
-}
-
-async function runPickerDemo() {
-  const result = await pickOne({
-    title: 'Cruise picker demo',
-    options: ['Continue', 'Stop'],
-  });
-  process.stdout.write(result.status === 'selected' ? `${result.label}\n` : 'Cancelled\n');
-  return result.status === 'selected' ? 0 : 130;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -265,7 +495,9 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     if (options.command === 'doctor') return await runDoctor(options);
     if (options.command === 'worker') return await runWorker(options);
-    if (options.command === 'picker-demo') return await runPickerDemo();
+    if (options.command === 'queue') {
+      return options.queueAction === 'status' ? await runQueueStatus(options) : await runQueue(options);
+    }
     return await runStart(options);
   } catch (error) {
     process.stderr.write(`cruise: ${displayError(error.message)}\n`);

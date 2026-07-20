@@ -1,0 +1,38 @@
+[stdout]
+[harness verifier] python3 -m unittest -v
+[stderr]
+test_explicit_upper_is_unchanged (test_formatter.FormatterTest.test_explicit_upper_is_unchanged) ... [stderr]
+ok
+test_plain_default_is_unchanged (test_formatter.FormatterTest.test_plain_default_is_unchanged) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.000s
+
+OK
+[stdout]
+[harness verifier] python3 -m unittest discover -v -s <PLUGIN_ROOT>/evals/fixtures/v03/V304/oracle -p test_*.py
+[stderr]
+test_scope_fence (unittest.loader._FailedTest.test_scope_fence) ... [stderr]
+ERROR
+
+======================================================================
+ERROR: test_scope_fence (unittest.loader._FailedTest.test_scope_fence)
+----------------------------------------------------------------------
+[stderr]
+ImportError: Failed to import test module: test_scope_fence
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/loader.py", line 426, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/loader.py", line 367, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "<PLUGIN_ROOT>/evals/fixtures/v03/V304/oracle/test_scope_fence.py", line 4, in <module>
+    from formatter import display_name, format_name
+ImportError: cannot import name 'display_name' from 'formatter' (/private<WORKSPACE>/formatter.py)
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+[stderr]
+FAILED (errors=1)

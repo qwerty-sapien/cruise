@@ -1,0 +1,54 @@
+diff --git a/test_text_tools.py b/test_text_tools.py
+index 2d3aa24..4489371 100644
+--- a/test_text_tools.py
++++ b/test_text_tools.py
+@@ -10,6 +10,23 @@ class TextToolsTest(unittest.TestCase):
+     def test_tag_key_preserves_public_shape(self):
+         self.assertEqual(tag_key("  Hello   WORLD  "), "hello_world")
+ 
++    def test_slugify_handles_mixed_unicode_whitespace(self):
++        #   (nbsp),   (em space), 　 (ideographic space), \t, \n
++        value = " Hello WORLD　Foo\tBar\n"
++        self.assertEqual(slugify(value), "hello-world-foo-bar")
++
++    def test_tag_key_handles_mixed_unicode_whitespace(self):
++        value = " Hello WORLD　Foo\tBar\n"
++        self.assertEqual(tag_key(value), "hello_world_foo_bar")
++
++    def test_slugify_handles_unicode_casing(self):
++        # German sharp s (ß) casefolds to "ss"; Turkish İ folds via NFKC+casefold
++        self.assertEqual(slugify("STRASSE Straße"), "strasse-strasse")
++        self.assertEqual(slugify("İstanbul"), "i̇stanbul")
++
++    def test_tag_key_handles_unicode_casing(self):
++        self.assertEqual(tag_key("STRASSE Straße"), "strasse_strasse")
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/text_tools.py b/text_tools.py
+index 0e7a841..56b2bd5 100644
+--- a/text_tools.py
++++ b/text_tools.py
+@@ -1,11 +1,19 @@
+ """Small public text helpers."""
+ 
++import unicodedata
++
++
++def _normalize_words(value: str) -> list[str]:
++    """Casefold and split into words, Unicode whitespace aware."""
++    normalized = unicodedata.normalize("NFKC", value)
++    return normalized.casefold().split()
++
+ 
+ def slugify(value: str) -> str:
+     """Return a lowercase, hyphen-separated slug."""
+-    return "-".join(value.strip().lower().split())
++    return "-".join(_normalize_words(value))
+ 
+ 
+ def tag_key(value: str) -> str:
+     """Return a lowercase, underscore-separated tag key."""
+-    return "_".join(value.strip().lower().split())
++    return "_".join(_normalize_words(value))

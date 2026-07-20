@@ -137,12 +137,16 @@ test('Goal auto-advances each completed active turn until native completion', as
   );
   const continuation = client.calls.find(({ method }) => method === 'turn/start').params.input;
   const objective = client.calls.find(({ method }) => method === 'thread/goal/set').params.objective;
+  const developerInstructions = client.calls.find(({ method }) => method === 'thread/start').params.developerInstructions;
+  assert.match(developerInstructions, /Goal work may also maintain.*\.cruise\/FLIGHT\.md/u);
   assert.match(objective, /sole read-only Plan-mode bootstrap/u);
+  assert.match(objective, /\.cruise\/FLIGHT\.md/u);
   assert.match(objective, /implement, verify, realign, and continue/u);
   assert.equal(continuation.some((item) => item.type === 'skill'), false);
   assert.match(continuation[0].text, /next ready micro-goal/u);
   assert.match(continuation[0].text, /immediately implement/u);
   assert.match(continuation[0].text, /independent breakage probes/u);
+  assert.match(continuation[0].text, /flight plan/u);
   const [planSettings, executionSettings] = client.calls
     .filter(({ method }) => method === 'thread/settings/update')
     .map(({ params }) => params);
@@ -153,6 +157,117 @@ test('Goal auto-advances each completed active turn until native completion', as
   assert.equal(executionSettings.sandboxPolicy.type, 'workspaceWrite');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.collaborationMode.mode, 'default');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.sandboxPolicy.type, 'workspaceWrite');
+});
+
+test('Goal supervision realigns, runs one final experiment, then pauses with a report', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-stalled-goal-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class StalledGoalClient extends EventEmitter {
+    constructor({ pauseFails = false } = {}) {
+      super();
+      this.calls = [];
+      this.goal = null;
+      this.turns = 0;
+      this.pauseFails = pauseFails;
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      this.calls.push({ method, params });
+      if (method === 'thread/start') return { thread: { id: 'thread-stalled' } };
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: this.goal };
+      if (method === 'thread/goal/set') {
+        if (params.status === 'paused' && this.pauseFails) throw new Error('pause transport unavailable');
+        this.goal = { objective: params.objective, status: params.status };
+        if (params.status === 'active') {
+          queueMicrotask(() => {
+            this.emit('notification', {
+              method: 'turn/started',
+              params: { threadId: 'thread-stalled', turn: { id: 'native-plan', status: 'inProgress' } },
+            });
+            this.emit('notification', {
+              method: 'turn/completed',
+              params: { threadId: 'thread-stalled', turn: { id: 'native-plan', status: 'completed' } },
+            });
+          });
+        }
+        return { goal: this.goal };
+      }
+      if (method === 'turn/start') {
+        this.turns += 1;
+        const id = `stalled-turn-${this.turns}`;
+        queueMicrotask(() => {
+          this.emit('notification', {
+            method: 'item/agentMessage/delta',
+            params: { threadId: 'thread-stalled', delta: 'Still investigating without new evidence.\n' },
+          });
+          this.emit('notification', {
+            method: 'turn/completed',
+            params: { threadId: 'thread-stalled', turn: { id, status: 'completed' } },
+          });
+        });
+        return { turn: { id } };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const client = new StalledGoalClient();
+  let report = '';
+  const session = new SimpleCruiseSession({
+    client,
+    cwd: root,
+    prompt: 'Complete the work without looping.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write() {} },
+    errorOutput: { write(value) { report += value; } },
+    captureFingerprint: async () => 'fixed-fingerprint',
+    readPlan: async () => ({ stall: { quietTurns: 1, sameFailure: 9 } }),
+  });
+  const result = await session.run();
+
+  assert.equal(result.status, 'stalled');
+  assert.equal(result.goal.status, 'paused');
+  const instructions = client.calls
+    .filter(({ method }) => method === 'turn/start')
+    .map(({ params }) => params.input[0].text);
+  assert.equal(instructions.length, 4);
+  assert.match(instructions[2], /Repeating the same approach is not authorized progress/u);
+  assert.match(instructions[2], /workspace fingerprint fixed-finger was unchanged/u);
+  assert.match(instructions[3], /last supervised continuation/u);
+  assert.deepEqual(client.calls
+    .filter(({ method }) => method === 'thread/goal/set')
+    .map(({ params }) => params.status), ['active', 'paused']);
+  assert.match(report, /stalled after 4 supervised continuation turns/u);
+  assert.match(report, /Interventions already attempted/u);
+  assert.match(report, /native Goal is paused/u);
+  assert.match(report, /Suggested next actions/u);
+
+  const pauseFailureClient = new StalledGoalClient({ pauseFails: true });
+  let pauseFailureReport = '';
+  const pauseFailureResult = await new SimpleCruiseSession({
+    client: pauseFailureClient,
+    cwd: root,
+    prompt: 'Complete the work without looping.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write() {} },
+    errorOutput: { write(value) { pauseFailureReport += value; } },
+    captureFingerprint: async () => 'fixed-fingerprint',
+    readPlan: async () => ({ stall: { quietTurns: 1, sameFailure: 9 } }),
+  }).run();
+  assert.equal(pauseFailureResult.status, 'stalled');
+  assert.equal(pauseFailureResult.goal.status, 'active');
+  assert.match(pauseFailureReport, /pause could not be confirmed: pause transport unavailable/u);
+  assert.match(pauseFailureReport, /Suggested next actions/u);
 });
 
 test('interrupting an activation pauses a Goal that became active in flight', async (t) => {

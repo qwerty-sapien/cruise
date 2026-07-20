@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "study_id": "goal-v03-2026-07-21",
+  "generated_at": "2026-07-21T08:13:08.935Z",
+  "runs": [
+    {
+      "run_id": "codex-v301-x-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V301",
+      "blind_arm": "X",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "codex-v301-y-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V301",
+      "blind_arm": "Y",
+      "timed_out": true,
+      "exit_code": null,
+      "verifier_exit_code": 1
+    },
+    {
+      "run_id": "codex-v302-x-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V302",
+      "blind_arm": "X",
+      "timed_out": true,
+      "exit_code": null,
+      "verifier_exit_code": 1
+    },
+    {
+      "run_id": "codex-v302-y-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V302",
+      "blind_arm": "Y",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "codex-v303-x-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V303",
+      "blind_arm": "X",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 23
+    },
+    {
+      "run_id": "codex-v303-y-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V303",
+      "blind_arm": "Y",
+      "timed_out": true,
+      "exit_code": null,
+      "verifier_exit_code": 23
+    },
+    {
+      "run_id": "codex-v304-x-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V304",
+      "blind_arm": "X",
+      "timed_out": true,
+      "exit_code": null,
+      "verifier_exit_code": 1
+    },
+    {
+      "run_id": "codex-v304-y-r1",
+      "provider": "codex",
+      "scenario_id": "codex-V304",
+      "blind_arm": "Y",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "claude-v301-x-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V301",
+      "blind_arm": "X",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 1
+    },
+    {
+      "run_id": "claude-v301-y-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V301",
+      "blind_arm": "Y",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "claude-v302-x-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V302",
+      "blind_arm": "X",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "claude-v302-y-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V302",
+      "blind_arm": "Y",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "claude-v303-x-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V303",
+      "blind_arm": "X",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 23
+    },
+    {
+      "run_id": "claude-v303-y-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V303",
+      "blind_arm": "Y",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 23
+    },
+    {
+      "run_id": "claude-v304-x-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V304",
+      "blind_arm": "X",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    },
+    {
+      "run_id": "claude-v304-y-r1",
+      "provider": "claude",
+      "scenario_id": "claude-V304",
+      "blind_arm": "Y",
+      "timed_out": false,
+      "exit_code": 0,
+      "verifier_exit_code": 0
+    }
+  ]
+}

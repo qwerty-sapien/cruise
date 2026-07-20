@@ -1,5 +1,12 @@
 import { EventEmitter } from 'node:events';
 
+import { DEFAULT_STALL, readFlightPlan } from './flight-plan.mjs';
+import {
+  captureWorkspaceFingerprint,
+  extractFailureSignature,
+  GoalSupervisor,
+} from './supervisor.mjs';
+
 const TERMINAL_GOAL_STATUSES = new Set([
   'paused',
   'blocked',
@@ -18,27 +25,62 @@ const MATERIAL_GOAL_DECISION = /\b(?:not\s+requested|out(?:side)?\s+(?:the\s+)?s
 
 const AUTONOMOUS_GOAL_INSTRUCTIONS = [
   'The user explicitly invoked Cruise Goal, which authorizes autonomous end-to-end progress within the normal Codex workspace and permission boundaries.',
-  'Use the first read-only Plan turn only to inspect the repository and form a codebase-aware, strongly aligned plan for the first ready micro-goal. Unless the user explicitly requested planning or research only, that plan is not an endpoint: the following native Goal turn must immediately implement it.',
-  'For every micro-goal, reconcile the requested outcome and current repository evidence; make a compact plan for the next ready slice; implement it; run focused verification; remediate in-scope failures; recheck alignment and regression risk; then immediately execute the next ready micro-goal.',
+  'Use the first read-only Plan turn only to inspect the repository, resolve the outcome, touchpoints, non-goals, invariants, acceptance commands, and stall tuning, and form a strongly aligned plan for the first ready micro-goal. Unless the user explicitly requested planning or research only, that plan is not an endpoint: the following native Goal turn must immediately implement it and write the advisory .cruise/FLIGHT.md as its first execution act.',
+  'For every micro-goal, reread and reconcile the user-editable flight plan with the requested outcome and current repository evidence; realign before work outside its touchpoints or inside its non-goals; re-verify affected invariants; make a compact plan for the next ready slice; implement it; run focused verification; remediate in-scope failures; recheck alignment and regression risk; then immediately execute the next ready micro-goal.',
   'When changed behavior has meaningful concurrency, lifecycle, migration, public-contract, security, integration, or edge-case risk, use available independent reviewers or a bounded agent swarm to try to break it. Give them non-overlapping probes, reproduce credible findings, and refine before advancing. Skip this for simple low-risk work and never claim independent coverage that did not run.',
   'Do not ask the user to approve a phase, checkpoint, plan handoff, or ordinary next step. Ask only for a material product decision that repository evidence cannot resolve, a scope or safety expansion, authentication or secret entry, or a host-required external or destructive approval.',
   'Do not mark the Goal paused or blocked merely because a phase ended or because a fresh continuation is needed. Cruise starts another turn automatically while the Goal remains active.',
-  'Keep the native Goal active until every requested acceptance and verification criterion passes. Then mark it complete. Mark it blocked only for a concrete unresolved blocker and state the evidence needed to resume.',
+  'Keep the native Goal active until every requested acceptance and verification criterion passes, then set the flight plan and Goal to complete. Set both to blocked only for a concrete unresolved blocker, stating the blocker and evidence needed to resume in the flight-plan body. The flight plan grants and gates nothing; native permissions remain authoritative.',
 ].join(' ');
 
 const GOAL_BOOTSTRAP_INSTRUCTIONS = [
   'Begin with this sole read-only Plan-mode bootstrap, not a plan-only handoff.',
-  'Inspect the codebase and state a compact plan for the first ready, in-scope micro-goal.',
+  'Inspect the codebase, resolve the advisory flight plan fields, and state a compact plan for the first ready, in-scope micro-goal. This turn cannot write .cruise/FLIGHT.md.',
   'Do not implement in this Plan turn. Unless the request explicitly limits work to planning or research, switch to Default mode immediately afterward and implement and verify this micro-goal.',
 ].join(' ');
 
 const GOAL_CONTINUATION_INSTRUCTIONS = [
   'Continue the active Cruise Goal now; this is execution, not a request for a new plan review.',
-  'Reconcile the requested outcome, current repository evidence, completed work, and remaining acceptance criteria.',
+  'Write .cruise/FLIGHT.md first if execution has not created it yet, then reread and reconcile its user-editable outcome, scope fence, invariants, acceptance commands, and stall tuning with current repository evidence, completed work, and remaining criteria.',
   'Draft only a compact, codebase-aware plan for the next ready micro-goal, then immediately implement it and run focused verification.',
-  'Remediate in-scope failures, recheck alignment and regression risk, use bounded independent breakage probes when the change warrants them, and continue until the Goal is truthfully complete or a concrete material blocker requires the user.',
+  'Remediate in-scope failures, recheck alignment and regression risk, use bounded independent breakage probes when the change warrants them, and continue until the flight plan and Goal are truthfully complete or both report a concrete material blocker.',
   'Routine micro-goal progression is already authorized; do not ask the user for a phase or plan approval.',
 ].join(' ');
+
+const MAX_TURN_AGENT_TEXT = 64 * 1024;
+
+function realignmentInstructions(reason) {
+  return [
+    `Cruise supervision observed: ${reason}.`,
+    'Repeating the same approach is not authorized progress.',
+    'Change approach now: run the smallest discriminating experiment that produces new workspace evidence, or set the Goal to blocked and state the concrete blocker and evidence needed to resume.',
+  ].join(' ');
+}
+
+function finalExperimentInstructions(reason) {
+  return [
+    `Cruise supervision still observes no progress after realignment: ${reason}.`,
+    'Produce new workspace evidence this turn or set the Goal to blocked yourself with a concrete blocker report.',
+    'This is the last supervised continuation before Cruise pauses the Goal with a stall report.',
+  ].join(' ');
+}
+
+function stallReport(verdict, summary, { pauseError = null } = {}) {
+  const fingerprints = summary.fingerprints.length ? summary.fingerprints.join(', ') : 'unavailable';
+  const signatures = summary.failureSignatures.length ? summary.failureSignatures.join(', ') : 'none';
+  const interventions = summary.interventions.map(({ level, reason }) => `${level}: ${reason}`).join('\n  - ');
+  return [
+    `Cruise Goal stalled after ${summary.turnsObserved} supervised continuation turns.`,
+    `Observed: ${verdict.reason}.`,
+    `Workspace fingerprints involved: ${fingerprints}.`,
+    `Failure signatures involved: ${signatures}.`,
+    `Interventions already attempted:\n  - ${interventions || 'realignment and final experiment'}`,
+    pauseError
+      ? `The native Goal pause could not be confirmed: ${String(pauseError.message ?? pauseError).replace(/\s+/gu, ' ').trim()}. No work was silently killed.`
+      : 'The native Goal is paused; no work was silently killed.',
+    'Suggested next actions: inspect the last failure and diff, edit .cruise/FLIGHT.md stall tuning if warranted, provide missing evidence or a material decision, then resume the Goal.',
+  ].join('\n');
+}
 
 
 function deferred() {
@@ -195,6 +237,9 @@ export class SimpleCruiseSession extends EventEmitter {
     input = process.stdin,
     output = process.stdout,
     errorOutput = process.stderr,
+    supervisor = new GoalSupervisor(),
+    captureFingerprint = captureWorkspaceFingerprint,
+    readPlan = readFlightPlan,
   }) {
     super();
     if (!client || !cwd || !prompt || !skill || !skillPath) {
@@ -212,6 +257,10 @@ export class SimpleCruiseSession extends EventEmitter {
     this.input = input;
     this.output = output;
     this.errorOutput = errorOutput;
+    this.supervisor = supervisor;
+    this.captureFingerprint = captureFingerprint;
+    this.readPlan = readPlan;
+    this.turnAgentText = '';
     this.threadId = null;
     this.threadModel = null;
     this.threadReasoningEffort = null;
@@ -242,8 +291,8 @@ export class SimpleCruiseSession extends EventEmitter {
         ephemeral: false,
         developerInstructions: [
           'Work directly with the user request and the repository.',
-          'Cruise keeps only .cruise/ORIGIN.md as a verbatim note of the request.',
-          'Do not create Cruise run-control files, approval digests, archives, or YAML workflow artifacts.',
+          'Cruise keeps .cruise/ORIGIN.md as a verbatim request note; Goal work may also maintain the user-editable advisory .cruise/FLIGHT.md.',
+          'Do not create Cruise run-control files, approval digests, archives, or YAML workflow state. FLIGHT.md frontmatter is an advisory note, not workflow authority.',
           'Use normal Codex approvals and report failures factually.',
           ...(this.skill === 'goal' ? [AUTONOMOUS_GOAL_INSTRUCTIONS] : []),
         ].join(' '),
@@ -254,6 +303,7 @@ export class SimpleCruiseSession extends EventEmitter {
 
       let result;
       let goalExecutionMode = false;
+      let continuationCompleted = false;
       if (this.skill === 'goal') {
         await this.updateGoalMode('plan');
         const nativeTurn = this.waitForNativeGoalTurn();
@@ -296,6 +346,27 @@ export class SimpleCruiseSession extends EventEmitter {
             goal: completed,
           };
         }
+        let continuationInstructions = GOAL_CONTINUATION_INSTRUCTIONS;
+        if (continuationCompleted) {
+          const verdict = await this.superviseGoalTurn();
+          if (verdict.level === 'stall') {
+            let pauseError = null;
+            try {
+              await this.pauseActiveGoal();
+            } catch (error) {
+              pauseError = error;
+            }
+            this.errorOutput.write(`${stallReport(verdict, this.supervisor.summary(), { pauseError })}\n`);
+            return {
+              status: 'stalled',
+              skill: this.skill,
+              threadId: this.threadId,
+              goal: this.goal,
+            };
+          }
+          if (verdict.level === 'realign') continuationInstructions = realignmentInstructions(verdict.reason);
+          else if (verdict.level === 'final-experiment') continuationInstructions = finalExperimentInstructions(verdict.reason);
+        }
         if (!goalExecutionMode) {
           await this.updateGoalMode('default');
           goalExecutionMode = true;
@@ -303,10 +374,11 @@ export class SimpleCruiseSession extends EventEmitter {
         result = await this.startTurn([
           {
             type: 'text',
-            text: GOAL_CONTINUATION_INSTRUCTIONS,
+            text: continuationInstructions,
             text_elements: [],
           },
         ], { mode: 'default' });
+        continuationCompleted = true;
       }
       await this.interactions;
       if (result.status !== 'completed') {
@@ -398,6 +470,7 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   async startTurn(input, { mode = null } = {}) {
+    this.turnAgentText = '';
     const completion = deferred();
     this.turnId = null;
     this.pending = completion;
@@ -488,6 +561,18 @@ export class SimpleCruiseSession extends EventEmitter {
     this.goal = paused?.goal ?? { ...current, status: 'paused' };
   }
 
+  async superviseGoalTurn() {
+    const [plan, fingerprint] = await Promise.all([
+      Promise.resolve().then(() => this.readPlan(this.cwd)).catch(() => null),
+      Promise.resolve().then(() => this.captureFingerprint(this.cwd)).catch(() => null),
+    ]);
+    this.supervisor.updateStall(plan?.stall ?? DEFAULT_STALL);
+    return this.supervisor.recordTurn({
+      fingerprint,
+      failureSignature: extractFailureSignature(this.turnAgentText),
+    });
+  }
+
   enqueueRequest(message) {
     this.interactions = this.interactions
       .then(() => this.handleRequest(message))
@@ -535,7 +620,11 @@ export class SimpleCruiseSession extends EventEmitter {
     const params = message.params ?? {};
     if (params.threadId && this.threadId && params.threadId !== this.threadId) return;
     if (message.method === 'item/agentMessage/delta') {
-      this.output.write(String(params.delta ?? ''));
+      const delta = String(params.delta ?? '');
+      this.output.write(delta);
+      if (this.skill === 'goal' && this.turnAgentText.length < MAX_TURN_AGENT_TEXT) {
+        this.turnAgentText += delta.slice(0, MAX_TURN_AGENT_TEXT - this.turnAgentText.length);
+      }
     } else if (message.method === 'turn/started') {
       if (this.pending && this.turnId === null && params.turn?.id) {
         this.turnId = params.turn.id;

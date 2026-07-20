@@ -1,0 +1,17 @@
+schema_version: 1
+case_id: V301
+copy_root: "repo"
+copy_policy: "Copy only repo/ into a fresh initialized Git repository; keep this spec and oracle outside the agent workspace."
+baseline_checks:
+  - command: "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v"
+    expected: "exit 0; two legacy public-shape tests pass"
+final_checks:
+  - command: "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v"
+    expected: "exit 0"
+  - command: "PYTHONPATH=$PWD PYTHONDONTWRITEBYTECODE=1 python3 {fixture_root}/oracle/test_unicode_normalization.py -v"
+    expected: "exit 0; Unicode casefold and whitespace oracle passes"
+forbidden_effects:
+  - "network"
+  - "dependency install"
+  - "git commit"
+  - "files outside text_tools.py and test_text_tools.py"

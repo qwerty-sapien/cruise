@@ -1,0 +1,29 @@
+[stdout]
+[harness verifier] python3 -m unittest -v
+[stderr]
+test_empty_string (test_formatter.DisplayNameTest.test_empty_string) ... [stderr]
+ok
+test_single_word (test_formatter.DisplayNameTest.test_single_word) ... ok
+test_title_cases_lowercase_input (test_formatter.DisplayNameTest.test_title_cases_lowercase_input) ... ok
+test_title_cases_uppercase_input (test_formatter.DisplayNameTest.test_title_cases_uppercase_input) ... ok
+test_trims_and_collapses_whitespace (test_formatter.DisplayNameTest.test_trims_and_collapses_whitespace) ... ok
+test_explicit_upper_is_unchanged (test_formatter.FormatterTest.test_explicit_upper_is_unchanged) ... ok
+test_plain_default_is_unchanged (test_formatter.FormatterTest.test_plain_default_is_unchanged) ... ok
+[stderr]
+
+[stderr]
+----------------------------------------------------------------------
+Ran 7 tests in 0.000s
+
+[stderr]
+OK
+[stdout]
+[harness verifier] python3 -m unittest discover -v -s <PLUGIN_ROOT>/evals/fixtures/v03/V304/oracle -p test_*.py
+[stderr]
+test_new_behavior_is_local_and_old_behavior_survives (test_scope_fence.ScopeFenceOracle.test_new_behavior_is_local_and_old_behavior_survives) ... [stderr]
+ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK

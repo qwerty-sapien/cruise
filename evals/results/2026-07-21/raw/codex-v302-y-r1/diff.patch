@@ -1,0 +1,131 @@
+diff --git a/README.md b/README.md
+index 4e44323..4c24e3b 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,5 @@
+ # Settings migration fixture
+ 
+-Version 1 stores `theme` at the root. Version 2 stores preferences under a
+-`preferences` envelope. Verify with `python3 -m unittest -v`.
++Version 1 stores `theme` at the root. Version 2 stores `theme` and `language`
++under a `preferences` envelope. Loading version 1 migrates it to version 2 and
++defaults `language` to `en`. Verify with `python3 -m unittest -v`.
+diff --git a/settings_store.py b/settings_store.py
+index fe78194..bb111f7 100644
+--- a/settings_store.py
++++ b/settings_store.py
+@@ -6,13 +6,24 @@ import json
+ def load_settings(path):
+     data = json.loads(path.read_text(encoding="utf-8"))
+     if data.get("version") == 2:
+-        return dict(data["preferences"])
+-    return {"theme": data.get("theme", "light")}
++        settings = dict(data["preferences"])
++        settings.setdefault("language", "en")
++        return settings
++
++    settings = {
++        "theme": data.get("theme", "light"),
++        "language": "en",
++    }
++    save_settings(path, settings)
++    return settings
+ 
+ 
+ def save_settings(path, settings):
+     payload = {
+         "version": 2,
+-        "preferences": {"theme": settings.get("theme", "light")},
++        "preferences": {
++            "theme": settings.get("theme", "light"),
++            "language": settings.get("language", "en"),
++        },
+     }
+     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+diff --git a/test_settings_store.py b/test_settings_store.py
+index 76d759f..c609321 100644
+--- a/test_settings_store.py
++++ b/test_settings_store.py
+@@ -7,22 +7,75 @@ from settings_store import load_settings, save_settings
+ 
+ 
+ class SettingsStoreTest(unittest.TestCase):
+-    def test_loads_legacy_theme(self):
++    def test_migrates_legacy_theme_with_default_language(self):
+         with tempfile.TemporaryDirectory() as directory:
+             path = Path(directory) / "settings.json"
+             path.write_text('{"theme":"dark"}', encoding="utf-8")
+-            self.assertEqual(load_settings(path), {"theme": "dark"})
++            self.assertEqual(load_settings(path), {
++                "language": "en",
++                "theme": "dark",
++            })
++            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {
++                "preferences": {
++                    "language": "en",
++                    "theme": "dark",
++                },
++                "version": 2,
++            })
+ 
+-    def test_round_trips_version_two_theme(self):
++    def test_migrates_explicit_version_one(self):
+         with tempfile.TemporaryDirectory() as directory:
+             path = Path(directory) / "settings.json"
+-            save_settings(path, {"theme": "dark"})
+-            self.assertEqual(load_settings(path), {"theme": "dark"})
+-            self.assertEqual(json.loads(path.read_text()), {
+-                "preferences": {"theme": "dark"},
++            path.write_text(
++                '{"theme":"dark","version":1}',
++                encoding="utf-8",
++            )
++            load_settings(path)
++            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {
++                "preferences": {
++                    "language": "en",
++                    "theme": "dark",
++                },
+                 "version": 2,
+             })
+ 
++    def test_round_trips_version_two_preferences(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            settings = {"language": "fr", "theme": "dark"}
++            save_settings(path, settings)
++            self.assertEqual(load_settings(path), settings)
++            self.assertEqual(
++                path.read_text(encoding="utf-8"),
++                '{"preferences": {"language": "fr", "theme": "dark"}, '
++                '"version": 2}\n',
++            )
++
++    def test_loads_existing_version_two_without_language(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            path.write_text(
++                '{"preferences":{"theme":"dark"},"version":2}',
++                encoding="utf-8",
++            )
++            self.assertEqual(load_settings(path), {
++                "language": "en",
++                "theme": "dark",
++            })
++
++    def test_saves_defaults_deterministically(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "settings.json"
++            save_settings(path, {})
++            first_save = path.read_bytes()
++            save_settings(path, {})
++            self.assertEqual(path.read_bytes(), first_save)
++            self.assertEqual(
++                first_save,
++                b'{"preferences": {"language": "en", "theme": "light"}, '
++                b'"version": 2}\n',
++            )
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

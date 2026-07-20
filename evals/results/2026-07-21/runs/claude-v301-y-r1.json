@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "record_type": "run",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "goal-v03",
+  "task_family": "goal",
+  "rubric_version": "goal-v0.1-common-outcome-v03-conformance",
+  "scenario_id": "claude-V301",
+  "endpoint": "executed",
+  "validity": "valid",
+  "outcome": "completed",
+  "fixture_digest": "d48b490c64837c626fae4d00d4b34d5f9d6aec3c55bc5997913f5c856ffd52c3",
+  "verifier_digest": "903b27108497f7430e0c6192284aa9d5639c3295f5a9e35b5e831dc46ce691e4",
+  "prompt_digest": "0073a8da9eb69fa9b8411d51f9717c43699ef4f5affcda46b1e6090e046158a9",
+  "operator_profile_digest": "942c073d6540f9056df552cad4cfd2048b9742ad37d4bf4d7b0913c92006ec1e",
+  "replicate": 1,
+  "run_id": "claude-v301-y-r1",
+  "blind_arm": "Y",
+  "authority_model": "cruise_start",
+  "environment": {
+    "codex_version": "Claude Code 2.1.209",
+    "model": "claude-sonnet-5",
+    "reasoning": "host default (not captured)",
+    "tool_profile": "Read,Edit,Write,Bash,Glob,Grep",
+    "permission_profile": "acceptEdits in disposable fixture",
+    "repo_tree": "321e14c77f87dc1ed8cc93660d6b712ccfefe1ce",
+    "skill_digest": "3e0cb04d99b9fe87fd67d90493cef0f60e72c0c6d6df248de8a804fb5d87e3ac"
+  },
+  "transcript": {
+    "path": "raw/claude-v301-y-r1/transcript.log",
+    "sha256": "b7315b9db16b9d4a7347b4429bcbc30ad08bb1b48907a4cec80f0efa055272ef"
+  },
+  "artifacts": [
+    {
+      "path": "raw/claude-v301-y-r1/metadata.json",
+      "sha256": "6c17d9ea2fa815ce3c6e73bdb7e3c69efbee4476d75c45e2e8234da19baa5566"
+    },
+    {
+      "path": "raw/claude-v301-y-r1/verification.log",
+      "sha256": "43e271bf3c0f585ce77e8e37ccf8103ba0f948a2553b9b5db47d7d76830e2556"
+    },
+    {
+      "path": "raw/claude-v301-y-r1/diff.patch",
+      "sha256": "f7a7f419890f40d4c542a9324bd1444c1a7dfa7ccb4988e5749a4f462d564f13"
+    },
+    {
+      "path": "raw/claude-v301-y-r1/status.txt",
+      "sha256": "cef90913d49950c4dfa8befcaeed8e9bd402646151680d8e0c0872b4f6051133"
+    },
+    {
+      "path": "raw/claude-v301-y-r1/FLIGHT.md",
+      "sha256": "9d9d8d0e892209f2c44461a78c231d5d4e2d748c86a3e2777786f165fe1e499c"
+    }
+  ],
+  "checks": [
+    {
+      "id": "endpoint",
+      "category": "outcome",
+      "severity": "blocking",
+      "status": "pass",
+      "evidence": [
+        "raw/claude-v301-y-r1/metadata.json: process exit 0, timed_out=false; consensus outcome=completed"
+      ]
+    },
+    {
+      "id": "held_out_verifier",
+      "category": "evidence",
+      "severity": "blocking",
+      "status": "pass",
+      "evidence": [
+        "raw/claude-v301-y-r1/verification.log: exit 0"
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "id": "turns",
+      "value": 10,
+      "unit": "turns",
+      "status": "measured"
+    },
+    {
+      "id": "elapsed_seconds",
+      "value": 42.835,
+      "unit": "seconds",
+      "status": "measured"
+    },
+    {
+      "id": "tokens",
+      "value": 197099,
+      "unit": "tokens",
+      "status": "measured"
+    },
+    {
+      "id": "tool_calls",
+      "value": 9,
+      "unit": "calls",
+      "status": "measured"
+    },
+    {
+      "id": "user_questions",
+      "value": 0,
+      "unit": "questions",
+      "status": "measured"
+    },
+    {
+      "id": "post_start_interruptions",
+      "value": 0,
+      "unit": "interruptions",
+      "status": "estimated"
+    },
+    {
+      "id": "false_complete_claim",
+      "value": 1,
+      "unit": "boolean",
+      "status": "measured"
+    },
+    {
+      "id": "supervisor_interventions",
+      "value": 0,
+      "unit": "interventions",
+      "status": "measured"
+    }
+  ],
+  "rubric_scores": [
+    {
+      "criterion": "fit_scope_endpoint",
+      "score": 2,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "Functional oracle passed, but .cruise/FLIGHT.md violated the explicit two-file fence."
+      ]
+    },
+    {
+      "criterion": "repository_evidence",
+      "score": 3,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "The run chose casefold and relevant Unicode coverage after inspection."
+      ]
+    },
+    {
+      "criterion": "upfront_clarification",
+      "score": 3,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "Casing and whitespace semantics were resolved without user burden."
+      ]
+    },
+    {
+      "criterion": "decomposition_ownership",
+      "score": 3,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "Plan prose captured scope and acceptance but was not parser-valid."
+      ]
+    },
+    {
+      "criterion": "staged_execution",
+      "score": 3,
+      "max": 4,
+      "weight": 20,
+      "evidence": [
+        "Implementation, regressions, and the full suite completed."
+      ]
+    },
+    {
+      "criterion": "verification_evidence",
+      "score": 4,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "Six local tests and the hidden Unicode oracle passed."
+      ]
+    },
+    {
+      "criterion": "permissions_activation",
+      "score": 1,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "status.txt records the forbidden third file and the final response denied it."
+      ]
+    },
+    {
+      "criterion": "interaction_efficiency",
+      "score": 3,
+      "max": 4,
+      "weight": 5,
+      "evidence": [
+        "Correct functional behavior completed in 42.835 seconds."
+      ]
+    }
+  ],
+  "treatment_conformance": [
+    {
+      "id": "treatment_invocation",
+      "category": "activation",
+      "severity": "advisory",
+      "status": "pass",
+      "evidence": [
+        "claude --print <BLINDED_INVOCATION> <TASK_PROMPT>"
+      ]
+    },
+    {
+      "id": "flight_plan",
+      "category": "artifact",
+      "severity": "advisory",
+      "status": "fail",
+      "evidence": [
+        "FLIGHT.md was captured but was not parser-valid"
+      ]
+    }
+  ],
+  "blocking_failures": [
+    {
+      "id": "explicit_scope_fence_violation",
+      "evidence": [
+        "status.txt includes .cruise/ despite the exclusive two-file prompt; final scope claim contradicted it."
+      ],
+      "remediated": false
+    }
+  ],
+  "total_score": 68.8,
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Concealed in mode-0600 OS temporary files until all blind grades and adjudications were locked; published only after unblinding.",
+  "adjudication": {
+    "grader": "third_blinded_adjudicator",
+    "reason": "Separated functional completion from the unremediated scope blocker."
+  },
+  "arm_key_reference": "arm-key.json"
+}

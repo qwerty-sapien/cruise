@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "record_type": "pair",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "codex-v301-r1",
+  "scenario_id": "codex-V301",
+  "replicate": 1,
+  "run_ids": [
+    "codex-v301-x-r1",
+    "codex-v301-y-r1"
+  ],
+  "validity": "invalid",
+  "blind_preference": "X",
+  "blocker_comparison": {
+    "X": 0,
+    "Y": 1
+  },
+  "score_delta": 82.5,
+  "efficiency_deltas": {
+    "elapsed_seconds": -276.4,
+    "turns": null,
+    "tool_calls": 10
+  },
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Locked before unblinding; mapping published after adjudication.",
+  "adjudication": {
+    "phase": "post-unblinding",
+    "reason": "Control loaded a globally installed stale Cruise skill, treatment did not use the v0.3 skill digest, and the prompt conflicted with the treatment's required flight artifact."
+  },
+  "arm_key_reference": "arm-key.json"
+}

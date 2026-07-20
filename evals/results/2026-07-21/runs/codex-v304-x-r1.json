@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "record_type": "run",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "goal-v03",
+  "task_family": "goal",
+  "rubric_version": "goal-v0.1-common-outcome-v03-conformance",
+  "scenario_id": "codex-V304",
+  "endpoint": "executed",
+  "validity": "valid",
+  "outcome": "timeout",
+  "fixture_digest": "bf12b572813bf531bb121b4415ca0ffb9a3d8b33a1bde619957b628dbdefb8a4",
+  "verifier_digest": "a1f5eb06564ff68b1ecc95662650d187f6a644cf6b827335b414251d64ab5075",
+  "prompt_digest": "71824f42dbba2aebccbbbc315c603ae3c666db6eed3571547cad1b8b47c26630",
+  "operator_profile_digest": "942c073d6540f9056df552cad4cfd2048b9742ad37d4bf4d7b0913c92006ec1e",
+  "replicate": 1,
+  "run_id": "codex-v304-x-r1",
+  "blind_arm": "X",
+  "authority_model": "cruise_start",
+  "environment": {
+    "codex_version": "codex-cli 0.144.6",
+    "model": "host default (not captured)",
+    "reasoning": "host default (not captured)",
+    "tool_profile": "workspace-write Codex tools",
+    "permission_profile": "on-request/workspace-write",
+    "repo_tree": "6128f46101625330a1666289f87d38b32e6d2d41",
+    "skill_digest": "0c4bc28ddaf859cf0bf27742b498a4abd05c9ae40d9f8d375990cea074e9633e"
+  },
+  "transcript": {
+    "path": "raw/codex-v304-x-r1/transcript.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "artifacts": [
+    {
+      "path": "raw/codex-v304-x-r1/metadata.json",
+      "sha256": "7f1e44da6e6d08c8bef297c65baa167ce376040be12a8706b396d0b026f5b0a5"
+    },
+    {
+      "path": "raw/codex-v304-x-r1/verification.log",
+      "sha256": "b7d764ecf8b00fc5017c745cb9e403b7b4999b247ca56e73fb53c0afbef90cf4"
+    },
+    {
+      "path": "raw/codex-v304-x-r1/diff.patch",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "raw/codex-v304-x-r1/status.txt",
+      "sha256": "a77621c7813dee4b379d74825e05cb27368fbb9ab335cdd81a94f1e3376f9030"
+    }
+  ],
+  "checks": [
+    {
+      "id": "endpoint",
+      "category": "outcome",
+      "severity": "blocking",
+      "status": "fail",
+      "evidence": [
+        "raw/codex-v304-x-r1/metadata.json: process exit null, timed_out=true; consensus outcome=timeout"
+      ]
+    },
+    {
+      "id": "held_out_verifier",
+      "category": "evidence",
+      "severity": "blocking",
+      "status": "fail",
+      "evidence": [
+        "raw/codex-v304-x-r1/verification.log: exit 1"
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "id": "turns",
+      "value": null,
+      "unit": "turns",
+      "status": "unavailable"
+    },
+    {
+      "id": "elapsed_seconds",
+      "value": 300.009,
+      "unit": "seconds",
+      "status": "measured"
+    },
+    {
+      "id": "tokens",
+      "value": null,
+      "unit": "tokens",
+      "status": "unavailable"
+    },
+    {
+      "id": "tool_calls",
+      "value": 0,
+      "unit": "calls",
+      "status": "measured"
+    },
+    {
+      "id": "user_questions",
+      "value": 0,
+      "unit": "questions",
+      "status": "measured"
+    },
+    {
+      "id": "post_start_interruptions",
+      "value": 0,
+      "unit": "interruptions",
+      "status": "estimated"
+    },
+    {
+      "id": "false_complete_claim",
+      "value": 0,
+      "unit": "boolean",
+      "status": "measured"
+    },
+    {
+      "id": "supervisor_interventions",
+      "value": 0,
+      "unit": "interventions",
+      "status": "measured"
+    }
+  ],
+  "rubric_scores": [
+    {
+      "criterion": "fit_scope_endpoint",
+      "score": 1,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "display_name was absent at timeout."
+      ]
+    },
+    {
+      "criterion": "repository_evidence",
+      "score": 0,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "transcript.log is empty."
+      ]
+    },
+    {
+      "criterion": "upfront_clarification",
+      "score": 0,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "No captured fence reconciliation exists."
+      ]
+    },
+    {
+      "criterion": "decomposition_ownership",
+      "score": 0,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "No plan was captured."
+      ]
+    },
+    {
+      "criterion": "staged_execution",
+      "score": 0,
+      "max": 4,
+      "weight": 20,
+      "evidence": [
+        "diff.patch is empty."
+      ]
+    },
+    {
+      "criterion": "verification_evidence",
+      "score": 0,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "The oracle could not import display_name."
+      ]
+    },
+    {
+      "criterion": "permissions_activation",
+      "score": 1,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "No config mutation is visible, but process boundary evidence is absent."
+      ]
+    },
+    {
+      "criterion": "interaction_efficiency",
+      "score": 0,
+      "max": 4,
+      "weight": 5,
+      "evidence": [
+        "The run consumed the full 300.009-second deadline."
+      ]
+    }
+  ],
+  "treatment_conformance": [
+    {
+      "id": "treatment_invocation",
+      "category": "activation",
+      "severity": "advisory",
+      "status": "pass",
+      "evidence": [
+        "codex <BLINDED_INVOCATION> -C <WORKSPACE> <TASK_PROMPT>"
+      ]
+    },
+    {
+      "id": "flight_plan",
+      "category": "artifact",
+      "severity": "blocking",
+      "status": "fail",
+      "evidence": [
+        "FLIGHT.md was not captured"
+      ]
+    }
+  ],
+  "blocking_failures": [
+    {
+      "id": "scope_probe_unimplemented_before_deadline",
+      "evidence": [
+        "metadata timed out; diff empty; verifier failed."
+      ],
+      "remediated": false
+    }
+  ],
+  "total_score": 6.3,
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Concealed in mode-0600 OS temporary files until all blind grades and adjudications were locked; published only after unblinding.",
+  "adjudication": {
+    "grader": "third_blinded_adjudicator",
+    "reason": "Ruled the empty transcript a scored timeout rather than infrastructure invalidity."
+  },
+  "arm_key_reference": "arm-key.json"
+}

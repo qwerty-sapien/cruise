@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "cruise",
+  "displayName": "Cruise",
+  "version": "0.3.0",
+  "description": "Compact intent-based coding workflows for Claude Code.",
+  "author": {
+    "name": "qwerty-sapien"
+  },
+  "homepage": "https://github.com/qwerty-sapien/cruise",
+  "repository": "https://github.com/qwerty-sapien/cruise",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "coding-agent",
+    "debugging",
+    "planning",
+    "verification"
+  ]
+}

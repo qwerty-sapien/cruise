@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "record_type": "pair",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "claude-v302-r1",
+  "scenario_id": "claude-V302",
+  "replicate": 1,
+  "run_ids": [
+    "claude-v302-x-r1",
+    "claude-v302-y-r1"
+  ],
+  "validity": "valid",
+  "blind_preference": "X",
+  "blocker_comparison": {
+    "X": 0,
+    "Y": 0
+  },
+  "score_delta": 1.2,
+  "efficiency_deltas": {
+    "elapsed_seconds": -2.3,
+    "turns": -4,
+    "tool_calls": -4
+  },
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Locked before unblinding; mapping published after adjudication.",
+  "adjudication": {
+    "grader": "third_blinded_adjudicator",
+    "reason": "Both completed; X was cleaner and slightly more efficient."
+  },
+  "arm_key_reference": "arm-key.json"
+}

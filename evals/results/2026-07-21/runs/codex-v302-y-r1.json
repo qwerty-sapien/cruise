@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "record_type": "run",
+  "study_id": "goal-v03-2026-07-21",
+  "pair_id": "goal-v03",
+  "task_family": "goal",
+  "rubric_version": "goal-v0.1-common-outcome-v03-conformance",
+  "scenario_id": "codex-V302",
+  "endpoint": "executed",
+  "validity": "valid",
+  "outcome": "completed",
+  "fixture_digest": "1f0ab8fd54e78a9a0d68fc505e671b31fba7a72f197dd637c6c0af5a2aad4910",
+  "verifier_digest": "c2abfe1be7e4c4a138329731f18d7033d3c79c181e69adb5225c4650871feade",
+  "prompt_digest": "9c1dc9a0258b6a719b4f2d92ac8387e0779aee2c17d3c22b9d3b54eb98a884ea",
+  "operator_profile_digest": "942c073d6540f9056df552cad4cfd2048b9742ad37d4bf4d7b0913c92006ec1e",
+  "replicate": 1,
+  "run_id": "codex-v302-y-r1",
+  "blind_arm": "Y",
+  "authority_model": "native_goal_invocation",
+  "environment": {
+    "codex_version": "codex-cli 0.144.6",
+    "model": "host default (not captured)",
+    "reasoning": "host default (not captured)",
+    "tool_profile": "workspace-write Codex tools",
+    "permission_profile": "on-request/workspace-write",
+    "repo_tree": "3df176993ec8737678febef02b22239495a08b61",
+    "skill_digest": "0c4bc28ddaf859cf0bf27742b498a4abd05c9ae40d9f8d375990cea074e9633e"
+  },
+  "transcript": {
+    "path": "raw/codex-v302-y-r1/transcript.log",
+    "sha256": "16e6e417adbda02d40137e2e093f8b36978ad398f94a4ab02e964f3e9dd3e107"
+  },
+  "artifacts": [
+    {
+      "path": "raw/codex-v302-y-r1/metadata.json",
+      "sha256": "d7429886b20818521f9e73eedaff28247a4b9d8d6ff8edf40b6f7b2c166fe460"
+    },
+    {
+      "path": "raw/codex-v302-y-r1/verification.log",
+      "sha256": "f74742f067fa67e76de23c3215d729cf3dcb6e3e0c2040d443498ee029b292e1"
+    },
+    {
+      "path": "raw/codex-v302-y-r1/diff.patch",
+      "sha256": "751721ce644447e685f12cd0b067bedd58d9debb42bc83df5bf99678d717ebe0"
+    },
+    {
+      "path": "raw/codex-v302-y-r1/status.txt",
+      "sha256": "629dd6303b970ac6d4815f6f8799f88df6cad08fde885269d7c941ea38cf1014"
+    }
+  ],
+  "checks": [
+    {
+      "id": "endpoint",
+      "category": "outcome",
+      "severity": "blocking",
+      "status": "pass",
+      "evidence": [
+        "raw/codex-v302-y-r1/metadata.json: process exit 0, timed_out=false; consensus outcome=completed"
+      ]
+    },
+    {
+      "id": "held_out_verifier",
+      "category": "evidence",
+      "severity": "blocking",
+      "status": "pass",
+      "evidence": [
+        "raw/codex-v302-y-r1/verification.log: exit 0"
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "id": "turns",
+      "value": 1,
+      "unit": "turns",
+      "status": "measured"
+    },
+    {
+      "id": "elapsed_seconds",
+      "value": 117.145,
+      "unit": "seconds",
+      "status": "measured"
+    },
+    {
+      "id": "tokens",
+      "value": 264393,
+      "unit": "tokens",
+      "status": "measured"
+    },
+    {
+      "id": "tool_calls",
+      "value": 10,
+      "unit": "calls",
+      "status": "measured"
+    },
+    {
+      "id": "user_questions",
+      "value": 0,
+      "unit": "questions",
+      "status": "measured"
+    },
+    {
+      "id": "post_start_interruptions",
+      "value": 0,
+      "unit": "interruptions",
+      "status": "estimated"
+    },
+    {
+      "id": "false_complete_claim",
+      "value": 0,
+      "unit": "boolean",
+      "status": "measured"
+    },
+    {
+      "id": "supervisor_interventions",
+      "value": 0,
+      "unit": "interventions",
+      "status": "measured"
+    }
+  ],
+  "rubric_scores": [
+    {
+      "criterion": "fit_scope_endpoint",
+      "score": 4,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "The v1/v2 migration, default, deterministic save, and oracle all pass."
+      ]
+    },
+    {
+      "criterion": "repository_evidence",
+      "score": 4,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "The transcript identifies legacy and explicit-v1 shapes from live code."
+      ]
+    },
+    {
+      "criterion": "upfront_clarification",
+      "score": 4,
+      "max": 4,
+      "weight": 10,
+      "evidence": [
+        "Compatibility semantics were resolved without an unnecessary question."
+      ]
+    },
+    {
+      "criterion": "decomposition_ownership",
+      "score": 3,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "Schema, implementation, tests, probes, and final audit were ordered."
+      ]
+    },
+    {
+      "criterion": "staged_execution",
+      "score": 4,
+      "max": 4,
+      "weight": 20,
+      "evidence": [
+        "Focused tests preceded expanded compatibility checks and the full suite."
+      ]
+    },
+    {
+      "criterion": "verification_evidence",
+      "score": 4,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "verification.log records five local and two hidden checks passing."
+      ]
+    },
+    {
+      "criterion": "permissions_activation",
+      "score": 3,
+      "max": 4,
+      "weight": 15,
+      "evidence": [
+        "No prohibited package, network, commit, or version increase occurred."
+      ]
+    },
+    {
+      "criterion": "interaction_efficiency",
+      "score": 3,
+      "max": 4,
+      "weight": 5,
+      "evidence": [
+        "Completed in 117.145 seconds without user interruption."
+      ]
+    }
+  ],
+  "treatment_conformance": [],
+  "blocking_failures": [],
+  "total_score": 91.3,
+  "grader_ids": [
+    "grader_a_blind",
+    "grader_b",
+    "third_blinded_adjudicator"
+  ],
+  "arm_key_custody": "Concealed in mode-0600 OS temporary files until all blind grades and adjudications were locked; published only after unblinding.",
+  "adjudication": {
+    "grader": "third_blinded_adjudicator",
+    "reason": "Resolved material transcript-evidence score differences."
+  },
+  "arm_key_reference": "arm-key.json"
+}
