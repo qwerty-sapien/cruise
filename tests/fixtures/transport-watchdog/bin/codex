@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+
+const mode = process.env.RT_MODE ?? 'fast';
+let buffer = '';
+let goal = null;
+let turnCounter = 0;
+let chatter = null;
+
+function send(message) {
+  process.stdout.write(`${JSON.stringify(message)}\n`);
+}
+
+function respond(request, result) {
+  send({ id: request.id, result });
+}
+
+function startTurn(threadId, {
+  complete = false,
+  question = false,
+  streaming = false,
+  output = null,
+} = {}) {
+  turnCounter += 1;
+  const turn = { id: `turn-${turnCounter}`, status: 'inProgress' };
+  return {
+    turn,
+    afterResponse() {
+      send({ method: 'turn/started', params: { threadId, turn } });
+      if (output !== null) {
+        send({
+          method: 'item/agentMessage/delta',
+          params: { threadId, turnId: turn.id, delta: output },
+        });
+      }
+      if (question) {
+        send({
+          id: 9001,
+          method: 'item/tool/requestUserInput',
+          params: {
+            threadId,
+            turnId: turn.id,
+            questions: [{
+              id: 'answer',
+              header: 'Probe',
+              question: 'Continue?',
+              options: [{ label: 'Continue', value: 'continue' }],
+            }],
+          },
+        });
+      }
+      if (streaming) {
+        let deltas = 0;
+        chatter = setInterval(() => {
+          deltas += 1;
+          send({
+            method: 'item/agentMessage/delta',
+            params: { threadId, turnId: turn.id, delta: `delta-${deltas}\n` },
+          });
+          if (deltas === 8) {
+            clearInterval(chatter);
+            chatter = null;
+            send({
+              method: 'turn/completed',
+              params: { threadId, turn: { ...turn, status: 'completed' } },
+            });
+          }
+        }, Number(process.env.RT_TICK_MS ?? 40));
+      } else if (complete) {
+        setTimeout(() => send({
+          method: 'turn/completed',
+          params: { threadId, turn: { ...turn, status: 'completed' } },
+        }), 20);
+      }
+    },
+  };
+}
+
+function handle(request) {
+  if (request.method === 'initialize') {
+    if (mode === 'A_no_initialize') {
+      process.stderr.write('initialize probe waiting\n');
+      return;
+    }
+    respond(request, {
+      userAgent: 'hostile-fake/1.0',
+      codexHome: '/tmp/hostile-codex',
+      platformFamily: 'unix',
+      platformOs: 'macos',
+    });
+    return;
+  }
+
+  if (request.method === 'thread/start') {
+    if (mode === 'B_no_thread_start') return;
+    respond(request, { thread: { id: 'thread-hostile' }, model: 'gpt-fake' });
+    return;
+  }
+
+  if (request.method === 'thread/settings/update') {
+    respond(request, {});
+    return;
+  }
+
+  if (request.method === 'thread/goal/get') {
+    respond(request, { goal });
+    return;
+  }
+
+  if (request.method === 'thread/goal/set') {
+    goal = { objective: request.params?.objective ?? goal?.objective ?? 'probe', status: request.params?.status };
+    respond(request, { goal });
+    send({ method: 'thread/goal/updated', params: { threadId: 'thread-hostile', goal } });
+    if (goal.status === 'active') {
+      if (mode === 'C_goal_no_turn') {
+        chatter = setInterval(() => send({
+          method: 'thread/status/changed',
+          params: { threadId: 'thread-hostile', status: 'active' },
+        }), Number(process.env.RT_TICK_MS ?? 2_000));
+      } else {
+        const native = startTurn('thread-hostile', { complete: true });
+        setTimeout(() => native.afterResponse(), 10);
+      }
+    }
+    return;
+  }
+
+  if (request.method === 'turn/start') {
+    if (mode === 'H_turn_start_no_reply') return;
+    const options = {
+      complete: ['fast', 'G2_question_then_complete'].includes(mode),
+      question: ['G_question_no_stdin', 'G2_question_then_complete', 'G3_question_held_open'].includes(mode),
+      streaming: mode === 'I_streaming_long_turn',
+      output: mode === 'fast' ? 'fast output\n' : null,
+    };
+    const active = startTurn(request.params?.threadId ?? 'thread-hostile', options);
+    respond(request, { turn: active.turn });
+    setTimeout(() => {
+      active.afterResponse();
+      if (mode === 'F_exit_midturn') setTimeout(() => process.exit(7), 20);
+    }, 10);
+    return;
+  }
+
+  if (request.method === 'turn/interrupt') {
+    respond(request, {});
+  }
+}
+
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline);
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (typeof message.method === 'string' && message.id !== undefined) handle(message);
+  }
+});
+process.stdin.on('end', () => {
+  if (chatter) clearInterval(chatter);
+  process.exit(0);
+});

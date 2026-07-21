@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -12,15 +12,21 @@ import {
   SimpleCruiseSession,
 } from '../scripts/lib/simple-session.mjs';
 
+const TRACE_THREAD_ID = '019f855b-527e-77d1-bf9b-bca4c89da49e';
+
 class FakeClient extends EventEmitter {
   async start() {}
   async stop() {}
   async request(method) {
-    if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+    if (method === 'thread/start') return { thread: { id: TRACE_THREAD_ID } };
     if (method === 'turn/start') {
       queueMicrotask(() => {
-        this.emit('notification', { method: 'item/agentMessage/delta', params: { delta: 'done' } });
-        this.emit('notification', { method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } });
+        this.emit('notification', {
+          method: 'turn/started',
+          params: { threadId: TRACE_THREAD_ID, turn: { id: 'turn-1', status: 'inProgress' } },
+        });
+        this.emit('notification', { method: 'item/agentMessage/delta', params: { threadId: TRACE_THREAD_ID, delta: 'done' } });
+        this.emit('notification', { method: 'turn/completed', params: { threadId: TRACE_THREAD_ID, turn: { id: 'turn-1', status: 'completed' } } });
       });
       return { turn: { id: 'turn-1' } };
     }
@@ -33,6 +39,15 @@ test('simple sessions send one normal skill turn without control-plane instructi
   t.after(() => rm(root, { recursive: true, force: true }));
   const client = new FakeClient();
   let output = '';
+  let errorOutput = '';
+  let lookups = 0;
+  const traceHome = join(root, 'codex-home');
+  const rolloutPath = join(traceHome, `rollout-late-${TRACE_THREAD_ID}.jsonl`);
+  await mkdir(traceHome, { recursive: true });
+  await writeFile(rolloutPath, `${JSON.stringify({
+    type: 'session_meta',
+    payload: { session_id: TRACE_THREAD_ID },
+  })}\n`, 'utf8');
   const session = new SimpleCruiseSession({
     client,
     cwd: root,
@@ -42,14 +57,42 @@ test('simple sessions send one normal skill turn without control-plane instructi
     pickOne: async () => ({ status: 'cancelled' }),
     readLine: async () => '',
     output: { write(value) { output += value; } },
+    errorOutput: { write(value) { errorOutput += value; } },
+    traceHome,
+    locateTrace: async (threadId, options) => {
+      assert.equal(threadId, TRACE_THREAD_ID);
+      assert.equal(options.home, traceHome);
+      lookups += 1;
+      return lookups === 1 ? null : rolloutPath;
+    },
+    clock: () => new Date('2026-07-21T15:46:22.000Z'),
   });
-  assert.deepEqual(await session.run(), { status: 'complete', skill: 'quick', threadId: 'thread-1' });
-  assert.match(output, /done/u);
+  assert.deepEqual(await session.run(), { status: 'complete', skill: 'quick', threadId: TRACE_THREAD_ID });
+  assert.equal(output, 'done');
+  assert.equal(lookups, 2);
+  assert.match(errorOutput, new RegExp(`thread ${TRACE_THREAD_ID} started`, 'u'));
+  assert.match(errorOutput, /rollout pending/u);
+  assert.match(errorOutput, new RegExp(rolloutPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
+  const pointer = JSON.parse(await readFile(join(root, '.cruise', 'LAST-RUN.json'), 'utf8'));
+  assert.deepEqual(pointer, {
+    thread_id: TRACE_THREAD_ID,
+    rollout_path: rolloutPath,
+    cwd: root,
+    skill: 'quick',
+    started_at: '2026-07-21T15:46:22.000Z',
+    ended_at: '2026-07-21T15:46:22.000Z',
+    final_status: 'complete',
+  });
+  const first = JSON.parse((await readFile(pointer.rollout_path, 'utf8')).split('\n')[0]);
+  assert.equal(first.payload.session_id, pointer.thread_id);
+  assert.match(await readFile(join(root, '.cruise', '.gitignore'), 'utf8'), /^LAST-RUN\.json$/mu);
 });
 
 test('Goal auto-advances each completed active turn until native completion', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-simple-goal-'));
   t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, '.cruise'));
+  await writeFile(join(root, '.cruise', '.supervisor.json'), '{"stale":true}\n', 'utf8');
   class GoalClient extends EventEmitter {
     constructor() {
       super();
@@ -131,6 +174,10 @@ test('Goal auto-advances each completed active turn until native completion', as
 
   assert.equal(result.status, 'complete');
   assert.equal(client.turns, 1);
+  const scratch = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
+  assert.equal(scratch.host, 'codex');
+  assert.equal(scratch.turns_observed, 0);
+  assert.equal(Object.hasOwn(scratch, 'final_report'), false);
   assert.deepEqual(
     client.calls.map(({ method }) => method),
     ['thread/start', 'thread/settings/update', 'thread/goal/get', 'thread/goal/set', 'thread/goal/get', 'thread/settings/update', 'turn/start', 'thread/goal/get'],
@@ -157,6 +204,357 @@ test('Goal auto-advances each completed active turn until native completion', as
   assert.equal(executionSettings.sandboxPolicy.type, 'workspaceWrite');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.collaborationMode.mode, 'default');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.sandboxPolicy.type, 'workspaceWrite');
+});
+
+test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never starts a turn', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class NoTurnGoalClient extends EventEmitter {
+    constructor() {
+      super();
+      this.calls = [];
+      this.goal = null;
+      this.stopped = false;
+    }
+
+    async start() {}
+    async stop() { this.stopped = true; }
+
+    async request(method, params = {}) {
+      this.calls.push({ method, params });
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-no-turn' }, model: 'gpt-test' };
+      }
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: this.goal };
+      if (method === 'thread/goal/set') {
+        this.goal = { objective: params.objective, status: params.status };
+        return { goal: this.goal };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const client = new NoTurnGoalClient();
+  let output = '';
+  let errorOutput = '';
+  const session = new SimpleCruiseSession({
+    client,
+    cwd: root,
+    prompt: 'Finish the migration.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write(value) { output += value; } },
+    errorOutput: { write(value) { errorOutput += value; } },
+    traceHome: join(root, 'codex-home'),
+    locateTrace: async () => null,
+    firstTurnDeadlineMs: 20,
+  });
+
+  const runOutcome = session.run().then(
+    (value) => ({ kind: 'resolved', value }),
+    (error) => ({ kind: 'rejected', error }),
+  );
+  let watchdog;
+  const outcome = await Promise.race([
+    runOutcome,
+    new Promise((resolve) => {
+      watchdog = setTimeout(() => resolve({
+        kind: 'still-pending',
+        output,
+        errorOutput,
+      }), 100);
+    }),
+  ]);
+  clearTimeout(watchdog);
+  assert.notEqual(
+    outcome.kind,
+    'still-pending',
+    `launcher remained pending after its deadline window: ${JSON.stringify(outcome)}`,
+  );
+  assert.equal(outcome.kind, 'rejected');
+  const { error } = outcome;
+  {
+    assert.equal(error.name, 'CruiseGoalBootstrapTimeoutError');
+    assert.equal(error.code, 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT');
+    assert.equal(error.threadId, 'thread-no-turn');
+    assert.equal(error.model, 'gpt-test');
+    assert.equal(error.goalStatus, 'active');
+    assert.ok(error.elapsedMs >= 20);
+    assert.match(error.message, /never started the native Goal turn within 20ms/u);
+    assert.match(error.message, /thread=thread-no-turn/u);
+    assert.match(error.message, /model=gpt-test/u);
+    assert.match(error.message, /goal=active/u);
+  }
+
+  assert.equal(output, '');
+  assert.equal(errorOutput, [
+    'Cruise: app-server started.',
+    'Cruise: thread thread-no-turn started (model gpt-test).',
+    `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-no-turn.`,
+    'Cruise: goal activated.',
+    'Cruise: waiting for the native Goal turn.',
+    `Cruise: trace unresolved for thread thread-no-turn; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-no-turn.`,
+    '',
+  ].join('\n'));
+  assert.deepEqual(client.calls
+    .filter(({ method }) => method === 'thread/goal/set')
+    .map(({ params }) => params.status), ['active', 'paused']);
+  assert.equal(client.stopped, true);
+  const timeoutPointer = JSON.parse(await readFile(join(root, '.cruise', 'LAST-RUN.json'), 'utf8'));
+  assert.equal(timeoutPointer.thread_id, 'thread-no-turn');
+  assert.equal(timeoutPointer.rollout_path, null);
+  assert.equal(timeoutPointer.final_status, 'bootstrap-timeout');
+  assert.equal(typeof timeoutPointer.ended_at, 'string');
+});
+
+test('Goal bootstrap timeout cannot hang in diagnostic cleanup', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-diagnostics-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class HungDiagnosticsGoalClient extends EventEmitter {
+    constructor() {
+      super();
+      this.goal = null;
+      this.goalReads = 0;
+      this.statuses = [];
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-test' };
+      }
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') {
+        this.goalReads += 1;
+        if (this.goalReads === 1) return { goal: null };
+        return new Promise(() => {});
+      }
+      if (method === 'thread/goal/set') {
+        this.statuses.push(params.status);
+        this.goal = { objective: params.objective, status: params.status };
+        return { goal: this.goal };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const client = new HungDiagnosticsGoalClient();
+  const startedAt = Date.now();
+  await assert.rejects(new SimpleCruiseSession({
+    client,
+    cwd: root,
+    prompt: 'Finish the migration.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write() {} },
+    errorOutput: { write() {} },
+    firstTurnDeadlineMs: 10,
+    firstTurnCleanupDeadlineMs: 20,
+  }).run(), (error) => {
+    assert.equal(error.code, 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT');
+    assert.match(error.message, /goal-read-error=.*did not settle within 20ms/u);
+    return true;
+  });
+  assert.ok(Date.now() - startedAt < 100);
+  assert.deepEqual(client.statuses, ['active', 'paused']);
+});
+
+test('interrupt cancels a hung bootstrap diagnostic without leaking its cleanup timer', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-interrupt-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class InterruptCleanupGoalClient extends EventEmitter {
+    constructor() {
+      super();
+      this.goal = null;
+      this.goalReads = 0;
+      this.statuses = [];
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      if (method === 'thread/start') return { thread: { id: 'thread-cleanup-interrupt' } };
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') {
+        this.goalReads += 1;
+        if (this.goalReads === 1) return { goal: null };
+        this.emit('diagnostics-started');
+        return new Promise(() => {});
+      }
+      if (method === 'thread/goal/set') {
+        this.statuses.push(params.status);
+        this.goal = { objective: params.objective, status: params.status };
+        return { goal: this.goal };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const client = new InterruptCleanupGoalClient();
+  const diagnosticsStarted = new Promise((resolve) => client.once('diagnostics-started', resolve));
+  const session = new SimpleCruiseSession({
+    client,
+    cwd: root,
+    prompt: 'Finish the migration.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write() {} },
+    errorOutput: { write() {} },
+    firstTurnDeadlineMs: 10,
+    firstTurnCleanupDeadlineMs: 1_000,
+  });
+  const running = session.run();
+  await diagnosticsStarted;
+  const interruptedAt = Date.now();
+  await session.interrupt();
+  await assert.rejects(running, (error) => error instanceof SimpleCruiseInterruptedError);
+  assert.ok(Date.now() - interruptedAt < 100);
+  assert.deepEqual(client.statuses, ['active', 'paused']);
+});
+
+test('app-server exit cancels a hung bootstrap diagnostic cleanup timer', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-exit-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class ExitCleanupGoalClient extends EventEmitter {
+    constructor() {
+      super();
+      this.goal = null;
+      this.goalReads = 0;
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      if (method === 'thread/start') return { thread: { id: 'thread-cleanup-exit' } };
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') {
+        this.goalReads += 1;
+        if (this.goalReads === 1) return { goal: null };
+        this.emit('diagnostics-started');
+        return new Promise(() => {});
+      }
+      if (method === 'thread/goal/set') {
+        this.goal = { objective: params.objective, status: params.status };
+        return { goal: this.goal };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const client = new ExitCleanupGoalClient();
+  const diagnosticsStarted = new Promise((resolve) => client.once('diagnostics-started', resolve));
+  const running = new SimpleCruiseSession({
+    client,
+    cwd: root,
+    prompt: 'Finish the migration.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write() {} },
+    errorOutput: { write() {} },
+    firstTurnDeadlineMs: 10,
+    firstTurnCleanupDeadlineMs: 1_000,
+  }).run();
+  await diagnosticsStarted;
+  const exitedAt = Date.now();
+  client.emit('exit', { code: 9 });
+  await assert.rejects(running, /Codex app-server exited \(9\)/u);
+  assert.ok(Date.now() - exitedAt < 100);
+});
+
+test('a native Goal turn just before the deadline cancels the timer without changing stdout', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class JustInTimeGoalClient extends EventEmitter {
+    constructor() {
+      super();
+      this.goal = null;
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-just-in-time' }, model: 'gpt-test' };
+      }
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: this.goal };
+      if (method === 'thread/goal/set') {
+        this.goal = { objective: params.objective, status: params.status };
+        setTimeout(() => {
+          this.emit('notification', {
+            method: 'turn/started',
+            params: {
+              threadId: 'thread-just-in-time',
+              turn: { id: 'native-plan', status: 'inProgress' },
+            },
+          });
+          this.emit('notification', {
+            method: 'item/agentMessage/delta',
+            params: { threadId: 'thread-just-in-time', delta: 'healthy transcript\n' },
+          });
+          this.goal = { ...this.goal, status: 'complete' };
+          this.emit('notification', {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-just-in-time',
+              turn: { id: 'native-plan', status: 'completed' },
+            },
+          });
+        }, 30);
+        return { goal: this.goal };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on('unhandledRejection', onUnhandled);
+  t.after(() => process.removeListener('unhandledRejection', onUnhandled));
+  let output = '';
+  let errorOutput = '';
+  const result = await new SimpleCruiseSession({
+    client: new JustInTimeGoalClient(),
+    cwd: root,
+    prompt: 'Finish the migration.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write(value) { output += value; } },
+    errorOutput: { write(value) { errorOutput += value; } },
+    traceHome: join(root, 'codex-home'),
+    locateTrace: async () => null,
+    firstTurnDeadlineMs: 50,
+  }).run();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(result.status, 'complete');
+  assert.equal(output, 'healthy transcript\n');
+  assert.equal(errorOutput, [
+    'Cruise: app-server started.',
+    'Cruise: thread thread-just-in-time started (model gpt-test).',
+    `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-just-in-time.`,
+    'Cruise: goal activated.',
+    'Cruise: waiting for the native Goal turn.',
+    `Cruise: trace unresolved for thread thread-just-in-time; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-just-in-time.`,
+    '',
+  ].join('\n'));
+  assert.deepEqual(unhandled, []);
 });
 
 test('Goal supervision realigns, runs one final experiment, then pauses with a report', async (t) => {
@@ -249,6 +647,19 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
   assert.match(report, /native Goal is paused/u);
   assert.match(report, /Suggested next actions/u);
 
+  const persisted = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
+  assert.equal(persisted.host, 'codex');
+  assert.equal(persisted.ladder, 'stalled');
+  assert.deepEqual(persisted.interventions.map(({ level }) => level), [
+    'realign',
+    'final-experiment',
+  ]);
+  assert.match(persisted.final_report, /stalled after 4 supervised continuation turns/u);
+  assert.deepEqual(persisted.pause_outcome, { status: 'paused' });
+  const stalledPointer = JSON.parse(await readFile(join(root, '.cruise', 'LAST-RUN.json'), 'utf8'));
+  assert.equal(stalledPointer.final_status, 'stalled');
+  assert.equal(stalledPointer.thread_id, 'thread-stalled');
+
   const pauseFailureClient = new StalledGoalClient({ pauseFails: true });
   let pauseFailureReport = '';
   const pauseFailureResult = await new SimpleCruiseSession({
@@ -268,6 +679,182 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
   assert.equal(pauseFailureResult.goal.status, 'active');
   assert.match(pauseFailureReport, /pause could not be confirmed: pause transport unavailable/u);
   assert.match(pauseFailureReport, /Suggested next actions/u);
+  const pauseFailureState = JSON.parse(await readFile(
+    join(root, '.cruise', '.supervisor.json'),
+    'utf8',
+  ));
+  assert.deepEqual(pauseFailureState.pause_outcome, {
+    status: 'pause-failed',
+    reason: 'pause transport unavailable',
+  });
+  assert.equal(
+    pauseFailureState.final_report,
+    pauseFailureReport
+      .slice(pauseFailureReport.indexOf('Cruise Goal stalled'))
+      .split('\nCruise: trace')[0]
+      .trim(),
+  );
+});
+
+test('invalid flight state gets one corrective Codex turn without resetting supervision', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-invalid-flight-goal-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, '.cruise'));
+  const pilot = await readFile(resolve(
+    'evals/results/2026-07-21/raw/claude-v302-y-r1/FLIGHT.md',
+  ), 'utf8');
+  await writeFile(join(root, '.cruise', 'FLIGHT.md'), pilot, 'utf8');
+
+  class InvalidFlightGoalClient extends EventEmitter {
+    constructor() {
+      super();
+      this.calls = [];
+      this.goal = null;
+      this.turns = 0;
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      this.calls.push({ method, params });
+      if (method === 'thread/start') return { thread: { id: 'thread-invalid-flight' } };
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: this.goal };
+      if (method === 'thread/goal/set') {
+        this.goal = { objective: params.objective, status: params.status };
+        if (params.status === 'active') queueMicrotask(() => {
+          this.emit('notification', {
+            method: 'turn/started',
+            params: { threadId: 'thread-invalid-flight', turn: { id: 'native-plan' } },
+          });
+          this.emit('notification', {
+            method: 'turn/completed',
+            params: { threadId: 'thread-invalid-flight', turn: { id: 'native-plan', status: 'completed' } },
+          });
+        });
+        return { goal: this.goal };
+      }
+      if (method === 'turn/start') {
+        this.turns += 1;
+        const id = `continuation-${this.turns}`;
+        queueMicrotask(() => {
+          this.emit('notification', {
+            method: 'turn/completed',
+            params: { threadId: 'thread-invalid-flight', turn: { id, status: 'completed' } },
+          });
+        });
+        return { turn: { id } };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+
+  const client = new InvalidFlightGoalClient();
+  let stderr = '';
+  const fingerprintOptions = [];
+  const result = await new SimpleCruiseSession({
+    client,
+    cwd: root,
+    prompt: 'Complete the work.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    output: { write() {} },
+    errorOutput: { write(value) { stderr += value; } },
+    captureFingerprint: async (_cwd, options) => {
+      fingerprintOptions.push(options);
+      return 'fixed-fingerprint';
+    },
+  }).run();
+
+  assert.equal(result.status, 'stalled');
+  const instructions = client.calls
+    .filter(({ method }) => method === 'turn/start')
+    .map(({ params }) => params.input[0].text);
+  assert.equal(instructions.length, 6);
+  assert.match(instructions[1], /supervision is degraded/iu);
+  assert.match(instructions[1], /missing opening.*frontmatter fence/iu);
+  assert.match(instructions[1], /quiet_turns: 3/u);
+  assert.match(instructions[2], /Continue the active Cruise Goal/u);
+  assert.match(instructions[4], /Repeating the same approach/u);
+  assert.match(instructions[5], /last supervised continuation/u);
+  assert.equal((stderr.match(/supervision degraded/gu) ?? []).length, 6);
+  assert.equal(fingerprintOptions.every(({ excludeFlightPlan }) => excludeFlightPlan), true);
+  assert.match(stderr, /stalled after 6 supervised continuation turns/u);
+  const state = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
+  assert.deepEqual(state.interventions.map(({ level }) => level), [
+    'corrective',
+    'realign',
+    'final-experiment',
+  ]);
+  assert.equal(state.observations[0].verdict_level, 'corrective');
+  assert.equal(state.observations[1].verdict_level, 'ok');
+  assert.equal(state.observations.at(-1).verdict_level, 'stall');
+  assert.match(state.final_report, /stalled after 6 supervised continuation turns/u);
+});
+
+test('a progressing Codex turn leaves a zero-intervention supervisor trail', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-progress-trail-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = new SimpleCruiseSession({
+    client: new EventEmitter(),
+    cwd: root,
+    prompt: 'Keep progressing.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    captureFingerprint: async () => 'progress-fingerprint',
+    readPlan: async () => ({
+      state: 'valid',
+      contentHash: 'valid-flight-hash',
+      plan: { stall: { quietTurns: 3, sameFailure: 3 } },
+    }),
+  });
+
+  assert.equal((await session.superviseGoalTurn('turn-progress')).level, 'ok');
+  const state = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
+  assert.equal(state.host, 'codex');
+  assert.equal(state.turns_observed, 1);
+  assert.deepEqual(state.interventions, []);
+  assert.equal(state.observations[0].turn_id, 'turn-progress');
+  assert.equal(state.observations[0].verdict_level, 'ok');
+});
+
+test('a repaired Codex flight keeps its correction in the active ladder', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-repaired-flight-trail-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inspections = [
+    { state: 'invalid', contentHash: 'bad-flight', reason: 'missing opening fence' },
+    {
+      state: 'valid',
+      contentHash: 'good-flight',
+      plan: { stall: { quietTurns: 1, sameFailure: 9 } },
+    },
+  ];
+  const fingerprintOptions = [];
+  const session = new SimpleCruiseSession({
+    client: new EventEmitter(),
+    cwd: root,
+    prompt: 'Keep progressing.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    captureFingerprint: async (_cwd, options) => {
+      fingerprintOptions.push(options);
+      return 'unchanged-product-work';
+    },
+    readPlan: async () => inspections.shift(),
+  });
+
+  assert.equal((await session.superviseGoalTurn('repair-turn')).level, 'corrective');
+  assert.equal((await session.superviseGoalTurn('valid-turn')).level, 'realign');
+  assert.equal(fingerprintOptions.every(({ excludeFlightPlan }) => excludeFlightPlan), true);
+  const state = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
+  assert.deepEqual(state.interventions.map(({ level }) => level), ['corrective', 'realign']);
 });
 
 test('interrupting an activation pauses a Goal that became active in flight', async (t) => {
@@ -276,6 +863,10 @@ test('interrupting an activation pauses a Goal that became active in flight', as
   let releaseActivation;
   const activationGate = new Promise((resolve) => {
     releaseActivation = resolve;
+  });
+  let signalActivationRequested;
+  const activationRequested = new Promise((resolve) => {
+    signalActivationRequested = resolve;
   });
   class InterruptibleGoalClient extends EventEmitter {
     constructor() {
@@ -293,6 +884,7 @@ test('interrupting an activation pauses a Goal that became active in flight', as
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set' && params.status === 'active') {
+        signalActivationRequested();
         await activationGate;
         this.goal = { objective: params.objective, status: 'active' };
         return { goal: this.goal };
@@ -316,7 +908,7 @@ test('interrupting an activation pauses a Goal that became active in flight', as
     readLine: async () => '',
   });
   const running = session.run();
-  await new Promise((resolve) => setImmediate(resolve));
+  await activationRequested;
   assert.equal(
     client.calls.some(({ method, params }) => method === 'thread/goal/set' && params.status === 'active'),
     true,

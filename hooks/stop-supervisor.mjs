@@ -2,7 +2,7 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -69,20 +69,22 @@ function parseScalar(value) {
 }
 
 function positiveInteger(value, fallback) {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  const resolved = value === undefined ? fallback : value;
+  if (!Number.isSafeInteger(resolved) || resolved < 1) {
+    throw new Error('stall thresholds must be positive integers');
+  }
+  return resolved;
 }
 
 function tokensFor(frontmatter) {
   const tokens = [];
   for (const [index, raw] of frontmatter.split(/\r?\n/u).entries()) {
-    if (raw.includes('\t')) throw new Error('tabs are not valid flight-plan indentation');
+    if (raw.includes('\t')) throw new Error(`tabs are not valid flight-plan indentation on line ${index + 2}`);
     const indent = raw.match(/^ */u)[0].length;
     const content = stripComment(raw.slice(indent)).trim();
     if (!content) continue;
-    if (indent % 2 !== 0) throw new Error('flight-plan indentation must use two spaces');
-    tokens.push({ indent, content, line: index + 1 });
+    if (indent % 2 !== 0) throw new Error(`flight-plan indentation must use two spaces on line ${index + 2}`);
+    tokens.push({ indent, content, line: index + 2 });
   }
   if (tokens.length > 1_000) throw new Error('flight-plan frontmatter is too large');
   return tokens;
@@ -138,59 +140,104 @@ function stringList(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string' && !/[\r\n]/u.test(item));
 }
 
+function hookFlightPlanTemplate() {
+  return `---
+version: 1
+status: active
+outcome: <one line, falsifiable>
+verify:
+  - <command>
+scope:
+  touchpoints:
+    - <path-or-glob>
+  non_goals:
+    - <explicit exclusion>
+invariants:
+  - <protected behavior>
+stall:
+  quiet_turns: 3
+  same_failure: 3
+---
+# Flight plan
+<prose>
+`;
+}
+
 // TODO(v0.3): consolidate this strict reader and fingerprint helper only when
 // the packaged hook can remain a standalone process with no runtime coupling.
+function parseHookFlightPlanStrict(text) {
+  if (typeof text !== 'string') throw new TypeError('flight plan must be text');
+  if (text.length > 1_000_000) throw new Error('flight plan exceeds 1 MB');
+  const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
+  if (lines[0]?.trim() !== '---') throw new Error('line 1: missing opening --- frontmatter fence');
+  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  if (closing < 0) throw new Error('missing closing --- frontmatter fence');
+  const frontmatter = lines.slice(1, closing).join('\n');
+  const tokens = tokensFor(frontmatter);
+  const [raw, consumed] = tokens.length ? parseBlock(tokens, 0, 0) : [{}, 0];
+  if (consumed !== tokens.length || !isMapping(raw)) throw new Error('frontmatter root must be a mapping');
+  const status = raw.status ?? 'active';
+  if (!['active', 'complete', 'blocked'].includes(status)) {
+    throw new Error('status must be active, complete, or blocked');
+  }
+  const version = raw.version ?? 1;
+  const outcome = raw.outcome ?? '';
+  const verify = raw.verify ?? [];
+  const scope = raw.scope ?? {};
+  const invariants = raw.invariants ?? [];
+  const stall = raw.stall ?? {};
+  if (!Number.isSafeInteger(version) || version < 1) throw new Error('version must be a positive integer');
+  if (typeof outcome !== 'string' || /[\r\n]/u.test(outcome)) throw new Error('outcome must be one line');
+  if (!stringList(verify)) throw new Error('verify must be an array of strings');
+  if (!isMapping(scope)) throw new Error('scope must be a mapping');
+  if (!stringList(scope.touchpoints ?? [])) throw new Error('scope.touchpoints must be an array of strings');
+  if (!stringList(scope.non_goals ?? [])) throw new Error('scope.non_goals must be an array of strings');
+  if (!stringList(invariants)) throw new Error('invariants must be an array of strings');
+  if (!isMapping(stall)) throw new Error('stall must be a mapping');
+  return {
+    version,
+    status,
+    outcome,
+    verify,
+    scope: {
+      touchpoints: scope.touchpoints ?? [],
+      nonGoals: scope.non_goals ?? [],
+    },
+    invariants,
+    stall: {
+      quietTurns: positiveInteger(stall.quiet_turns, DEFAULT_STALL.quietTurns),
+      sameFailure: positiveInteger(stall.same_failure, DEFAULT_STALL.sameFailure),
+    },
+    frontmatterHash: digest(frontmatter),
+  };
+}
+
 export function parseHookFlightPlan(text) {
   try {
-    if (typeof text !== 'string' || text.length > 1_000_000) return null;
-    const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
-    if (lines[0]?.trim() !== '---') return null;
-    const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
-    if (closing < 0) return null;
-    const frontmatter = lines.slice(1, closing).join('\n');
-    const tokens = tokensFor(frontmatter);
-    const [raw, consumed] = tokens.length ? parseBlock(tokens, 0, 0) : [{}, 0];
-    if (consumed !== tokens.length || !isMapping(raw)) return null;
-    const status = raw.status ?? 'active';
-    if (!['active', 'complete', 'blocked'].includes(status)) return null;
-    const version = raw.version ?? 1;
-    const outcome = raw.outcome ?? '';
-    const verify = raw.verify ?? [];
-    const scope = raw.scope ?? {};
-    const invariants = raw.invariants ?? [];
-    const stall = raw.stall ?? {};
-    if (
-      !Number.isSafeInteger(version) || version < 1 ||
-      typeof outcome !== 'string' || /[\r\n]/u.test(outcome) ||
-      !stringList(verify) ||
-      !isMapping(scope) ||
-      !stringList(scope.touchpoints ?? []) ||
-      !stringList(scope.non_goals ?? []) ||
-      !stringList(invariants) ||
-      !isMapping(stall)
-    ) return null;
-    return {
-      status,
-      stall: {
-        quietTurns: positiveInteger(stall.quiet_turns, DEFAULT_STALL.quietTurns),
-        sameFailure: positiveInteger(stall.same_failure, DEFAULT_STALL.sameFailure),
-      },
-      frontmatterHash: digest(frontmatter),
-    };
+    return parseHookFlightPlanStrict(text);
   } catch {
     return null;
   }
 }
 
-async function readFlightPlan(cwd, now) {
+async function inspectHookFlightPlan(cwd, now) {
   const path = join(cwd, FLIGHT_FILE);
   try {
     const [text, metadata] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
     const age = now - metadata.mtimeMs;
-    if (age < 0 || age >= MAX_FLIGHT_AGE_MS) return null;
-    return parseHookFlightPlan(text);
+    if (age < 0 || age >= MAX_FLIGHT_AGE_MS) return { state: 'absent' };
+    const contentHash = digest(text);
+    try {
+      return { state: 'valid', plan: parseHookFlightPlanStrict(text), contentHash };
+    } catch (error) {
+      return {
+        state: 'invalid',
+        reason: cleanMessage(error?.message ?? error),
+        contentHash,
+      };
+    }
   } catch (error) {
-    if (error?.code === 'ENOENT') return null;
+    if (error?.code === 'ENOENT') return { state: 'absent' };
     throw error;
   }
 }
@@ -205,8 +252,13 @@ async function ensureScratchDirectory(cwd) {
 
 async function atomicWrite(path, text) {
   const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
-  await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-  await rename(temporary, path);
+  try {
+    await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await rename(temporary, path);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
 }
 
 async function ensureGitignore(directory) {
@@ -225,6 +277,7 @@ async function ensureGitignore(directory) {
 function newState(flightHash, now) {
   return {
     version: 1,
+    host: 'claude',
     flight_hash: flightHash,
     has_observation: false,
     last_fingerprint: null,
@@ -237,33 +290,89 @@ function newState(flightHash, now) {
     turns_observed: 0,
     interventions: [],
     observations: [],
+    invalid_flight_hashes: [],
     created_at: now,
     updated_at: now,
   };
 }
 
 function validState(value) {
+  const validIntervention = (item) => item &&
+    typeof item === 'object' &&
+    ['corrective', 'realign', 'final-experiment'].includes(item.level) &&
+    Number.isFinite(item.at) &&
+    typeof item.reason === 'string';
+  const validObservation = (item) => item &&
+    typeof item === 'object' &&
+    Number.isFinite(item.at) &&
+    (item.fingerprint === null || typeof item.fingerprint === 'string') &&
+    (item.failure_signature === null || typeof item.failure_signature === 'string') &&
+    typeof item.reason === 'string' &&
+    (item.turn_id === undefined || item.turn_id === null || typeof item.turn_id === 'string') &&
+    (
+      item.verdict_level === undefined ||
+      ['ok', 'corrective', 'realign', 'final-experiment', 'stall'].includes(item.verdict_level)
+    );
   return value &&
     value.version === 1 &&
+    (value.host === undefined || value.host === 'claude') &&
     typeof value.flight_hash === 'string' &&
     typeof value.has_observation === 'boolean' &&
     (value.last_fingerprint === null || typeof value.last_fingerprint === 'string') &&
-    Array.isArray(value.seen_fingerprints) &&
+    Array.isArray(value.seen_fingerprints) && value.seen_fingerprints.length <= 32 &&
+    value.seen_fingerprints.every((item) => typeof item === 'string') &&
     (value.last_failure === null || typeof value.last_failure === 'string') &&
     Number.isInteger(value.same_failure) && value.same_failure >= 0 &&
     Number.isInteger(value.quiet_stops) && value.quiet_stops >= 0 &&
     ['normal', 'realign', 'final', 'stalled'].includes(value.ladder) &&
     Number.isInteger(value.blocks_in_cycle) && value.blocks_in_cycle >= 0 &&
     Number.isInteger(value.turns_observed) && value.turns_observed >= 0 &&
-    Array.isArray(value.interventions) && Array.isArray(value.observations);
+    Array.isArray(value.interventions) && value.interventions.length <= 32 &&
+    value.interventions.every(validIntervention) &&
+    Array.isArray(value.observations) && value.observations.length <= 32 &&
+    value.observations.every(validObservation) &&
+    Array.isArray(value.invalid_flight_hashes ?? []) &&
+    (value.invalid_flight_hashes ?? []).length <= 32 &&
+    (value.invalid_flight_hashes ?? []).every((item) => typeof item === 'string') &&
+    Number.isFinite(value.created_at) &&
+    Number.isFinite(value.updated_at) &&
+    (value.final_report === undefined || typeof value.final_report === 'string') &&
+    (
+      value.pause_outcome === undefined ||
+      (
+        value.pause_outcome &&
+        typeof value.pause_outcome === 'object' &&
+        ['paused', 'pause-failed'].includes(value.pause_outcome.status) &&
+        (
+          (value.pause_outcome.status === 'paused' && value.pause_outcome.reason === undefined) ||
+          (value.pause_outcome.status === 'pause-failed' && typeof value.pause_outcome.reason === 'string')
+        )
+      )
+    );
 }
 
-async function readState(directory, flightHash, now) {
+async function readState(directory, flightHash, now, {
+  preserveCycle = false,
+  preserveInvalidRepair = false,
+} = {}) {
   const path = join(directory, basename(STATE_FILE));
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     if (!validState(parsed)) throw new Error('supervisor scratch state is malformed');
-    return parsed.flight_hash === flightHash ? parsed : newState(flightHash, now);
+    parsed.host = 'claude';
+    if (parsed.flight_hash === flightHash) return parsed;
+    if (
+      preserveCycle ||
+      (
+        preserveInvalidRepair &&
+        typeof parsed.observations.at(-1)?.reason === 'string' &&
+        parsed.observations.at(-1).reason.startsWith('invalid flight state:')
+      )
+    ) {
+      parsed.flight_hash = flightHash;
+      return parsed;
+    }
+    return newState(flightHash, now);
   } catch (error) {
     if (error?.code === 'ENOENT') return newState(flightHash, now);
     throw error;
@@ -277,10 +386,11 @@ async function writeState(directory, state) {
 async function captureWorkspaceFingerprint(cwd) {
   try {
     const options = { cwd, encoding: 'utf8', maxBuffer: Infinity };
+    const pathspec = ['--', '.', ':(exclude).cruise/FLIGHT.md'];
     const [statusResult, diffResult, cachedResult] = await Promise.all([
-      execFileAsync('git', ['status', '--porcelain=v1'], options),
-      execFileAsync('git', ['diff'], options),
-      execFileAsync('git', ['diff', '--cached'], options),
+      execFileAsync('git', ['status', '--porcelain=v1', ...pathspec], options),
+      execFileAsync('git', ['diff', ...pathspec], options),
+      execFileAsync('git', ['diff', '--cached', ...pathspec], options),
     ]);
     return digest(`${statusResult.stdout}\u0000${diffResult.stdout}\u0000${cachedResult.stdout}`);
   } catch {
@@ -398,6 +508,26 @@ function stallMessage(state, observation, capReached = false) {
   ].join('\n');
 }
 
+function correctiveReason(reason) {
+  return [
+    `Cruise Goal supervision is currently blind because .cruise/FLIGHT.md is invalid: ${reason}.`,
+    'Rewrite .cruise/FLIGHT.md so it parses, preserving the intent already written there. Use this full canonical template:',
+    hookFlightPlanTemplate(),
+  ].join('\n\n');
+}
+
+function invalidFlightReport(state, reason, capReached) {
+  return [
+    `Cruise Goal stop supervisor allowed this stop after ${state.turns_observed} observed stops.`,
+    `Supervision was inert due to invalid flight state: ${reason}.`,
+    capReached
+      ? `The hard backstop of ${state.blocks_in_cycle} corrective blocks was reached.`
+      : 'This invalid flight-file content hash already received its one corrective intervention.',
+    'Rewrite .cruise/FLIGHT.md with valid fenced frontmatter before resuming.',
+    'The stop was allowed; this scratch state grants no authority and is safe to delete.',
+  ].join('\n');
+}
+
 export async function runStopSupervisor(input, {
   now = Date.now(),
   goalSession = process.env.CRUISE_CLAUDE_GOAL === '1',
@@ -405,12 +535,45 @@ export async function runStopSupervisor(input, {
   if (!input || input.hook_event_name !== 'Stop' || typeof input.cwd !== 'string' || !input.cwd) return null;
   if (!goalSession) return null;
   const cwd = resolve(input.cwd);
-  const flight = await readFlightPlan(cwd, now);
-  if (!flight || flight.status !== 'active') return null;
+  const inspected = await inspectHookFlightPlan(cwd, now);
+  if (inspected.state === 'absent') return null;
 
   const directory = await ensureScratchDirectory(cwd);
   await ensureGitignore(directory);
-  const state = await readState(directory, flight.frontmatterHash, now);
+  if (inspected.state === 'invalid') {
+    const state = await readState(directory, inspected.contentHash, now, { preserveCycle: true });
+    const invalidHashes = state.invalid_flight_hashes ?? [];
+    const repeated = invalidHashes.includes(inspected.contentHash);
+    const blockCap = DEFAULT_STALL.quietTurns + 2;
+    const capReached = state.blocks_in_cycle >= blockCap;
+    state.turns_observed += 1;
+    state.updated_at = now;
+    state.observations.push({
+      at: now,
+      fingerprint: null,
+      failure_signature: null,
+      reason: `invalid flight state: ${inspected.reason}`,
+    });
+    state.observations = state.observations.slice(-32);
+    let output;
+    if (repeated || capReached) {
+      state.ladder = 'stalled';
+      output = { systemMessage: invalidFlightReport(state, inspected.reason, capReached) };
+    } else {
+      state.blocks_in_cycle += 1;
+      state.invalid_flight_hashes = [...invalidHashes, inspected.contentHash].slice(-32);
+      state.interventions.push({ level: 'corrective', at: now, reason: inspected.reason });
+      state.interventions = state.interventions.slice(-32);
+      output = { decision: 'block', reason: correctiveReason(inspected.reason) };
+    }
+    await writeState(directory, state);
+    return output;
+  }
+  const flight = inspected.plan;
+  if (flight.status !== 'active') return null;
+  const state = await readState(directory, flight.frontmatterHash, now, {
+    preserveInvalidRepair: true,
+  });
   const [fingerprint, signature] = await Promise.all([
     captureWorkspaceFingerprint(cwd),
     Promise.resolve(failureSignature(input.last_assistant_message)),

@@ -1,11 +1,22 @@
 import { EventEmitter } from 'node:events';
 
-import { DEFAULT_STALL, readFlightPlan } from './flight-plan.mjs';
+import {
+  DEFAULT_STALL,
+  flightPlanTemplate,
+  inspectFlightPlan,
+} from './flight-plan.mjs';
 import {
   captureWorkspaceFingerprint,
   extractFailureSignature,
   GoalSupervisor,
+  writeCruiseScratchJson,
+  writeSupervisorState,
 } from './supervisor.mjs';
+import {
+  codexHome,
+  codexSessionsDirectory,
+  locateRollout,
+} from './trace-locator.mjs';
 
 const TERMINAL_GOAL_STATUSES = new Set([
   'paused',
@@ -48,6 +59,16 @@ const GOAL_CONTINUATION_INSTRUCTIONS = [
 ].join(' ');
 
 const MAX_TURN_AGENT_TEXT = 64 * 1024;
+export const DEFAULT_FIRST_TURN_DEADLINE_MS = 120_000;
+const DEFAULT_FIRST_TURN_CLEANUP_DEADLINE_MS = 2_000;
+
+function formatDuration(milliseconds) {
+  return milliseconds % 1_000 === 0 ? `${milliseconds / 1_000}s` : `${milliseconds}ms`;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
 
 function realignmentInstructions(reason) {
   return [
@@ -63,6 +84,14 @@ function finalExperimentInstructions(reason) {
     'Produce new workspace evidence this turn or set the Goal to blocked yourself with a concrete blocker report.',
     'This is the last supervised continuation before Cruise pauses the Goal with a stall report.',
   ].join(' ');
+}
+
+function correctiveFlightInstructions(reason) {
+  return [
+    `Cruise Goal supervision is degraded because .cruise/FLIGHT.md is invalid: ${reason}.`,
+    'Rewrite .cruise/FLIGHT.md so it parses, preserving the intent already written there. Use this full canonical template:',
+    flightPlanTemplate(),
+  ].join('\n\n');
 }
 
 function stallReport(verdict, summary, { pauseError = null } = {}) {
@@ -220,6 +249,39 @@ export class SimpleCruiseInterruptedError extends Error {
   }
 }
 
+export class SimpleCruiseGoalBootstrapTimeoutError extends Error {
+  constructor({
+    deadlineMs,
+    elapsedMs,
+    threadId,
+    model,
+    goalStatus,
+    goalReadError = null,
+    pauseError = null,
+  }) {
+    const diagnostics = [
+      `thread=${threadId ?? 'unknown'}`,
+      `model=${model ?? 'unknown'}`,
+      `goal=${goalStatus ?? 'unknown'}`,
+      `elapsed=${formatDuration(elapsedMs)}`,
+      ...(goalReadError ? [`goal-read-error=${goalReadError.message ?? goalReadError}`] : []),
+      ...(pauseError ? [`pause-error=${pauseError.message ?? pauseError}`] : []),
+    ].join(', ');
+    super(
+      `Codex never started the native Goal turn within ${formatDuration(deadlineMs)} (${diagnostics}).`,
+    );
+    this.name = 'CruiseGoalBootstrapTimeoutError';
+    this.code = 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT';
+    this.deadlineMs = deadlineMs;
+    this.elapsedMs = elapsedMs;
+    this.threadId = threadId;
+    this.model = model;
+    this.goalStatus = goalStatus;
+    this.goalReadError = goalReadError;
+    this.pauseError = pauseError;
+  }
+}
+
 /**
  * A normal Codex session. Goal is the autonomous lane: its native Goal remains
  * active across as many ordinary turns as are needed to satisfy its evidence.
@@ -239,7 +301,12 @@ export class SimpleCruiseSession extends EventEmitter {
     errorOutput = process.stderr,
     supervisor = new GoalSupervisor(),
     captureFingerprint = captureWorkspaceFingerprint,
-    readPlan = readFlightPlan,
+    readPlan = inspectFlightPlan,
+    firstTurnDeadlineMs = DEFAULT_FIRST_TURN_DEADLINE_MS,
+    firstTurnCleanupDeadlineMs = DEFAULT_FIRST_TURN_CLEANUP_DEADLINE_MS,
+    locateTrace = locateRollout,
+    traceHome = codexHome(),
+    clock = () => new Date(),
   }) {
     super();
     if (!client || !cwd || !prompt || !skill || !skillPath) {
@@ -260,6 +327,17 @@ export class SimpleCruiseSession extends EventEmitter {
     this.supervisor = supervisor;
     this.captureFingerprint = captureFingerprint;
     this.readPlan = readPlan;
+    this.supervisorFlightHash = 'absent';
+    this.firstTurnDeadlineMs = firstTurnDeadlineMs;
+    this.firstTurnCleanupDeadlineMs = firstTurnCleanupDeadlineMs;
+    this.locateTrace = locateTrace;
+    this.traceHome = traceHome;
+    this.clock = clock;
+    this.runStartedAt = null;
+    this.runFinalStatus = 'failed';
+    this.rolloutPath = null;
+    this.traceLookup = Promise.resolve();
+    this.traceRetryStarted = false;
     this.turnAgentText = '';
     this.threadId = null;
     this.threadModel = null;
@@ -267,6 +345,12 @@ export class SimpleCruiseSession extends EventEmitter {
     this.turnId = null;
     this.pending = null;
     this.earlyTurnResults = new Map();
+    this.nativeGoalTurnDeadline = null;
+    this.nativeGoalTurnWaiting = false;
+    this.nativeGoalTurnStarted = false;
+    this.nativeGoalTurnTimedOut = false;
+    this.nativeGoalCleanupCancelled = null;
+    this.nativeGoalCleanupWaits = new Set();
     this.goal = null;
     this.interrupted = false;
     this.stopping = false;
@@ -277,11 +361,13 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   async run() {
+    this.runStartedAt = this.timestamp();
     this.client.on('request', this.onRequest);
     this.client.on('notification', this.onNotification);
     this.client.on('exit', this.onExit);
     try {
       await this.client.start();
+      if (this.skill === 'goal') this.errorOutput.write('Cruise: app-server started.\n');
       const started = await this.client.request('thread/start', {
         cwd: this.cwd,
         runtimeWorkspaceRoots: [],
@@ -300,20 +386,31 @@ export class SimpleCruiseSession extends EventEmitter {
       this.threadId = started.thread.id;
       this.threadModel = started.model ?? null;
       this.threadReasoningEffort = started.reasoningEffort ?? null;
+      await this.initializeTraceSignpost();
+      if (this.skill === 'goal') {
+        // Replace any prior run's liveness scratch before this run can finish
+        // without entering the continuation loop.
+        await this.persistSupervisor();
+      }
 
       let result;
       let goalExecutionMode = false;
       let continuationCompleted = false;
       if (this.skill === 'goal') {
         await this.updateGoalMode('plan');
-        const nativeTurn = this.waitForNativeGoalTurn();
+        const goalActivated = deferred();
+        const nativeTurn = this.waitForNativeGoalTurn(goalActivated.promise);
         try {
           await this.activateGoal();
         } catch (error) {
+          goalActivated.resolve();
           this.pending?.reject(error);
           await nativeTurn.catch(() => {});
           throw error;
         }
+        this.errorOutput.write('Cruise: goal activated.\n');
+        goalActivated.resolve();
+        this.errorOutput.write('Cruise: waiting for the native Goal turn.\n');
         result = await nativeTurn;
       } else {
         result = await this.startTurn([
@@ -332,23 +429,23 @@ export class SimpleCruiseSession extends EventEmitter {
         }
         const goal = await this.refreshGoal();
         if (TERMINAL_GOAL_STATUSES.has(goal?.status)) {
-          return { status: goal.status, skill: this.skill, threadId: this.threadId, goal };
+          return this.finishResult({ status: goal.status, skill: this.skill, threadId: this.threadId, goal });
         }
         if (goal?.status !== 'active') {
           throw new Error(`Cruise Goal entered unsupported status ${String(goal?.status ?? 'missing')}.`);
         }
         if (this.goalPreparationOnly) {
           const completed = await this.completePreparedGoal(goal);
-          return {
+          return this.finishResult({
             status: completed.status,
             skill: this.skill,
             threadId: this.threadId,
             goal: completed,
-          };
+          });
         }
         let continuationInstructions = GOAL_CONTINUATION_INSTRUCTIONS;
         if (continuationCompleted) {
-          const verdict = await this.superviseGoalTurn();
+          const verdict = await this.superviseGoalTurn(result?.id ?? null);
           if (verdict.level === 'stall') {
             let pauseError = null;
             try {
@@ -356,15 +453,23 @@ export class SimpleCruiseSession extends EventEmitter {
             } catch (error) {
               pauseError = error;
             }
-            this.errorOutput.write(`${stallReport(verdict, this.supervisor.summary(), { pauseError })}\n`);
-            return {
+            const report = stallReport(verdict, this.supervisor.summary(), { pauseError });
+            this.errorOutput.write(`${report}\n`);
+            await this.persistSupervisor({
+              finalReport: report,
+              pauseOutcome: pauseError
+                ? { status: 'pause-failed', reason: String(pauseError?.message ?? pauseError) }
+                : { status: 'paused' },
+            });
+            return this.finishResult({
               status: 'stalled',
               skill: this.skill,
               threadId: this.threadId,
               goal: this.goal,
-            };
+            });
           }
-          if (verdict.level === 'realign') continuationInstructions = realignmentInstructions(verdict.reason);
+          if (verdict.level === 'corrective') continuationInstructions = correctiveFlightInstructions(verdict.reason);
+          else if (verdict.level === 'realign') continuationInstructions = realignmentInstructions(verdict.reason);
           else if (verdict.level === 'final-experiment') continuationInstructions = finalExperimentInstructions(verdict.reason);
         }
         if (!goalExecutionMode) {
@@ -384,13 +489,109 @@ export class SimpleCruiseSession extends EventEmitter {
       if (result.status !== 'completed') {
         throw new Error(`Cruise ${this.skill} ended with status ${result.status}.`);
       }
-      return { status: 'complete', skill: this.skill, threadId: this.threadId };
+      return this.finishResult({ status: 'complete', skill: this.skill, threadId: this.threadId });
+    } catch (error) {
+      this.runFinalStatus = this.interrupted
+        ? 'interrupted'
+        : error?.code === 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT'
+          ? 'bootstrap-timeout'
+          : 'failed';
+      throw error;
     } finally {
       this.stopping = true;
       this.client.off?.('request', this.onRequest);
       this.client.off?.('notification', this.onNotification);
       this.client.off?.('exit', this.onExit);
+      await this.traceLookup.catch(() => {});
+      if (this.threadId) {
+        await this.persistRunPointer({
+          finalStatus: this.runFinalStatus,
+          endedAt: this.timestamp(),
+        });
+        this.printClosingTraceSignpost();
+      }
       await this.client.stop().catch(() => {});
+    }
+  }
+
+  timestamp() {
+    const value = new Date(this.clock());
+    return Number.isNaN(value.getTime()) ? new Date().toISOString() : value.toISOString();
+  }
+
+  finishResult(result) {
+    this.runFinalStatus = result.status;
+    return result;
+  }
+
+  async initializeTraceSignpost() {
+    this.errorOutput.write(
+      `Cruise: thread ${this.threadId} started (model ${this.threadModel ?? 'unknown'}).\n`,
+    );
+    this.rolloutPath = await Promise.resolve()
+      .then(() => this.locateTrace(this.threadId, {
+        home: this.traceHome,
+        now: new Date(this.runStartedAt),
+      }))
+      .catch(() => null);
+    if (this.rolloutPath) {
+      this.printResolvedTrace('rollout');
+    } else {
+      this.errorOutput.write(
+        `Cruise: rollout pending; sessions: ${codexSessionsDirectory(this.traceHome)}; resume: codex resume ${this.threadId}.\n`,
+      );
+    }
+    await this.persistRunPointer({ finalStatus: 'running', endedAt: null });
+  }
+
+  retryTraceAfterTurnStart() {
+    if (this.traceRetryStarted || this.rolloutPath || !this.threadId) return;
+    this.traceRetryStarted = true;
+    this.traceLookup = this.traceLookup.then(async () => {
+      const path = await Promise.resolve()
+        .then(() => this.locateTrace(this.threadId, {
+          home: this.traceHome,
+          now: new Date(this.clock()),
+        }))
+        .catch(() => null);
+      if (!path) return;
+      this.rolloutPath = path;
+      this.printResolvedTrace('rollout');
+      await this.persistRunPointer({ finalStatus: 'running', endedAt: null });
+    });
+  }
+
+  printResolvedTrace(label) {
+    this.errorOutput.write(
+      `Cruise: ${label}: ${this.rolloutPath}; tail -f ${shellQuote(this.rolloutPath)}.\n`,
+    );
+  }
+
+  printClosingTraceSignpost() {
+    if (this.rolloutPath) {
+      this.printResolvedTrace('trace');
+      return;
+    }
+    this.errorOutput.write(
+      `Cruise: trace unresolved for thread ${this.threadId}; sessions: ${codexSessionsDirectory(this.traceHome)}; resume: codex resume ${this.threadId}.\n`,
+    );
+  }
+
+  async persistRunPointer({ finalStatus, endedAt }) {
+    try {
+      await writeCruiseScratchJson(this.cwd, 'LAST-RUN.json', {
+        thread_id: this.threadId,
+        rollout_path: this.rolloutPath,
+        cwd: this.cwd,
+        skill: this.skill,
+        started_at: this.runStartedAt,
+        ended_at: endedAt,
+        final_status: finalStatus,
+      });
+    } catch (error) {
+      this.errorOutput.write(
+        `Cruise warning: could not persist run pointer: ${String(error?.message ?? error).replace(/\s+/gu, ' ').trim()}.\n`,
+      );
     }
   }
 
@@ -472,6 +673,7 @@ export class SimpleCruiseSession extends EventEmitter {
   async startTurn(input, { mode = null } = {}) {
     this.turnAgentText = '';
     const completion = deferred();
+    completion.promise.catch(() => {});
     this.turnId = null;
     this.pending = completion;
     try {
@@ -499,17 +701,120 @@ export class SimpleCruiseSession extends EventEmitter {
     }
   }
 
-  async waitForNativeGoalTurn() {
+  clearNativeGoalTurnDeadline() {
+    if (this.nativeGoalTurnDeadline !== null) {
+      clearTimeout(this.nativeGoalTurnDeadline);
+      this.nativeGoalTurnDeadline = null;
+    }
+  }
+
+  waitWithinBootstrapCleanup(promise, deadlineMs, label, reportedDeadlineMs = deadlineMs) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer = null;
+      let entry;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        this.nativeGoalCleanupWaits.delete(entry);
+        callback(value);
+      };
+      entry = {
+        cancel: (error) => finish(reject, error),
+      };
+      this.nativeGoalCleanupWaits.add(entry);
+      Promise.resolve(promise).then(
+        (value) => finish(resolve, value),
+        (error) => finish(reject, error),
+      );
+      if (this.nativeGoalCleanupCancelled) {
+        entry.cancel(this.nativeGoalCleanupCancelled);
+      } else {
+        timer = setTimeout(() => {
+          finish(reject, new Error(
+            `${label} did not settle within ${formatDuration(reportedDeadlineMs)}.`,
+          ));
+        }, deadlineMs);
+      }
+    });
+  }
+
+  cancelNativeGoalCleanup(error) {
+    this.nativeGoalCleanupCancelled = error;
+    for (const entry of [...this.nativeGoalCleanupWaits]) entry.cancel(error);
+  }
+
+  async expireNativeGoalTurnDeadline(completion, startedAt) {
+    if (this.pending !== completion || this.nativeGoalTurnStarted) return;
+    this.nativeGoalTurnTimedOut = true;
+    const cleanupDeadline = Date.now() + this.firstTurnCleanupDeadlineMs;
+    const remainingCleanupMs = () => Math.max(0, cleanupDeadline - Date.now());
+    let goalStatus = this.goal?.status ?? 'unknown';
+    let goalReadError = null;
+    try {
+      const current = await this.waitWithinBootstrapCleanup(
+        this.client.request('thread/goal/get', { threadId: this.threadId }),
+        remainingCleanupMs(),
+        'thread/goal/get after the native Goal bootstrap timeout',
+        this.firstTurnCleanupDeadlineMs,
+      );
+      this.goal = current?.goal ?? null;
+      goalStatus = this.goal?.status ?? 'missing';
+    } catch (error) {
+      goalReadError = error;
+    }
+    if (this.pending !== completion || this.nativeGoalCleanupCancelled) return;
+    let pauseError = null;
+    try {
+      await this.waitWithinBootstrapCleanup(
+        this.pauseActiveGoal(),
+        remainingCleanupMs(),
+        'Goal pause after the native Goal bootstrap timeout',
+        this.firstTurnCleanupDeadlineMs,
+      );
+    } catch (error) {
+      pauseError = error;
+    }
+    if (this.pending !== completion || this.nativeGoalCleanupCancelled) return;
+    completion.reject(new SimpleCruiseGoalBootstrapTimeoutError({
+      deadlineMs: this.firstTurnDeadlineMs,
+      elapsedMs: Date.now() - startedAt,
+      threadId: this.threadId,
+      model: this.threadModel,
+      goalStatus,
+      goalReadError,
+      pauseError,
+    }));
+  }
+
+  async waitForNativeGoalTurn(goalActivated = Promise.resolve()) {
     const completion = deferred();
     this.turnId = null;
     this.pending = completion;
+    this.nativeGoalTurnWaiting = true;
+    this.nativeGoalTurnStarted = false;
+    this.nativeGoalTurnTimedOut = false;
+    this.nativeGoalCleanupCancelled = null;
     try {
+      await goalActivated;
+      if (!this.nativeGoalTurnStarted && this.pending === completion) {
+        const startedAt = Date.now();
+        this.nativeGoalTurnDeadline = setTimeout(() => {
+          this.nativeGoalTurnDeadline = null;
+          void this.expireNativeGoalTurnDeadline(completion, startedAt);
+        }, this.firstTurnDeadlineMs);
+      }
       return await completion.promise;
     } finally {
+      this.clearNativeGoalTurnDeadline();
       if (this.pending === completion) {
         this.pending = null;
         this.earlyTurnResults.clear();
       }
+      this.nativeGoalTurnWaiting = false;
+      this.nativeGoalTurnStarted = false;
+      this.nativeGoalTurnTimedOut = false;
     }
   }
 
@@ -536,6 +841,11 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async interrupt() {
     this.interrupted = true;
+    this.clearNativeGoalTurnDeadline();
+    const interruption = new SimpleCruiseInterruptedError();
+    this.cancelNativeGoalCleanup(interruption);
+    this.pending?.reject(interruption);
+    this.client.interrupt?.();
     this.lineReader?.cancel?.('ctrl-c');
     if (this.threadId && this.turnId) {
       await this.client.request('turn/interrupt', {
@@ -544,7 +854,6 @@ export class SimpleCruiseSession extends EventEmitter {
       }).catch(() => {});
     }
     await this.pauseActiveGoal().catch(() => {});
-    this.pending?.reject(new SimpleCruiseInterruptedError());
   }
 
   async pauseActiveGoal() {
@@ -561,16 +870,49 @@ export class SimpleCruiseSession extends EventEmitter {
     this.goal = paused?.goal ?? { ...current, status: 'paused' };
   }
 
-  async superviseGoalTurn() {
-    const [plan, fingerprint] = await Promise.all([
-      Promise.resolve().then(() => this.readPlan(this.cwd)).catch(() => null),
-      Promise.resolve().then(() => this.captureFingerprint(this.cwd)).catch(() => null),
-    ]);
+  async superviseGoalTurn(turnId = null) {
+    const rawInspection = await Promise.resolve()
+      .then(() => this.readPlan(this.cwd))
+      .catch(() => null);
+    const inspection = rawInspection?.state
+      ? rawInspection
+      : rawInspection
+        ? { state: 'valid', plan: rawInspection, contentHash: 'valid-unhashed' }
+        : { state: 'absent' };
+    const fingerprint = await Promise.resolve()
+      .then(() => this.captureFingerprint(this.cwd, {
+        // FLIGHT.md is advisory supervisor metadata, never product progress.
+        excludeFlightPlan: true,
+      }))
+      .catch(() => null);
+    const plan = inspection.state === 'valid' ? inspection.plan : null;
+    this.supervisorFlightHash = inspection.contentHash ?? inspection.state;
     this.supervisor.updateStall(plan?.stall ?? DEFAULT_STALL);
-    return this.supervisor.recordTurn({
+    const verdict = this.supervisor.recordTurn({
       fingerprint,
       failureSignature: extractFailureSignature(this.turnAgentText),
+      turnId,
+      corrective: inspection.state === 'invalid'
+        ? { contentHash: inspection.contentHash, reason: inspection.reason }
+        : null,
     });
+    if (inspection.state === 'invalid') {
+      this.errorOutput.write(`Cruise warning: supervision degraded: invalid .cruise/FLIGHT.md (${inspection.reason}).\n`);
+    }
+    await this.persistSupervisor();
+    return verdict;
+  }
+
+  async persistSupervisor({ finalReport = null, pauseOutcome = null } = {}) {
+    try {
+      await writeSupervisorState(this.cwd, this.supervisor.state({
+        flightHash: this.supervisorFlightHash,
+        finalReport,
+        pauseOutcome,
+      }));
+    } catch (error) {
+      this.errorOutput.write(`Cruise warning: could not persist supervisor scratch: ${String(error?.message ?? error).replace(/\s+/gu, ' ').trim()}.\n`);
+    }
   }
 
   enqueueRequest(message) {
@@ -585,25 +927,25 @@ export class SimpleCruiseSession extends EventEmitter {
     if (message.method === 'item/tool/requestUserInput') {
       result = this.skill === 'goal' ? automaticGoalProgress(message.params) : null;
       if (result === null) {
-        result = await answerUserInput(message.params, {
+        result = await this.awaitHumanInput(() => answerUserInput(message.params, {
           pickOne: this.pickOne,
           readLine: this.readLine,
           input: this.input,
           output: this.errorOutput,
           lineReader: this.lineReader,
-        });
+        }));
       }
     } else if ([
       'item/commandExecution/requestApproval',
       'item/fileChange/requestApproval',
       'item/permissions/requestApproval',
     ].includes(message.method)) {
-      const decision = await answerApproval(message.params, {
+      const decision = await this.awaitHumanInput(() => answerApproval(message.params, {
         pickOne: this.pickOne,
         input: this.input,
         output: this.errorOutput,
         lineReader: this.lineReader,
-      });
+      }));
       result = message.method === 'item/permissions/requestApproval'
         ? { permissions: decision === 'accept' ? message.params.permissions ?? {} : {}, scope: 'turn' }
         : { decision };
@@ -616,6 +958,15 @@ export class SimpleCruiseSession extends EventEmitter {
     this.client.respond(message.id, result);
   }
 
+  async awaitHumanInput(callback) {
+    this.client.pauseInactivityWatchdog?.();
+    try {
+      return await callback();
+    } finally {
+      this.client.resumeInactivityWatchdog?.();
+    }
+  }
+
   handleNotification(message) {
     const params = message.params ?? {};
     if (params.threadId && this.threadId && params.threadId !== this.threadId) return;
@@ -626,7 +977,17 @@ export class SimpleCruiseSession extends EventEmitter {
         this.turnAgentText += delta.slice(0, MAX_TURN_AGENT_TEXT - this.turnAgentText.length);
       }
     } else if (message.method === 'turn/started') {
-      if (this.pending && this.turnId === null && params.turn?.id) {
+      this.retryTraceAfterTurnStart();
+      if (
+        this.pending &&
+        this.turnId === null &&
+        params.turn?.id &&
+        (!this.nativeGoalTurnWaiting || !this.nativeGoalTurnTimedOut)
+      ) {
+        if (this.nativeGoalTurnWaiting) {
+          this.nativeGoalTurnStarted = true;
+          this.clearNativeGoalTurnDeadline();
+        }
         this.turnId = params.turn.id;
         this.resolveEarlyTurnResult(params.turn.id);
       }
@@ -643,7 +1004,10 @@ export class SimpleCruiseSession extends EventEmitter {
 
   handleExit(info = {}) {
     if (!this.stopping) {
-      this.pending?.reject(new Error(`Codex app-server exited (${info.code ?? 'unknown'}).`));
+      const error = info.error ?? new Error(`Codex app-server exited (${info.code ?? 'unknown'}).`);
+      this.clearNativeGoalTurnDeadline();
+      this.cancelNativeGoalCleanup(error);
+      this.pending?.reject(error);
     }
   }
 }

@@ -43,7 +43,7 @@ reduce supervision, but cannot trap the session. The hook command itself has a
 | `.cruise/QUEUE.md` | 1 MB, 5,000 frontmatter tokens, nesting depth 12 | Parser returns no queue; queue commands stop with an invalid/missing-queue error. |
 | Claude Stop-hook JSON input | 1 MB | Hook catches the error, allows the stop, and emits a fail-open system message. |
 | Codex captured agent text per turn | 64 KiB | Additional text is not used for failure-signature supervision. |
-| Claude supervisor history | Last 32 fingerprints and observations | Old derived observations are dropped; authority and repository state are unaffected. |
+| Supervisor scratch histories | Last 32 fingerprints, observations (including failure signatures), interventions, and invalid-flight hashes | Older derived evidence is dropped; invalid-flight correction still reaches the normal Codex ladder or Claude's five-block fallback, and authority and repository state are unaffected. |
 
 Flight and queue writers reject symlink targets and require `.cruise` to be a
 real directory. These are path-safety boundaries, not workload budgets.
@@ -56,7 +56,9 @@ real directory. These are path-safety boundaries, not workload budgets.
 | Codex app-server shutdown | Bounded graceful/terminate/kill cleanup stages; cancellation remains available. |
 | Worker level | Integer 1–7, mapped request-locally to a provider model/effort pair. |
 | Queue execution | Sequential; stops at active, blocked, stalled, failed, or dependency-deadlocked work. No milestone-attempt budget is stored. |
-| Launcher exits | `0` complete, `2` blocked/failed, `3` stalled, `130` interrupted. |
+| Codex native Goal bootstrap | 120-second first-turn deadline, starting after Goal activation. On expiry Cruise uses a fixed 2-second budget to read the current Goal and attempt to pause it, then reports thread/model/status/elapsed diagnostics and exits `4`; timers are cancelled on turn start, interruption, error, and app-server exit. |
+| Codex app-server transport inactivity | Liveness-and-recovery bound sourced from observed inbound JSONL frames, not a workload budget. The request-scoped default is 300 seconds, tunable with `CRUISE_INACTIVITY_TIMEOUT_MS`; human-input waits suspend it. Expiry terminates the session with thread/turn/Goal/stderr-tail evidence and exits `5`. |
+| Launcher exits | `0` complete, `2` blocked/failed, `3` stalled, `4` Goal bootstrap timeout, `5` transport inactivity, `130` interrupted. |
 
 Service quotas, model context windows, Claude hook timeouts, Codex host limits,
 OS limits, and external API policies remain host or protocol constraints.

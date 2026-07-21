@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  atomicWriteText,
   captureWorkspaceFingerprint,
   extractFailureSignature,
   GoalSupervisor,
+  MAX_SUPERVISOR_HISTORY,
+  validSupervisorState,
 } from '../scripts/lib/supervisor.mjs';
 
 test('new workspace evidence is progress and resets an active ladder', () => {
@@ -33,6 +37,23 @@ test('quiet turns climb once through realign, final experiment, and stall', () =
   assert.match(supervisor.summary().interventions[0].reason, /unchanged for 2 consecutive turns/u);
   assert.deepEqual(supervisor.summary().interventions.map(({ level }) => level), [
     'realign',
+    'final-experiment',
+  ]);
+});
+
+test('an invalid-flight correction replaces rather than duplicates a ladder intervention', () => {
+  const supervisor = new GoalSupervisor({ stall: { quietTurns: 1, sameFailure: 9 }, now: () => 10 });
+  assert.equal(supervisor.recordTurn({ fingerprint: 'same' }).level, 'ok');
+  const corrected = supervisor.recordTurn({
+    fingerprint: 'same',
+    corrective: { contentHash: 'invalid-one', reason: 'invalid frontmatter' },
+  });
+  assert.equal(corrected.level, 'corrective');
+  assert.deepEqual(supervisor.summary().interventions.map(({ level }) => level), ['corrective']);
+  assert.equal(supervisor.state().observations.at(-1).verdict_level, 'corrective');
+  assert.equal(supervisor.recordTurn({ fingerprint: 'same' }).level, 'final-experiment');
+  assert.deepEqual(supervisor.summary().interventions.map(({ level }) => level), [
+    'corrective',
     'final-experiment',
   ]);
 });
@@ -81,6 +102,24 @@ test('workspace fingerprinting is disabled without a git repository', async () =
   }
 });
 
+test('invalid flight rewrites do not hide real workspace progress', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-flight-exclusion-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(join(cwd, '.cruise'));
+  await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), 'invalid one\n', 'utf8');
+  await writeFile(join(cwd, 'work.txt'), 'before\n', 'utf8');
+  const initialized = spawnSync('git', ['init', '--quiet'], { cwd, encoding: 'utf8' });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const added = spawnSync('git', ['add', '.'], { cwd, encoding: 'utf8' });
+  assert.equal(added.status, 0, added.stderr);
+
+  const baseline = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), 'invalid two\n', 'utf8');
+  assert.equal(await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }), baseline);
+  await writeFile(join(cwd, 'work.txt'), 'after\n', 'utf8');
+  assert.notEqual(await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }), baseline);
+});
+
 test('failure signatures ignore paths, line numbers, hex values, and whitespace', () => {
   const first = 'Error: parser failed at /Users/alice/app/parser.js:142 id deadbeef1234';
   const second = 'ERROR:   parser failed at /opt/build/parser.js:987 id cafe01234567';
@@ -91,4 +130,54 @@ test('failure signatures ignore paths, line numbers, hex values, and whitespace'
   );
   assert.equal(extractFailureSignature('Everything passed.'), null);
   assert.equal(extractFailureSignature(null), null);
+});
+
+test('Codex supervisor state is schema-valid and bounds every retained history', () => {
+  const supervisor = new GoalSupervisor({ stall: { quietTurns: 999, sameFailure: 999 } });
+  for (let index = 0; index < 100; index += 1) {
+    supervisor.recordTurn({
+      fingerprint: `fingerprint-${index}`,
+      failureSignature: `failure-${index}`,
+      turnId: `turn-${index}`,
+      at: index,
+    });
+  }
+  const state = supervisor.state({ flightHash: 'flight-hash' });
+  assert.equal(validSupervisorState(state), true);
+  assert.equal(state.interventions.length, 0);
+  assert.equal(state.seen_fingerprints.length, MAX_SUPERVISOR_HISTORY);
+  assert.equal(state.observations.length, MAX_SUPERVISOR_HISTORY);
+  assert.equal(state.observations.at(-1).turn_id, 'turn-99');
+  assert.equal(state.observations.at(-1).verdict_level, 'ok');
+
+  const malformed = structuredClone(state);
+  malformed.observations[0].failure_signature = 42;
+  assert.equal(validSupervisorState(malformed), false);
+});
+
+test('supervisor scratch uses temp-then-rename atomic replacement', async () => {
+  const calls = [];
+  await atomicWriteText('/tmp/.supervisor.json', '{}\n', {
+    pid: 7,
+    now: () => 42,
+    async write(path, text, options) { calls.push(['write', path, text, options]); },
+    async move(from, to) { calls.push(['rename', from, to]); },
+  });
+  assert.equal(calls[0][0], 'write');
+  assert.match(calls[0][1], /^\/tmp\/\.\.supervisor\.json\.7\.42\.\d+\.tmp$/u);
+  assert.deepEqual(calls[0][3], { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  assert.deepEqual(calls[1], ['rename', calls[0][1], '/tmp/.supervisor.json']);
+});
+
+test('failed supervisor replacement cleans its unique temp file', async () => {
+  let temporary;
+  let removed;
+  await assert.rejects(atomicWriteText('/tmp/.supervisor.json', '{}\n', {
+    pid: 8,
+    now: () => 43,
+    async write(path) { temporary = path; },
+    async move() { throw new Error('simulated rename failure'); },
+    async remove(path) { removed = path; },
+  }), /simulated rename failure/u);
+  assert.equal(removed, temporary);
 });

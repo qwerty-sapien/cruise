@@ -7,7 +7,10 @@ import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { AppServerClient } from './lib/app-server-client.mjs';
+import {
+  AppServerClient,
+  AppServerInactivityError,
+} from './lib/app-server-client.mjs';
 import { runClaudeSession, runClaudeWorker } from './lib/claude-cli.mjs';
 import { readFlightPlan, writeFlightPlan } from './lib/flight-plan.mjs';
 import { writeOriginPrompt } from './lib/origin-note.mjs';
@@ -20,6 +23,7 @@ import {
   writeQueue,
 } from './lib/queue.mjs';
 import {
+  SimpleCruiseGoalBootstrapTimeoutError,
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
 } from './lib/simple-session.mjs';
@@ -52,6 +56,9 @@ Cruise has no approval authority, archive, run-control YAML, digest, or retry
 ledger. The selected host's native permissions remain the authority for work
 and effects. Codex is the default; CRUISE_PROVIDER may set a request-scoped
 default to codex or claude.
+
+Exit codes: 0 complete, 2 blocked/failed, 3 stalled, 4 Goal bootstrap timeout,
+5 transport inactivity, 130 interrupted.
 `;
 
 function displayError(value) {
@@ -177,6 +184,29 @@ export async function readLineOnce({ prompt, input = process.stdin, output = pro
   }
 }
 
+export function surfaceAppServerStderr(client, output = process.stderr) {
+  let atLineStart = true;
+  const onStderr = (chunk) => {
+    const value = String(chunk);
+    let prefixed = '';
+    for (let offset = 0; offset < value.length;) {
+      if (atLineStart) prefixed += 'codex: ';
+      const newline = value.indexOf('\n', offset);
+      if (newline < 0) {
+        prefixed += value.slice(offset);
+        atLineStart = false;
+        break;
+      }
+      prefixed += value.slice(offset, newline + 1);
+      atLineStart = true;
+      offset = newline + 1;
+    }
+    if (prefixed) output.write(prefixed);
+  };
+  client.on?.('stderr', onStderr);
+  return () => client.off?.('stderr', onStderr);
+}
+
 async function validateWorkingDirectory(cwd) {
   const metadata = await stat(cwd);
   if (!metadata.isDirectory()) throw new Error(`Not a directory: ${cwd}`);
@@ -212,6 +242,7 @@ async function runHostedSession(
       process.stderr.write(`Cruise warning: ${displayError(error.message)}\n`);
     },
   });
+  const stopSurfacingStderr = surfaceAppServerStderr(client);
   const session = sessionFactory({
     client,
     cwd,
@@ -231,9 +262,18 @@ async function runHostedSession(
     };
   } catch (error) {
     if (error instanceof SimpleCruiseInterruptedError) return { status: 'interrupted', exitCode: 130 };
+    if (error instanceof SimpleCruiseGoalBootstrapTimeoutError) {
+      process.stderr.write(`cruise: ${displayError(error.message)}\n`);
+      return { status: 'failed', exitCode: 4 };
+    }
+    if (error instanceof AppServerInactivityError || error?.code === 'CRUISE_TRANSPORT_INACTIVITY') {
+      process.stderr.write(`cruise: ${displayError(error.message)}\n`);
+      return { status: 'failed', exitCode: 5 };
+    }
     throw error;
   } finally {
     process.removeListener('SIGINT', onSigint);
+    stopSurfacingStderr();
   }
 }
 
@@ -389,50 +429,63 @@ export async function runWorker(options, {
     onOutput(delta) {
       process.stdout.write(delta);
     },
-    onServerRequest: (message) => answerWorkerRequest(message),
+    onServerRequest: (message, client) => answerWorkerRequest(message, { client }),
   });
   if (result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
   return 0;
 }
 
-async function answerWorkerRequest(message) {
+async function answerWorkerRequest(message, { client = null } = {}) {
   const params = message.params ?? {};
   if (message.method === 'item/tool/requestUserInput') {
-    const answers = {};
-    for (const question of params.questions ?? []) {
-      const options = Array.isArray(question.options) ? question.options : [];
-      if (options.length > 0) {
-        const selection = await pickOne({
-          title: `${question.header ?? ''}: ${question.question ?? ''}`.replace(/^: /u, ''),
-          options,
-        });
-        const value = selection?.value ?? selection?.label;
-        if (value == null) throw new SimpleCruiseInterruptedError();
-        answers[question.id] = { answers: [String(value)] };
-      } else {
-        answers[question.id] = { answers: [await readLineOnce({ prompt: `${question.question}: ` })] };
+    return awaitHumanInput(client, async () => {
+      const answers = {};
+      for (const question of params.questions ?? []) {
+        const options = Array.isArray(question.options) ? question.options : [];
+        if (options.length > 0) {
+          const selection = await pickOne({
+            title: `${question.header ?? ''}: ${question.question ?? ''}`.replace(/^: /u, ''),
+            options,
+          });
+          const value = selection?.value ?? selection?.label;
+          if (value == null) throw new SimpleCruiseInterruptedError();
+          answers[question.id] = { answers: [String(value)] };
+        } else {
+          answers[question.id] = { answers: [await readLineOnce({ prompt: `${question.question}: ` })] };
+        }
       }
-    }
-    return { answers };
+      return { answers };
+    });
   }
   if ([
     'item/commandExecution/requestApproval',
     'item/fileChange/requestApproval',
     'item/permissions/requestApproval',
   ].includes(message.method)) {
-    const selection = await pickOne({
-      title: params.reason ?? params.command ?? 'Approve this action?',
-      options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
-        label: String(value),
-        value,
-      })),
+    return awaitHumanInput(client, async () => {
+      const selection = await pickOne({
+        title: params.reason ?? params.command ?? 'Approve this action?',
+        options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
+          label: String(value),
+          value,
+        })),
+      });
+      const decision = selection?.value ?? selection?.label ?? 'decline';
+      return message.method === 'item/permissions/requestApproval'
+        ? { permissions: decision === 'accept' ? params.permissions ?? {} : {}, scope: 'turn' }
+        : { decision };
     });
-    const decision = selection?.value ?? selection?.label ?? 'decline';
-    return message.method === 'item/permissions/requestApproval'
-      ? { permissions: decision === 'accept' ? params.permissions ?? {} : {}, scope: 'turn' }
-      : { decision };
   }
   throw new Error(`Cruise worker does not support ${message.method}`);
+}
+
+async function awaitHumanInput(client, callback) {
+  client?.pauseInactivityWatchdog?.();
+  try {
+    return await callback();
+  } finally {
+    client?.resumeInactivityWatchdog?.();
+  }
 }
 
 function command(command, args) {

@@ -33,15 +33,28 @@
     "scripts/lib/simple-session.mjs",
     "scripts/lib/simple-worker.mjs",
     "scripts/lib/supervisor.mjs",
+    "scripts/lib/trace-locator.mjs",
     "scripts/lib/worker-policy.mjs",
     "skills/"
   ],
   "scripts": {
-    "test": "node --test tests/app-server-client.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs",
+    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs",
     "validate": "npm test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-code": "*",
+    "@openai/codex": "*"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-code": {
+      "optional": true
+    },
+    "@openai/codex": {
+      "optional": true
+    }
   },
   "license": "MIT",
   "keywords": [

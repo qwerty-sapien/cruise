@@ -6,6 +6,11 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { parseHookFlightPlan } from '../hooks/stop-supervisor.mjs';
+import {
+  GoalSupervisor,
+  validSupervisorState,
+  writeSupervisorState,
+} from '../scripts/lib/supervisor.mjs';
 
 const HOOK = resolve('hooks/stop-supervisor.mjs');
 
@@ -35,7 +40,7 @@ async function fixture(options = {}) {
   return cwd;
 }
 
-function invoke(cwd, overrides = {}, { goalSession = true } = {}) {
+function invokeProcess(cwd, overrides = {}, { goalSession = true } = {}) {
   const input = {
     session_id: 'fixture-session',
     transcript_path: join(cwd, 'transcript.jsonl'),
@@ -56,6 +61,11 @@ function invoke(cwd, overrides = {}, { goalSession = true } = {}) {
     env,
   });
   assert.equal(result.status, 0, result.stderr);
+  return result;
+}
+
+function invoke(cwd, overrides = {}, options = {}) {
+  const result = invokeProcess(cwd, overrides, options);
   return result.stdout ? JSON.parse(result.stdout) : null;
 }
 
@@ -91,6 +101,15 @@ test('missing, complete, and blocked flight plans leave non-active sessions iner
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
+  }
+});
+
+test('an absent flight plan emits byte-identical empty hook stdout', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    assert.equal(invokeProcess(cwd).stdout, '');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
   }
 });
 
@@ -211,7 +230,7 @@ test('hook registration uses the standalone plugin-root command form', async () 
   });
 });
 
-test('unsafe stall integers fall back instead of defeating the block cap', () => {
+test('unsafe stall integers are invalid instead of defeating the block cap', () => {
   const plan = parseHookFlightPlan(`---
 status: active
 stall:
@@ -219,7 +238,7 @@ stall:
   same_failure: ${'9'.repeat(400)}
 ---
 `);
-  assert.deepEqual(plan.stall, { quietTurns: 3, sameFailure: 3 });
+  assert.equal(plan, null);
 });
 
 test('malformed or schema-invalid frontmatter never activates supervision', () => {
@@ -231,4 +250,143 @@ test('malformed or schema-invalid frontmatter never activates supervision', () =
     '---\nstatus: active\noutcome: "two\\nlines"\n---\n',
   ];
   for (const text of malformed) assert.equal(parseHookFlightPlan(text), null);
+});
+
+test('the fenceless pilot artifact receives one bounded corrective intervention', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    const pilot = await readFile(resolve(
+      'evals/results/2026-07-21/raw/claude-v302-y-r1/FLIGHT.md',
+    ), 'utf8');
+    await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), pilot, 'utf8');
+
+    const first = invoke(cwd);
+    assert.equal(first.decision, 'block');
+    assert.match(first.reason, /supervision is currently blind/iu);
+    assert.match(first.reason, /missing opening.*frontmatter fence/iu);
+    assert.match(first.reason, /quiet_turns: 3/u);
+
+    const repeated = [invoke(cwd), invoke(cwd), invoke(cwd), invoke(cwd)];
+    assert.equal(repeated.every((item) => item.decision === undefined), true);
+    assert.equal(repeated.every((item) => /invalid flight state/iu.test(item.systemMessage)), true);
+    const state = JSON.parse(await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'));
+    assert.deepEqual(state.interventions.map(({ level }) => level), ['corrective']);
+    assert.equal(state.blocks_in_cycle, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('a successful invalid-flight repair preserves its correction and block budget', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), 'status: active\n', 'utf8');
+    assert.equal(invoke(cwd).decision, 'block');
+    await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), flight({ quietTurns: 1 }), 'utf8');
+
+    const afterRepair = invoke(cwd);
+    assert.equal(afterRepair.decision, 'block');
+    const state = JSON.parse(await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'));
+    assert.equal(state.blocks_in_cycle, 2);
+    assert.deepEqual(state.interventions.map(({ level }) => level), ['corrective']);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('invalid rewrites earn one correction each until the hard block cap', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    const outputs = [];
+    for (let index = 0; index < 6; index += 1) {
+      await writeFile(
+        join(cwd, '.cruise', 'FLIGHT.md'),
+        `# Invalid flight rewrite ${index}\nstatus: active\n`,
+        'utf8',
+      );
+      outputs.push(invoke(cwd));
+    }
+    assert.equal(outputs.slice(0, 5).every((item) => item.decision === 'block'), true);
+    assert.equal(outputs[5].decision, undefined);
+    assert.match(outputs[5].systemMessage, /hard backstop of 5 corrective blocks/u);
+    const state = JSON.parse(await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'));
+    assert.equal(state.blocks_in_cycle, 5);
+    assert.equal(state.interventions.length, 5);
+    assert.equal(state.invalid_flight_hashes.length, 5);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('a valid repair after an unseen invalid hash at the cap cannot reset the exhausted cycle', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    for (let index = 0; index < 6; index += 1) {
+      await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), `invalid rewrite ${index}\n`, 'utf8');
+      invoke(cwd);
+    }
+    await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), flight(), 'utf8');
+
+    const repaired = invoke(cwd);
+    assert.equal(repaired.decision, undefined);
+    assert.match(repaired.systemMessage, /allowed this stop/u);
+    const state = JSON.parse(await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'));
+    assert.equal(state.blocks_in_cycle, 5);
+    assert.equal(state.turns_observed, 7);
+    assert.equal(state.interventions.length, 5);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('Claude and Codex scratch files satisfy one bounded supervisor schema', async () => {
+  const claudeCwd = await fixture();
+  const codexCwd = await mkdtemp(join(tmpdir(), 'cruise-codex-schema-'));
+  try {
+    invoke(claudeCwd);
+    const claude = JSON.parse(await readFile(join(claudeCwd, '.cruise', '.supervisor.json'), 'utf8'));
+    const supervisor = new GoalSupervisor({ stall: { quietTurns: 3, sameFailure: 3 } });
+    supervisor.recordTurn({ fingerprint: 'codex-fingerprint', turnId: 'turn-1', at: 10 });
+    await writeSupervisorState(codexCwd, supervisor.state({ flightHash: 'codex-flight' }));
+    const codex = JSON.parse(await readFile(join(codexCwd, '.cruise', '.supervisor.json'), 'utf8'));
+
+    assert.equal(validSupervisorState(claude), true);
+    assert.equal(validSupervisorState(codex), true);
+    assert.equal(claude.host, 'claude');
+    assert.equal(codex.host, 'codex');
+    const required = [
+      'version', 'host', 'flight_hash', 'has_observation', 'last_fingerprint',
+      'seen_fingerprints', 'last_failure', 'same_failure', 'quiet_stops', 'ladder',
+      'blocks_in_cycle', 'turns_observed', 'interventions', 'observations',
+      'created_at', 'updated_at',
+    ];
+    for (const field of required) {
+      assert.equal(Object.hasOwn(claude, field), true, `Claude missing ${field}`);
+      assert.equal(Object.hasOwn(codex, field), true, `Codex missing ${field}`);
+    }
+    const malformedClaude = structuredClone(claude);
+    malformedClaude.interventions = [{ level: 'invented', at: 10, reason: 'not in schema' }];
+    assert.equal(validSupervisorState(malformedClaude), false);
+  } finally {
+    await rm(claudeCwd, { recursive: true, force: true });
+    await rm(codexCwd, { recursive: true, force: true });
+  }
+});
+
+test('adding the Claude host field preserves an existing pre-field supervision cycle', async () => {
+  const cwd = await fixture({ quietTurns: 1 });
+  try {
+    assert.equal(invoke(cwd).decision, 'block');
+    const path = join(cwd, '.cruise', '.supervisor.json');
+    const legacy = JSON.parse(await readFile(path, 'utf8'));
+    delete legacy.host;
+    await writeFile(path, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8');
+
+    const continued = invoke(cwd);
+    assert.equal(continued.decision, 'block');
+    assert.match(continued.reason, /realignment|non-progress/iu);
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).host, 'claude');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 });

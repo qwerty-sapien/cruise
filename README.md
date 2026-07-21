@@ -76,6 +76,8 @@ Launcher exit codes are stable:
 | `0` | Completed successfully. |
 | `2` | Blocked or otherwise unable to complete. |
 | `3` | Bounded supervision declared the Goal or queue milestone stalled. |
+| `4` | Codex did not start the native Goal turn before the bootstrap deadline. |
+| `5` | Codex app-server transport produced no inbound frame before the inactivity deadline. |
 | `130` | The user interrupted the session. |
 
 ## Build queues
@@ -195,8 +197,25 @@ model/effort pair for that worker only.
 | The launcher cannot start | Run `cruise --codex doctor` or `cruise --claude doctor`. |
 | The wrong host opens | Remove conflicting selectors and inspect `CRUISE_PROVIDER`; Codex is the fallback. |
 | Goal exited `3` (stalled) | Read the stall report and last failure, adjust the advisory flight if its scope or tuning is stale, supply the missing decision/evidence, then resume explicitly. |
+| Goal exited `4` (bootstrap timeout) | Codex did not start the native Goal turn within 120 seconds. Read the reported thread, model, Goal status, and elapsed-time diagnostics; Cruise attempts to pause the active Goal before exiting. |
 | The Claude Stop hook keeps continuing my session | Set `status: complete` or `status: blocked` in `.cruise/FLIGHT.md`, or delete that file. The hook acts only on a fresh `active` flight when `CRUISE_CLAUDE_GOAL=1`. |
 | A Claude Goal cannot be paused as an object | Claude has resumable sessions, not Codex's Goal lifecycle; use `Ctrl-C` and `/resume` or `--resume`. |
+
+### Where is my full trace?
+
+For Codex runs, Cruise prints the thread id and resolved rollout path to stderr,
+plus a copy-pasteable tail command. The rollout is Codex's authoritative JSONL
+trace, not a Cruise transcript. Cruise stores only a replaceable pointer in
+`.cruise/LAST-RUN.json`.
+
+```sh
+tail -f '/path/printed/by/cruise/rollout-...-<thread-id>.jsonl'
+jq -c . '/path/printed/by/cruise/rollout-...-<thread-id>.jsonl'
+codex resume <thread-id>
+```
+
+If the file does not exist yet, Cruise prints the thread id, Codex sessions
+directory, and resume command without guessing a filename.
 
 ## Development
 
@@ -213,3 +232,17 @@ artifacts.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Dependencies
+
+Cruise has no third-party JavaScript runtime-library dependencies. It requires
+[Node.js 20 or later](https://nodejs.org/en/download) and at least one supported
+host: [Codex CLI](https://developers.openai.com/codex/cli/) or
+[Claude Code](https://code.claude.com/docs/en/getting-started). The host packages
+are declared as optional peers in `package.json` so they appear in npm metadata
+without making npm install both; install and sign in to the host you intend to
+use.
+
+[Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git.html) is
+recommended for repository workflows and workspace-change detection. Cruise
+continues without Git, but cannot use Git status and diffs as progress evidence.

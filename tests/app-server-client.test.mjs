@@ -5,9 +5,12 @@ import test from "node:test";
 
 import {
   AppServerClient,
+  AppServerInactivityError,
+  AppServerInitializeTimeoutError,
   AppServerProcessError,
   AppServerProtocolError,
   AppServerRpcError,
+  DEFAULT_INACTIVITY_TIMEOUT_MS,
 } from "../scripts/lib/app-server-client.mjs";
 
 class FakeChild extends EventEmitter {
@@ -76,6 +79,7 @@ async function startHarness(client, child) {
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 test("start spawns configured command and performs initialize/initialized handshake", async () => {
   const { child, spawnCalls, spawnFn } = createHarness();
@@ -308,4 +312,113 @@ test("malformed input is reported without crashing the stream reader", async () 
   assert.equal(client.state, "running");
 
   await client.stop();
+});
+
+test("inactivity timeout is request-scoped and invalid overrides fall back to the default", () => {
+  assert.equal(new AppServerClient({ env: {} }).inactivityTimeoutMs, DEFAULT_INACTIVITY_TIMEOUT_MS);
+  assert.equal(new AppServerClient({ env: { CRUISE_INACTIVITY_TIMEOUT_MS: "42" } }).inactivityTimeoutMs, 42);
+  assert.equal(new AppServerClient({ inactivityTimeoutMs: 17, env: { CRUISE_INACTIVITY_TIMEOUT_MS: "42" } }).inactivityTimeoutMs, 17);
+  for (const value of ["", "0", "1.5", "abc", 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+    assert.equal(
+      new AppServerClient({ inactivityTimeoutMs: value }).inactivityTimeoutMs,
+      DEFAULT_INACTIVITY_TIMEOUT_MS,
+    );
+  }
+});
+
+test("initialize has an independent handshake deadline and leaves no watchdog timer", async () => {
+  const { child, spawnFn } = createHarness({
+    childOptions: { exitOnStdinEnd: false, ignoredSignals: ["SIGTERM"] },
+  });
+  const client = new AppServerClient({
+    spawnFn,
+    initializeTimeoutMs: 15,
+    inactivityTimeoutMs: 1_000,
+    terminationTimeoutMs: 10,
+  });
+
+  await assert.rejects(client.start(), (error) => {
+    assert.ok(error instanceof AppServerInitializeTimeoutError);
+    assert.equal(error.code, "CRUISE_APP_SERVER_INITIALIZE_TIMEOUT");
+    assert.match(error.message, /did not complete initialize within 15ms/u);
+    return true;
+  });
+  await delay(15);
+  assert.deepEqual(child.kills, ["SIGTERM", "SIGKILL"]);
+  assert.equal(client._pending.size, 0);
+  assert.equal(client._inactivityTimer, null);
+  assert.equal(client._forceKillTimer, null);
+});
+
+test("watchdog resets on responses, notifications, and server requests", async () => {
+  const { child, spawnFn } = createHarness();
+  const client = new AppServerClient({ spawnFn, inactivityTimeoutMs: 80 });
+  client.on("request", (message, activeClient) => activeClient.respond(message.id, {}));
+  await startHarness(client, child);
+
+  await delay(45);
+  child.send({ method: "thread/status/changed", params: { threadId: "thr-reset" } });
+  await delay(45);
+  child.send({ method: "currentTime/read", id: 70, params: { threadId: "thr-reset" } });
+  const pending = client.request("thread/read", { threadId: "thr-reset" });
+  const sent = child.messages().findLast(({ method }) => method === "thread/read");
+  await delay(45);
+  child.send({ id: sent.id, result: { thread: { id: "thr-reset" } } });
+  await pending;
+
+  assert.equal(client.state, "running");
+  await client.stop();
+  assert.equal(client._inactivityTimer, null);
+});
+
+test("transport inactivity rejects pending RPCs with bounded stderr and session context", async () => {
+  const { child, spawnFn } = createHarness({ childOptions: { exitOnStdinEnd: false } });
+  const client = new AppServerClient({
+    spawnFn,
+    inactivityTimeoutMs: 25,
+    stderrTailBytes: 24,
+  });
+  await startHarness(client, child);
+  child.stderr.write("discard-this-prefix/host-stderr-tail\n");
+
+  const pending = client.request("turn/start", {
+    threadId: "thr-hung",
+    input: [],
+  });
+  await assert.rejects(pending, (error) => {
+    assert.ok(error instanceof AppServerInactivityError);
+    assert.equal(error.code, "CRUISE_TRANSPORT_INACTIVITY");
+    assert.equal(error.lastFrame, "response:initialize");
+    assert.equal(error.threadId, "thr-hung");
+    assert.equal(error.turnId, null);
+    assert.equal(error.goalStatus, null);
+    assert.ok(Buffer.byteLength(error.stderrTail) <= 24);
+    assert.match(error.stderrTail, /host-stderr-tail/u);
+    assert.match(error.message, /elapsed=/u);
+    assert.match(error.message, /last-frame=response:initialize/u);
+    assert.match(error.message, /thread=thr-hung/u);
+    assert.match(error.message, /codex-stderr-tail=/u);
+    return true;
+  });
+
+  assert.equal(client.state, "stopped");
+  assert.deepEqual(child.kills, ["SIGTERM"]);
+  assert.equal(client._pending.size, 0);
+  assert.equal(client._inactivityTimer, null);
+});
+
+test("stop, child exit, and interrupt clear the inactivity timer", async () => {
+  for (const ending of ["stop", "exit", "interrupt"]) {
+    const { child, spawnFn } = createHarness();
+    const client = new AppServerClient({ spawnFn, inactivityTimeoutMs: 1_000 });
+    await startHarness(client, child);
+    assert.notEqual(client._inactivityTimer, null);
+    if (ending === "stop") await client.stop();
+    else if (ending === "exit") child.emit("exit", 0, null);
+    else {
+      client.interrupt();
+      await client.stop();
+    }
+    assert.equal(client._inactivityTimer, null, ending);
+  }
 });

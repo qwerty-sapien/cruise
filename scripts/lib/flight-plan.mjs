@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -6,6 +7,33 @@ export const DEFAULT_STALL = Object.freeze({ quietTurns: 3, sameFailure: 3 });
 
 const STATUSES = new Set(['active', 'complete', 'blocked']);
 const KNOWN_KEYS = new Set(['version', 'status', 'outcome', 'verify', 'scope', 'invariants', 'stall']);
+
+function digest(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+export function flightPlanTemplate() {
+  return `---
+version: 1
+status: active
+outcome: <one line, falsifiable>
+verify:
+  - <command>
+scope:
+  touchpoints:
+    - <path-or-glob>
+  non_goals:
+    - <explicit exclusion>
+invariants:
+  - <protected behavior>
+stall:
+  quiet_turns: 3
+  same_failure: 3
+---
+# Flight plan
+<prose>
+`;
+}
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -38,7 +66,7 @@ function parseScalar(value) {
   if (scalar === 'null' || scalar === '~') return null;
   if (scalar === 'true') return true;
   if (scalar === 'false') return false;
-  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(scalar)) return Number(scalar);
+  if (/^-?(?:0|[1-9]\d*)$/u.test(scalar)) return Number(scalar);
   if (scalar.startsWith('"')) {
     const parsed = JSON.parse(scalar);
     if (typeof parsed !== 'string') throw new Error('quoted values must be strings');
@@ -55,12 +83,12 @@ function parseScalar(value) {
 function frontmatterTokens(source) {
   const tokens = [];
   for (const [index, raw] of source.split(/\r?\n/u).entries()) {
-    if (raw.includes('\t')) throw new Error('tabs are not valid indentation');
+    if (raw.includes('\t')) throw new Error(`tabs are not valid indentation on line ${index + 2}`);
     const indent = raw.match(/^ */u)[0].length;
     const content = stripComment(raw.slice(indent));
     if (!content.trim()) continue;
-    if (indent % 2 !== 0) throw new Error('indentation must use two spaces');
-    tokens.push({ indent, content: content.trim(), line: index + 1 });
+    if (indent % 2 !== 0) throw new Error(`indentation must use two spaces on line ${index + 2}`);
+    tokens.push({ indent, content: content.trim(), line: index + 2 });
   }
   if (tokens.length > 1_000) throw new Error('frontmatter is too large');
   return tokens;
@@ -117,7 +145,7 @@ function stringArray(value, name) {
 
 function positiveInteger(value, fallback, name) {
   const resolved = value === undefined ? fallback : value;
-  if (!Number.isInteger(resolved) || resolved < 1) throw new TypeError(`${name} must be a positive integer`);
+  if (!Number.isSafeInteger(resolved) || resolved < 1) throw new TypeError(`${name} must be a positive integer`);
   return resolved;
 }
 
@@ -126,7 +154,7 @@ function normalize(raw, body = '') {
   const version = raw.version === undefined ? 1 : raw.version;
   const status = raw.status === undefined ? 'active' : raw.status;
   const outcome = raw.outcome === undefined ? '' : raw.outcome;
-  if (!Number.isInteger(version) || version < 1) throw new TypeError('version must be a positive integer');
+  if (!Number.isSafeInteger(version) || version < 1) throw new TypeError('version must be a positive integer');
   if (!STATUSES.has(status)) throw new TypeError('status must be active, complete, or blocked');
   if (typeof outcome !== 'string' || /[\r\n]/u.test(outcome)) throw new TypeError('outcome must be one line');
   const scope = raw.scope === undefined ? {} : raw.scope;
@@ -151,18 +179,23 @@ function normalize(raw, body = '') {
   };
 }
 
+function parseFlightPlanStrict(text) {
+  if (typeof text !== 'string') throw new TypeError('flight plan must be text');
+  if (text.length > 1_000_000) throw new Error('flight plan exceeds 1 MB');
+  const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
+  if (lines[0]?.trim() !== '---') throw new Error('line 1: missing opening --- frontmatter fence');
+  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  if (closing < 0) throw new Error('missing closing --- frontmatter fence');
+  const tokens = frontmatterTokens(lines.slice(1, closing).join('\n'));
+  const [raw, consumed] = tokens.length ? parseBlock(tokens, 0, 0) : [{}, 0];
+  if (consumed !== tokens.length || !isObject(raw)) throw new Error('frontmatter root must be a mapping');
+  return normalize(raw, lines.slice(closing + 1).join('\n'));
+}
+
 // Pure and deliberately fail-safe: an advisory note can never break a run.
 export function parseFlightPlan(text) {
   try {
-    if (typeof text !== 'string' || text.length > 1_000_000) return null;
-    const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
-    if (lines[0]?.trim() !== '---') return null;
-    const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
-    if (closing < 0) return null;
-    const tokens = frontmatterTokens(lines.slice(1, closing).join('\n'));
-    const [raw, consumed] = tokens.length ? parseBlock(tokens, 0, 0) : [{}, 0];
-    if (consumed !== tokens.length || !isObject(raw)) return null;
-    return normalize(raw, lines.slice(closing + 1).join('\n'));
+    return parseFlightPlanStrict(text);
   } catch {
     return null;
   }
@@ -264,6 +297,28 @@ export async function readFlightPlan(cwd) {
     return parseFlightPlan(await readFile(join(cwd, FLIGHT_FILE), 'utf8'));
   } catch {
     return null;
+  }
+}
+
+// TODO(v0.3): consolidate this strict reader with the hook copy only when the
+// packaged hook can remain a standalone process with no runtime coupling.
+export async function inspectFlightPlan(cwd) {
+  let text;
+  try {
+    text = await readFile(join(cwd, FLIGHT_FILE), 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { state: 'absent' };
+    return { state: 'invalid', reason: `could not read flight plan: ${error?.message ?? error}` };
+  }
+  const contentHash = digest(text);
+  try {
+    return { state: 'valid', plan: parseFlightPlanStrict(text), contentHash };
+  } catch (error) {
+    return {
+      state: 'invalid',
+      reason: String(error?.message ?? error).replace(/\s+/gu, ' ').trim(),
+      contentHash,
+    };
   }
 }
 

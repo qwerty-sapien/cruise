@@ -13,8 +13,10 @@ import {
   runOneGoal,
   runStart,
   runWorker,
+  surfaceAppServerStderr,
 } from '../index.js';
 import { readOriginPrompt } from '../scripts/lib/origin-note.mjs';
+import { SimpleCruiseSession } from '../scripts/lib/simple-session.mjs';
 
 test('the npm package entry runs the Cruise CLI', () => {
   const result = spawnSync(process.execPath, [resolve('index.js'), '--version'], {
@@ -24,6 +26,24 @@ test('the npm package entry runs the Cruise CLI', () => {
   assert.equal(result.status, 0);
   assert.equal(result.stderr, '');
   assert.equal(result.stdout.trim(), CLI_VERSION);
+
+  const help = spawnSync(process.execPath, [resolve('index.js'), '--help'], {
+    encoding: 'utf8',
+  });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /4 Goal bootstrap timeout/u);
+  assert.match(help.stdout, /5 transport inactivity/u);
+});
+
+test('app-server stderr is attributed across chunk boundaries', () => {
+  const client = new EventEmitter();
+  let output = '';
+  const detach = surfaceAppServerStderr(client, { write(value) { output += value; } });
+  client.emit('stderr', 'first\npar');
+  client.emit('stderr', 'tial\nthird\n');
+  detach();
+  client.emit('stderr', 'ignored\n');
+  assert.equal(output, 'codex: first\ncodex: partial\ncodex: third\n');
 });
 
 test('the public CLI accepts direct requests and rejects retired control-plane flags', () => {
@@ -164,6 +184,72 @@ test('a supervised Goal stall maps to exit code 3', async (t) => {
     },
   });
   assert.equal(result, 3);
+});
+
+test('a native Goal bootstrap timeout maps to exit code 4', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-start-bootstrap-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class NoTurnStartClient extends EventEmitter {
+    constructor() {
+      super();
+      this.goal = null;
+      this.statuses = [];
+    }
+
+    async start() {}
+    async stop() {}
+
+    async request(method, params = {}) {
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-timeout' }, model: 'gpt-test' };
+      }
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: this.goal };
+      if (method === 'thread/goal/set') {
+        this.statuses.push(params.status);
+        this.goal = { objective: params.objective, status: params.status };
+        return { goal: this.goal };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+  const client = new NoTurnStartClient();
+  let errorOutput = '';
+  const result = await runStart({ cwd: root, prompt: 'Finish it.', skill: 'goal' }, {
+    clientFactory: () => client,
+    sessionFactory(input) {
+      return new SimpleCruiseSession({
+        ...input,
+        output: { write() {} },
+        errorOutput: { write(value) { errorOutput += value; } },
+        firstTurnDeadlineMs: 10,
+        firstTurnCleanupDeadlineMs: 20,
+      });
+    },
+  });
+  assert.equal(result, 4);
+  assert.deepEqual(client.statuses, ['active', 'paused']);
+  assert.match(errorOutput, /Cruise: app-server started\./u);
+  assert.match(errorOutput, /Cruise: waiting for the native Goal turn\./u);
+});
+
+test('transport inactivity maps to exit code 5', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-start-inactivity-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await runStart({ cwd: root, prompt: 'Finish it.', skill: 'quick' }, {
+    clientFactory: () => new EventEmitter(),
+    sessionFactory() {
+      return {
+        async run() {
+          const error = new Error('transport inactivity observed');
+          error.code = 'CRUISE_TRANSPORT_INACTIVITY';
+          throw error;
+        },
+        async interrupt() {},
+      };
+    },
+  });
+  assert.equal(result, 5);
 });
 
 test('Claude start uses the native Claude adapter and preserves the ORIGIN note', async (t) => {
