@@ -67,3 +67,10 @@ __pycache__/
 **/.next/cache/
 **/.yarn/cache/
 **/.pnpm-store/
+
+.*/*
+fixtures/*
+prompts/*
+docs/*
+evals/*
+!docs/*.md

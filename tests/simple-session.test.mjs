@@ -11,6 +11,7 @@ import {
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
 } from '../scripts/lib/simple-session.mjs';
+import { parseFlightPlan, flightPlanTemplate } from '../scripts/lib/flight-plan.mjs';
 
 const TRACE_THREAD_ID = '019f855b-527e-77d1-bf9b-bca4c89da49e';
 
@@ -991,6 +992,46 @@ test('a plan-only Goal completes after its native Plan turn without implementati
       .map(({ params }) => params.status),
     ['active', 'complete'],
   );
+});
+
+test('Codex completion assessment rejects stale gates and accepts fresh Flight v2 receipts', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-assurance-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, '.cruise'));
+  await writeFile(join(root, '.cruise', 'ORIGIN.md'), 'Implement and verify it.', 'utf8');
+  const plan = parseFlightPlan(flightPlanTemplate());
+  plan.status = 'complete';
+  const session = new SimpleCruiseSession({
+    client: {},
+    cwd: root,
+    prompt: 'Implement and verify it.',
+    skill: 'goal',
+    skillPath: '/tmp/goal-skill.md',
+    pickOne: async () => ({ status: 'cancelled' }),
+    readLine: async () => '',
+    requireAssurance: true,
+    captureFingerprint: async () => 'a'.repeat(64),
+    readPlan: async () => ({ state: 'valid', plan, contentHash: 'flight-v2' }),
+    output: { write() {} },
+    errorOutput: { write() {} },
+  });
+  const incomplete = await session.assessCompletion();
+  assert.equal(incomplete.allowsCompletion, false);
+  assert.equal(incomplete.level, 'incomplete');
+  for (const gate of plan.quality.gates) {
+    gate.state = 'passed';
+    gate.evidence = {
+      summary: `${gate.id} passed`,
+      contextFingerprint: incomplete.contextFingerprint,
+      observedAt: 1,
+      source: gate.dimension === 'completion-review' ? 'review' : 'command',
+      rationale: '',
+      waivedBy: '',
+    };
+  }
+  const assured = await session.assessCompletion();
+  assert.equal(assured.level, 'assured');
+  assert.equal(assured.allowsCompletion, true);
 });
 
 test('Goal automatically accepts unmistakable routine phase gates but not risky choices', () => {

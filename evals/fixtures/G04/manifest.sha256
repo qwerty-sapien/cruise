@@ -1,8 +1,0 @@
-743cf2c7d6f11a62b4615a8da1c2d46489f3f965077323c7395527e8c4d787d3  repo/.cruise/goal/CLOSEOUT.md
-84039f0a1e1a40cf7f67ead4bcf9d277c1a6a2a2cf8682a81c65bf414f4ba3c1  repo/.cruise/goal/DECISIONS.md
-37a08eb44efb5cb6b0d427472a93697cc99743f1c452a7733eefeec69d2b3c2c  repo/.cruise/goal/GOAL.md
-c803a6c2200b178a3d96e84575272c86de66c7ec0bcd640b5b635049092909b6  repo/.cruise/goal/PLAN.md
-d85e7e5163b514244f78952fed570c364def55f58ac0284fb2cfd1fc651c8fa1  repo/.cruise/goal/SPEC.md
-e4ebf364b0a1e6d185e2e8a44217943c644f1348d2cf02c0ed8c43631d0f8402  repo/evidence/reconciliation.txt
-d4d6eeaa7f9c67ff167789283dbf90463f3e60d8bf646f9c7373825a49b3a04a  repo/storage.py
-7cd57e087c80210395a64881303ecd4ce8f159f6d831de7a3f57f202f5a1b9ee  repo/tests/test_storage.py

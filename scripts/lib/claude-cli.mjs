@@ -1,7 +1,18 @@
 import { spawn as nodeSpawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
+import {
+  captureFlightContextFingerprint,
+  evaluateFlightAssurance,
+} from './assurance.mjs';
+import { inspectFlightPlan } from './flight-plan.mjs';
 import { normalizeRecommendedLevel } from './worker-policy.mjs';
 import { skillReference } from './provider.mjs';
+import { captureWorkspaceFingerprint } from './supervisor.mjs';
+import {
+  activateGoalSession,
+  deactivateGoalSession,
+} from '../../hooks/session-marker.mjs';
 
 export const CLAUDE_WORKER_LEVEL_POLICY = Object.freeze({
   1: Object.freeze({ model: 'haiku', effort: 'low' }),
@@ -16,23 +27,36 @@ export const CLAUDE_WORKER_LEVEL_POLICY = Object.freeze({
 const CLAUDE_HOST_INSTRUCTIONS = [
   'This Cruise session is running on Claude Code.',
   'Use Claude Code native permissions, task tracking, resumable sessions, skills, and subagents.',
-  'Claude Code exposes no documented Codex-style Goal lifecycle API to plugins; do not invent Goal endpoints or Goal state.',
-  'For Goal work, resolve the outcome, scope fence, invariants, acceptance commands, and stall tuning, then write the user-editable advisory .cruise/FLIGHT.md as the first execution act; reread it at each micro-goal, realign scope drift, re-verify affected invariants, and keep its status truthful through completion or a concrete blocker. It grants and gates nothing.',
-  'A Stop-hook supervisor may inject continuation or realignment instructions during Goal runs; respond by changing approach or reporting the blocker honestly, never by repeating the failed attempt.',
+  'Claude Code has a conversation-level /goal but exposes no documented Codex-style Goal lifecycle API or Goal object to plugins; do not invent Goal endpoints or stack native /goal automatically.',
+  'For executable Goal work, compile .cruise/FLIGHT.md v2 with core and relevant domain quality profiles as the first execution act; bind truthful evidence to the current context fingerprint, and keep status truthful through assured completion or a concrete blocker. Flight grants no permission.',
+  'A session-scoped Stop-hook supervisor may inject continuation, assurance repair, or realignment instructions; respond by gathering discriminating evidence or reporting the blocker honestly, never by weakening gates or repeating the failed attempt.',
 ].join(' ');
 
-export function claudeSessionArgs({ pluginRoot, skill, prompt }) {
+export function claudeSessionArgs({
+  pluginRoot,
+  skill,
+  prompt,
+  sessionId = null,
+  resumeSessionId = null,
+  planOnly = false,
+}) {
   if (typeof pluginRoot !== 'string' || !pluginRoot) throw new TypeError('pluginRoot is required');
   if (typeof skill !== 'string' || !skill) throw new TypeError('skill is required');
-  if (typeof prompt !== 'string' || !prompt.trim()) throw new TypeError('prompt is required');
+  if (typeof prompt !== 'string' || (!resumeSessionId && !prompt.trim())) {
+    throw new TypeError('prompt is required for a new Claude session');
+  }
+  if (sessionId && resumeSessionId) throw new TypeError('choose a new or resumed Claude session, not both');
   return [
     '--plugin-dir',
     pluginRoot,
+    ...(sessionId ? ['--session-id', sessionId] : []),
+    ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
+    ...(planOnly ? ['--permission-mode', 'plan'] : []),
     '--name',
     `Cruise ${skill}`,
     '--append-system-prompt',
     CLAUDE_HOST_INSTRUCTIONS,
-    `${skillReference('claude', skill)} ${prompt}`,
+    ...(!resumeSessionId ? [`${skillReference('claude', skill)} ${prompt}`] : []),
   ];
 }
 
@@ -83,20 +107,127 @@ export async function runClaudeSession({
   prompt,
   spawnFn,
   env = process.env,
+  sessionId = randomUUID(),
+  resumeSessionId = null,
+  planOnly = false,
+  inspectPlan = inspectFlightPlan,
+  captureFingerprint = captureWorkspaceFingerprint,
 } = {}) {
-  const sessionEnv = { ...env };
-  if (skill === 'goal') sessionEnv.CRUISE_CLAUDE_GOAL = '1';
-  else delete sessionEnv.CRUISE_CLAUDE_GOAL;
-  const result = await runClaudeCli({
-    cwd,
-    args: claudeSessionArgs({ pluginRoot, skill, prompt }),
-    spawnFn,
-    env: sessionEnv,
-  });
-  return Object.freeze({
-    status: result.code === 0 ? 'complete' : result.code === 130 ? 'interrupted' : 'failed',
-    exitCode: result.code,
-  });
+  const effectiveSessionId = resumeSessionId ?? sessionId;
+  if (skill === 'goal') {
+    await activateGoalSession({ cwd, session_id: effectiveSessionId });
+  }
+  try {
+    const sessionEnv = { ...env };
+    delete sessionEnv.CRUISE_CLAUDE_GOAL;
+    const result = await runClaudeCli({
+      cwd,
+      args: claudeSessionArgs({
+        pluginRoot,
+        skill,
+        prompt,
+        sessionId: resumeSessionId ? null : sessionId,
+        resumeSessionId,
+        planOnly,
+      }),
+      spawnFn,
+      env: sessionEnv,
+    });
+    if (result.code === 130) {
+      return Object.freeze({
+        status: 'interrupted',
+        exitCode: 130,
+        sessionId: resumeSessionId ?? sessionId,
+      });
+    }
+    if (result.code !== 0 || skill !== 'goal') {
+      return Object.freeze({
+        status: result.code === 0 ? 'complete' : 'failed',
+        exitCode: result.code,
+        sessionId: resumeSessionId ?? sessionId,
+      });
+    }
+    if (planOnly) {
+      return Object.freeze({
+        status: 'complete',
+        exitCode: 0,
+        sessionId: resumeSessionId ?? sessionId,
+        endpoint: 'planned',
+      });
+    }
+    const inspection = await inspectPlan(cwd);
+    if (inspection?.state !== 'valid') {
+      return Object.freeze({
+        status: 'unassured',
+        exitCode: 2,
+        sessionId: resumeSessionId ?? sessionId,
+        reason: inspection?.state === 'invalid'
+          ? `Flight is invalid: ${inspection.reason}`
+          : 'Flight is absent after Claude exited.',
+      });
+    }
+    const { plan } = inspection;
+    if (plan.status === 'blocked') {
+      return Object.freeze({
+        status: 'blocked',
+        exitCode: 2,
+        sessionId: resumeSessionId ?? sessionId,
+        reason: 'Flight reported a concrete blocker.',
+      });
+    }
+    if (plan.status !== 'complete') {
+      return Object.freeze({
+        status: 'stalled',
+        exitCode: 3,
+        sessionId: resumeSessionId ?? sessionId,
+        reason: 'Claude stopped with the Flight still active.',
+      });
+    }
+    if (plan.version < 2) {
+      const assurance = evaluateFlightAssurance(plan, null);
+      return Object.freeze({
+        status: 'unassured',
+        exitCode: 2,
+        sessionId: resumeSessionId ?? sessionId,
+        assurance,
+        reason: assurance.reasons.join('; '),
+      });
+    }
+    const workspaceFingerprint = await captureFingerprint(cwd, { excludeFlightPlan: true });
+    if (!workspaceFingerprint) {
+      return Object.freeze({
+        status: 'unassured',
+        exitCode: 2,
+        sessionId: resumeSessionId ?? sessionId,
+        reason: 'Product workspace fingerprint is unavailable.',
+      });
+    }
+    let contextFingerprint;
+    try {
+      contextFingerprint = await captureFlightContextFingerprint(cwd, plan, {
+        workspaceFingerprint,
+      });
+    } catch (error) {
+      return Object.freeze({
+        status: 'unassured',
+        exitCode: 2,
+        sessionId: resumeSessionId ?? sessionId,
+        reason: String(error?.message ?? error),
+      });
+    }
+    const assurance = evaluateFlightAssurance(plan, contextFingerprint);
+    return Object.freeze({
+      status: assurance.allowsCompletion ? 'complete' : 'unassured',
+      exitCode: assurance.allowsCompletion ? 0 : 2,
+      sessionId: resumeSessionId ?? sessionId,
+      assurance,
+      ...(!assurance.allowsCompletion ? { reason: assurance.reasons.join('; ') } : {}),
+    });
+  } finally {
+    if (skill === 'goal') {
+      await deactivateGoalSession({ cwd, session_id: effectiveSessionId });
+    }
+  }
 }
 
 export async function runClaudeWorker({ cwd, task, level = null, spawnFn } = {}) {

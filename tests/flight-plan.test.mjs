@@ -14,6 +14,42 @@ import {
   writeFlightPlan,
 } from '../scripts/lib/flight-plan.mjs';
 import { parseHookFlightPlan } from '../hooks/stop-supervisor.mjs';
+import {
+  computeFlightContextFingerprint,
+  evaluateFlightAssurance,
+} from '../scripts/lib/assurance.mjs';
+
+function coreV2Plan() {
+  return {
+    version: 2,
+    status: 'complete',
+    outcome: 'Ship the parser safely',
+    verify: ['npm test'],
+    scope: { touchpoints: ['src/**'], nonGoals: ['No API redesign'] },
+    invariants: ['Existing flags keep working'],
+    stall: { quietTurns: 3, sameFailure: 3 },
+    quality: {
+      risk: 'medium',
+      profiles: ['core'],
+      gates: [
+        ['intent', 'intent'],
+        ['functional', 'functional-correctness'],
+        ['regression', 'regression'],
+        ['failure-paths', 'failure-paths'],
+        ['completion-review', 'completion-review'],
+      ].map(([id, dimension]) => ({
+        id: `core.${id}`,
+        dimension,
+        criterion: `Close ${dimension}`,
+        oracle: `Review ${dimension}`,
+        severity: 'high',
+        state: 'pending',
+        evidence: null,
+      })),
+    },
+    body: '# Flight plan',
+  };
+}
 
 test('missing optional fields receive advisory defaults', () => {
   const plan = parseFlightPlan('---\noutcome: Ship the parser\n---\n# Flight plan\n\nKeep it small.');
@@ -170,4 +206,232 @@ test('inspection distinguishes absent, invalid, and valid flight state with reas
   const valid = await inspectFlightPlan(cwd);
   assert.equal(valid.state, 'valid');
   assert.equal(valid.plan.status, 'active');
+});
+
+test('Flight v2 round-trips quality gates and requires fresh profile-complete evidence', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-flight-v2-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const plan = coreV2Plan();
+  const context = computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Exact request',
+  });
+  for (const gate of plan.quality.gates) {
+    gate.state = 'passed';
+    gate.evidence = {
+      summary: `${gate.id} passed`,
+      contextFingerprint: context,
+      observedAt: 1_800_000_000_000,
+      source: gate.dimension === 'completion-review' ? 'review' : 'command',
+      rationale: '',
+      waivedBy: '',
+    };
+  }
+  await writeFlightPlan(cwd, plan);
+  const roundTrip = await readFlightPlan(cwd);
+  const assured = evaluateFlightAssurance(roundTrip, context);
+  assert.equal(assured.level, 'assured');
+  assert.equal(assured.allowsCompletion, true);
+  assert.equal(assured.metrics.closed, 5);
+  roundTrip.status = 'active';
+  const ready = evaluateFlightAssurance(roundTrip, context);
+  assert.equal(ready.readyForCompletion, true);
+  assert.equal(ready.allowsCompletion, false);
+  roundTrip.status = 'complete';
+
+  const stale = evaluateFlightAssurance(roundTrip, 'b'.repeat(64));
+  assert.equal(stale.level, 'incomplete');
+  assert.equal(stale.allowsCompletion, false);
+  assert.equal(stale.metrics.fresh, 0);
+
+  roundTrip.quality.gates[3].state = 'waived';
+  roundTrip.quality.gates[3].evidence = {
+    ...roundTrip.quality.gates[3].evidence,
+    source: 'user-decision',
+    rationale: 'The user explicitly accepted this limitation',
+    waivedBy: 'user',
+  };
+  const qualified = evaluateFlightAssurance(roundTrip, context);
+  assert.equal(qualified.level, 'qualified');
+  assert.equal(qualified.allowsCompletion, true);
+});
+
+test('Flight v2 rejects decorative profiles, duplicate gates, and unknown versions', () => {
+  const missingDimensions = coreV2Plan();
+  missingDimensions.quality.gates = missingDimensions.quality.gates.slice(0, 1);
+  const source = (plan) => `---
+version: ${plan.version}
+status: complete
+outcome: ${plan.outcome}
+quality:
+  risk: medium
+  profiles:
+    - core
+  gates:
+    -
+      id: duplicate
+      dimension: intent
+      criterion: criterion
+      oracle: oracle
+      state: pending
+    -
+      id: duplicate
+      dimension: regression
+      criterion: criterion
+      oracle: oracle
+      state: pending
+---
+`;
+  assert.equal(parseFlightPlan(source(missingDimensions)), null);
+  assert.equal(parseFlightPlan(source({ ...missingDimensions, version: 3 })), null);
+
+  const assessment = evaluateFlightAssurance(missingDimensions, 'a'.repeat(64));
+  assert.equal(assessment.allowsCompletion, false);
+  assert.match(assessment.reasons.join('\n'), /missing required functional-correctness gate/u);
+});
+
+test('context binding changes with request, product state, or gate contract but not receipts', () => {
+  const plan = coreV2Plan();
+  const baseline = computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Exact request',
+  });
+  assert.notEqual(computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'b'.repeat(64),
+    originText: 'Exact request',
+  }), baseline);
+  plan.body = '# Changed inherited obligation';
+  assert.notEqual(computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Exact request',
+  }), baseline);
+  plan.body = '# Flight plan';
+  assert.notEqual(computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Changed request',
+  }), baseline);
+  plan.quality.gates[0].criterion = 'Changed criterion';
+  assert.notEqual(computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Exact request',
+  }), baseline);
+  plan.quality.gates[0].criterion = 'Close intent';
+  plan.quality.gates[0].state = 'passed';
+  plan.quality.gates[0].evidence = {
+    summary: 'passed',
+    contextFingerprint: baseline,
+    observedAt: 1,
+    source: 'review',
+    rationale: '',
+    waivedBy: '',
+  };
+  assert.equal(computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Exact request',
+  }), baseline);
+});
+
+test('high-risk assurance requires a freshly passed independent review', () => {
+  const plan = coreV2Plan();
+  plan.quality.risk = 'high';
+  const context = computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Optimize safely',
+  });
+  for (const gate of plan.quality.gates) {
+    gate.state = 'passed';
+    gate.evidence = {
+      summary: 'passed',
+      contextFingerprint: context,
+      observedAt: 1,
+      source: gate.dimension === 'completion-review' ? 'review' : 'command',
+      rationale: '',
+      waivedBy: '',
+    };
+  }
+  assert.match(
+    evaluateFlightAssurance(plan, context).reasons.join('\n'),
+    /missing required independent-review gate/u,
+  );
+  plan.quality.gates.push({
+    id: 'core.independent-review',
+    dimension: 'independent-review',
+    criterion: 'Independent skeptical review finds no unresolved high-risk issue',
+    oracle: 'Run an independent review',
+    severity: 'high',
+    state: 'passed',
+    evidence: {
+      summary: 'Independent review passed',
+      contextFingerprint: '',
+      observedAt: 1,
+      source: 'review',
+      rationale: '',
+      waivedBy: '',
+    },
+  });
+  const rebound = computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Optimize safely',
+  });
+  for (const gate of plan.quality.gates) gate.evidence.contextFingerprint = rebound;
+  assert.equal(evaluateFlightAssurance(plan, rebound).level, 'assured');
+});
+
+test('legacy, missing-origin, decorative, and whitespace evidence cannot claim assurance', () => {
+  const legacy = evaluateFlightAssurance({ version: 1, status: 'complete' }, null);
+  assert.equal(legacy.level, 'legacy-unattested');
+  assert.equal(legacy.readyForCompletion, false);
+  assert.equal(legacy.allowsCompletion, false);
+
+  const plan = coreV2Plan();
+  assert.throws(
+    () => computeFlightContextFingerprint(plan, {
+      workspaceFingerprint: 'a'.repeat(64),
+      originText: null,
+    }),
+    /ORIGIN/u,
+  );
+  const context = computeFlightContextFingerprint(plan, {
+    workspaceFingerprint: 'a'.repeat(64),
+    originText: 'Exact request',
+  });
+  for (const gate of plan.quality.gates) {
+    gate.state = 'not_applicable';
+    gate.evidence = {
+      summary: '',
+      contextFingerprint: context,
+      observedAt: 1,
+      source: 'review',
+      rationale: '   ',
+      waivedBy: '',
+    };
+  }
+  const decorative = evaluateFlightAssurance(plan, context);
+  assert.equal(decorative.allowsCompletion, false);
+  assert.match(decorative.reasons.join('\n'), /intent must pass/u);
+
+  for (const gate of plan.quality.gates) {
+    gate.state = 'passed';
+    gate.evidence = {
+      ...gate.evidence,
+      summary: '   ',
+      source: 'command',
+    };
+  }
+  const whitespace = evaluateFlightAssurance(plan, context);
+  assert.equal(whitespace.allowsCompletion, false);
+  assert.match(whitespace.reasons.join('\n'), /needs a summary/u);
+
+  plan.quality.gates.find(({ dimension }) => dimension === 'completion-review').evidence = {
+    summary: 'Reviewed',
+    contextFingerprint: context,
+    observedAt: 1,
+    source: 'command',
+    rationale: '',
+    waivedBy: '',
+  };
+  assert.match(
+    evaluateFlightAssurance(plan, context).reasons.join('\n'),
+    /completion review must freshly pass with review evidence/u,
+  );
 });

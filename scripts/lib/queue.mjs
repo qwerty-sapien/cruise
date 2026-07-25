@@ -1,6 +1,8 @@
 import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { QUALITY_PROFILES } from './assurance.mjs';
+
 export const QUEUE_FILE = '.cruise/QUEUE.md';
 
 const STATUSES = new Set(['pending', 'active', 'complete', 'blocked', 'stalled']);
@@ -14,7 +16,10 @@ const MILESTONE_KEYS = new Set([
   'touchpoints',
   'non_goals',
   'invariants',
+  'risk',
+  'profiles',
 ]);
+const RISKS = new Set(['low', 'medium', 'high', 'critical']);
 
 function isMapping(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -172,11 +177,11 @@ function stringList(value, name) {
   return [...value];
 }
 
-function normalizeMilestone(raw, index) {
+function normalizeMilestone(raw, index, version = 1) {
   if (!isMapping(raw)) throw new TypeError(`milestones[${index}] must be a mapping`);
   const status = raw.status ?? 'pending';
   if (!STATUSES.has(status)) throw new TypeError(`milestones[${index}].status is invalid`);
-  return {
+  const milestone = {
     id: oneLine(raw.id, `milestones[${index}].id`, { nonempty: true }),
     status,
     outcome: oneLine(raw.outcome ?? '', `milestones[${index}].outcome`),
@@ -186,15 +191,32 @@ function normalizeMilestone(raw, index) {
     nonGoals: stringList(raw.non_goals ?? raw.nonGoals ?? [], `milestones[${index}].non_goals`),
     invariants: stringList(raw.invariants ?? [], `milestones[${index}].invariants`),
   };
+  if (version >= 2) {
+    const risk = raw.risk ?? 'medium';
+    if (!RISKS.has(risk)) throw new TypeError(`milestones[${index}].risk is invalid`);
+    const profiles = stringList(raw.profiles ?? ['core'], `milestones[${index}].profiles`);
+    if (!profiles.includes('core')) throw new TypeError(`milestones[${index}].profiles must include core`);
+    if (new Set(profiles).size !== profiles.length) {
+      throw new TypeError(`milestones[${index}].profiles must not contain duplicates`);
+    }
+    for (const profile of profiles) {
+      if (!Object.hasOwn(QUALITY_PROFILES, profile)) {
+        throw new TypeError(`milestones[${index}].profiles contains unsupported profile ${profile}`);
+      }
+    }
+    milestone.risk = risk;
+    milestone.profiles = profiles;
+  }
+  return milestone;
 }
 
 function normalizeQueue(raw, body = '') {
   if (!isMapping(raw) || typeof body !== 'string') throw new TypeError('invalid queue');
   const version = raw.version ?? 1;
-  if (!Number.isSafeInteger(version) || version < 1) throw new TypeError('version must be a positive integer');
+  if (![1, 2].includes(version)) throw new TypeError('version must be 1 or 2');
   const source = raw.milestones ?? [];
   if (!Array.isArray(source)) throw new TypeError('milestones must be an array');
-  const milestones = source.map(normalizeMilestone);
+  const milestones = source.map((milestone, index) => normalizeMilestone(milestone, index, version));
   const ids = new Set();
   for (const milestone of milestones) {
     if (ids.has(milestone.id)) throw new TypeError(`duplicate milestone id: ${milestone.id}`);
@@ -271,6 +293,7 @@ function serializableQueue(queue) {
   const source = queue.milestones ?? raw.milestones ?? [];
   if (!Array.isArray(source)) throw new TypeError('milestones must be an array');
   const rawMilestones = Array.isArray(raw.milestones) ? raw.milestones : [];
+  const version = queue.version ?? raw.version ?? 1;
   const milestones = source.map((milestone, index) => {
     if (!isMapping(milestone)) throw new TypeError(`milestones[${index}] must be a mapping`);
     const rawMatch = rawMilestones.find((candidate) => isMapping(candidate) && candidate.id === milestone.id);
@@ -279,7 +302,7 @@ function serializableQueue(queue) {
       ...base,
       ...milestone,
       non_goals: milestone.nonGoals ?? milestone.non_goals ?? base.non_goals,
-    }, index);
+    }, index, version);
     const directExtras = Object.fromEntries(Object.entries(milestone).filter(([key]) => ![
       ...MILESTONE_KEYS,
       'nonGoals',
@@ -298,11 +321,15 @@ function serializableQueue(queue) {
       touchpoints: normalized.touchpoints,
       non_goals: normalized.nonGoals,
       invariants: normalized.invariants,
+      ...(version >= 2 ? {
+        risk: normalized.risk,
+        profiles: normalized.profiles,
+      } : {}),
       ...extras,
     };
   });
   const frontmatter = {
-    version: queue.version ?? raw.version ?? 1,
+    version,
     milestones,
     ...Object.fromEntries(Object.entries(raw).filter(([key]) => !QUEUE_KEYS.has(key))),
     ...Object.fromEntries(Object.entries(queue).filter(([key]) => ![
@@ -387,13 +414,17 @@ export function nextReadyMilestone(queue, {
 }
 
 export function milestoneToFlightPlan(milestone, queueBody = '') {
-  const normalized = normalizeMilestone(milestone, 0);
+  const normalized = normalizeMilestone({
+    ...milestone,
+    risk: milestone.risk ?? 'medium',
+    profiles: milestone.profiles ?? ['core'],
+  }, 0, 2);
   if (typeof queueBody !== 'string') throw new TypeError('queue body must be a string');
   const inherited = queueBody.trim()
     ? `\n\n## Inherited queue context\n\n${queueBody.trim()}`
     : '\n\n## Inherited queue context\n\nNo additional cross-milestone obligations were recorded.';
   return {
-    version: 1,
+    version: 2,
     status: 'active',
     outcome: normalized.outcome,
     verify: normalized.verify,
@@ -402,6 +433,79 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
       nonGoals: normalized.nonGoals,
     },
     invariants: normalized.invariants,
+    quality: {
+      risk: normalized.risk,
+      profiles: normalized.profiles,
+      gates: [
+        {
+          id: 'core.intent',
+          dimension: 'intent',
+          criterion: `The delivered milestone satisfies: ${normalized.outcome}`,
+          oracle: 'Compare the final behavior and diff with the milestone outcome and inherited queue context',
+          severity: 'high',
+          state: 'pending',
+          evidence: null,
+        },
+        {
+          id: 'core.functional',
+          dimension: 'functional-correctness',
+          criterion: 'The changed behavior works across its stated acceptance cases',
+          oracle: normalized.verify.join(' && ') || 'Run a focused behavioral check derived from the outcome',
+          severity: 'high',
+          state: 'pending',
+          evidence: null,
+        },
+        {
+          id: 'core.regression',
+          dimension: 'regression',
+          criterion: 'Existing behavior and listed invariants remain intact',
+          oracle: 'Run the relevant regression suite and inspect affected contracts',
+          severity: 'high',
+          state: 'pending',
+          evidence: null,
+        },
+        {
+          id: 'core.failure-paths',
+          dimension: 'failure-paths',
+          criterion: 'Relevant invalid, boundary, and failure cases behave deliberately',
+          oracle: 'Exercise or review the smallest discriminating failure-path probes',
+          severity: 'medium',
+          state: 'pending',
+          evidence: null,
+        },
+        {
+          id: 'core.completion-review',
+          dimension: 'completion-review',
+          criterion: 'A skeptical final review finds no unresolved in-scope quality gap',
+          oracle: 'Review the final diff, test evidence, and remaining risks against every Flight gate',
+          severity: 'high',
+          state: 'pending',
+          evidence: null,
+        },
+        ...normalized.profiles
+          .filter((profile) => profile !== 'core')
+          .flatMap((profile) => QUALITY_PROFILES[profile].map((dimension) => ({
+            id: `${profile}.${dimension}`,
+            dimension,
+            criterion: `The ${dimension} quality dimension is satisfied for this milestone`,
+            oracle: `Apply the ${profile} assurance profile and run a discriminating ${dimension} check`,
+            severity: normalized.risk,
+            state: 'pending',
+            evidence: null,
+          }))),
+        ...(normalized.risk === 'high' || normalized.risk === 'critical'
+          ? [{
+              id: 'core.independent-review',
+              dimension: 'independent-review',
+              criterion: 'An independent skeptical review finds no unresolved high-risk issue',
+              oracle: 'Run a bounded independent review against the final diff and Flight evidence',
+              severity: normalized.risk,
+              state: 'pending',
+              evidence: null,
+            }]
+          : []),
+      ],
+    },
     body: `# Queue milestone ${normalized.id}\n\nCompiled from .cruise/QUEUE.md. Reconcile this milestone with the queue's cross-milestone compatibility obligations.${inherited}`,
   };
 }

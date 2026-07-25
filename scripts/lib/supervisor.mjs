@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readlink, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -32,10 +32,14 @@ function remember(set, value) {
 }
 
 export class GoalSupervisor {
-  constructor({ stall = DEFAULT_STALL, now = Date.now } = {}) {
+  constructor({ stall = DEFAULT_STALL, now = Date.now, maxTurns = null } = {}) {
     this.stall = null;
     this.updateStall(stall);
     this.now = now;
+    if (maxTurns !== null && (!Number.isSafeInteger(maxTurns) || maxTurns < 1)) {
+      throw new TypeError('maxTurns must be a positive integer or null');
+    }
+    this.maxTurns = maxTurns;
     this.createdAt = this.now();
     this.updatedAt = this.createdAt;
     this.turnsObserved = 0;
@@ -102,6 +106,14 @@ export class GoalSupervisor {
       }
       return finish(verdict);
     };
+
+    if (this.maxTurns !== null && this.turnsObserved >= this.maxTurns) {
+      this.stage = 'stalled';
+      return conclude({
+        level: 'stall',
+        reason: `absolute supervision cap of ${this.maxTurns} completion attempts was reached`,
+      });
+    }
 
     let workspaceObservation = null;
     let progress = false;
@@ -216,6 +228,7 @@ export class GoalSupervisor {
       quiet_stops: this.quietTurns,
       ladder: ladders[this.stage],
       blocks_in_cycle: this.turnsInCycle,
+      completion_blocks: 0,
       turns_observed: this.turnsObserved,
       interventions: this.interventions.slice(-MAX_SUPERVISOR_HISTORY).map((item) => ({ ...item })),
       observations: this.observations.slice(-MAX_SUPERVISOR_HISTORY).map((item) => ({ ...item })),
@@ -273,6 +286,7 @@ export function validSupervisorState(value) {
     Number.isInteger(value.quiet_stops) && value.quiet_stops >= 0 &&
     ['normal', 'realign', 'final', 'stalled'].includes(value.ladder) &&
     Number.isInteger(value.blocks_in_cycle) && value.blocks_in_cycle >= 0 &&
+    Number.isInteger(value.completion_blocks ?? 0) && (value.completion_blocks ?? 0) >= 0 &&
     Number.isInteger(value.turns_observed) && value.turns_observed >= 0 &&
     Array.isArray(value.interventions) &&
     value.interventions.length <= MAX_SUPERVISOR_HISTORY &&
@@ -351,14 +365,51 @@ export async function captureWorkspaceFingerprint(cwd, { excludeFlightPlan = fal
   try {
     const options = { cwd, encoding: 'utf8', maxBuffer: Infinity };
     const pathspec = excludeFlightPlan
-      ? ['--', '.', ':(exclude).cruise/FLIGHT.md']
+      ? ['--', '.', ':(exclude).cruise/**']
       : [];
-    const [status, diff, cached] = await Promise.all([
+    const [head, status, diff, cached, untracked] = await Promise.all([
+      execFileAsync('git', ['rev-parse', 'HEAD'], options)
+        .catch(() => ({ stdout: 'unborn\n' })),
       execFileAsync('git', ['status', '--porcelain=v1', ...pathspec], options),
       execFileAsync('git', ['diff', ...pathspec], options),
       execFileAsync('git', ['diff', '--cached', ...pathspec], options),
+      execFileAsync(
+        'git',
+        [
+          'ls-files',
+          '--others',
+          '--exclude-standard',
+          '-z',
+          ...(excludeFlightPlan ? ['--', '.', ':(exclude).cruise/**'] : []),
+        ],
+        options,
+      ),
     ]);
-    return digest(`${status.stdout}\u0000${diff.stdout}\u0000${cached.stdout}`);
+    const untrackedFiles = untracked.stdout.split('\u0000').filter(Boolean).sort();
+    let untrackedBytes = 0;
+    const untrackedEvidence = [];
+    for (const path of untrackedFiles) {
+      if (path.startsWith('/') || path.split('/').includes('..')) return null;
+      const metadata = await lstat(join(cwd, path));
+      if (metadata.isSymbolicLink()) {
+        untrackedEvidence.push(`${path}\u0000symlink\u0000${await readlink(join(cwd, path))}`);
+        continue;
+      }
+      if (!metadata.isFile()) {
+        untrackedEvidence.push(`${path}\u0000non-regular`);
+        continue;
+      }
+      untrackedBytes += metadata.size;
+      if (untrackedBytes > 64 * 1024 * 1024) return null;
+      untrackedEvidence.push(`${path}\u0000${digest(await readFile(join(cwd, path)))}`);
+    }
+    return digest([
+      head.stdout.trim(),
+      status.stdout,
+      diff.stdout,
+      cached.stdout,
+      untrackedEvidence.join('\u0000'),
+    ].join('\u0000'));
   } catch {
     return null;
   }

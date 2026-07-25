@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { normalizeQuality, serializeQuality } from './assurance.mjs';
+
 export const FLIGHT_FILE = '.cruise/FLIGHT.md';
 export const DEFAULT_STALL = Object.freeze({ quietTurns: 3, sameFailure: 3 });
 
 const STATUSES = new Set(['active', 'complete', 'blocked']);
-const KNOWN_KEYS = new Set(['version', 'status', 'outcome', 'verify', 'scope', 'invariants', 'stall']);
+const KNOWN_KEYS = new Set(['version', 'status', 'outcome', 'verify', 'scope', 'invariants', 'quality', 'stall']);
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -14,7 +16,7 @@ function digest(value) {
 
 export function flightPlanTemplate() {
   return `---
-version: 1
+version: 2
 status: active
 outcome: <one line, falsifiable>
 verify:
@@ -26,6 +28,51 @@ scope:
     - <explicit exclusion>
 invariants:
   - <protected behavior>
+quality:
+  risk: medium
+  profiles:
+    - core
+  gates:
+    -
+      id: core.intent
+      dimension: intent
+      criterion: <the result still matches the original request>
+      oracle: <review method>
+      severity: high
+      state: pending
+      evidence: null
+    -
+      id: core.functional
+      dimension: functional-correctness
+      criterion: <the changed behavior works across acceptance cases>
+      oracle: <focused behavioral check>
+      severity: high
+      state: pending
+      evidence: null
+    -
+      id: core.regression
+      dimension: regression
+      criterion: <existing behavior and invariants remain intact>
+      oracle: <regression check>
+      severity: high
+      state: pending
+      evidence: null
+    -
+      id: core.failure-paths
+      dimension: failure-paths
+      criterion: <relevant failures and boundaries behave deliberately>
+      oracle: <failure-path probe>
+      severity: medium
+      state: pending
+      evidence: null
+    -
+      id: core.completion-review
+      dimension: completion-review
+      criterion: <skeptical final review finds no unresolved in-scope gap>
+      oracle: <final diff and evidence review>
+      severity: high
+      state: pending
+      evidence: null
 stall:
   quiet_turns: 3
   same_failure: 3
@@ -154,13 +201,17 @@ function normalize(raw, body = '') {
   const version = raw.version === undefined ? 1 : raw.version;
   const status = raw.status === undefined ? 'active' : raw.status;
   const outcome = raw.outcome === undefined ? '' : raw.outcome;
-  if (!Number.isSafeInteger(version) || version < 1) throw new TypeError('version must be a positive integer');
+  if (![1, 2].includes(version)) throw new TypeError('version must be 1 or 2');
   if (!STATUSES.has(status)) throw new TypeError('status must be active, complete, or blocked');
-  if (typeof outcome !== 'string' || /[\r\n]/u.test(outcome)) throw new TypeError('outcome must be one line');
+  if (
+    typeof outcome !== 'string' ||
+    /[\r\n]/u.test(outcome) ||
+    (version >= 2 && !outcome.trim())
+  ) throw new TypeError('outcome must be one non-empty line');
   const scope = raw.scope === undefined ? {} : raw.scope;
   const stall = raw.stall === undefined ? {} : raw.stall;
   if (!isObject(scope) || !isObject(stall)) throw new TypeError('scope and stall must be mappings');
-  return {
+  const normalized = {
     version,
     status,
     outcome,
@@ -177,6 +228,8 @@ function normalize(raw, body = '') {
     body,
     raw,
   };
+  if (version >= 2) normalized.quality = normalizeQuality(raw.quality, version);
+  return normalized;
 }
 
 function parseFlightPlanStrict(text) {
@@ -251,6 +304,10 @@ function serializablePlan(plan) {
   const raw = isObject(plan.raw) ? plan.raw : {};
   const scopeRaw = isObject(raw.scope) ? raw.scope : {};
   const stallRaw = isObject(raw.stall) ? raw.stall : {};
+  const version = plan.version ?? raw.version ?? 1;
+  const quality = version >= 2
+    ? serializeQuality(plan.quality ?? normalizeQuality(raw.quality, version))
+    : undefined;
   const known = normalize({
     version: plan.version ?? raw.version,
     status: plan.status ?? raw.status,
@@ -262,6 +319,7 @@ function serializablePlan(plan) {
       non_goals: plan.scope?.nonGoals ?? scopeRaw.non_goals,
     },
     invariants: plan.invariants ?? raw.invariants,
+    ...(quality === undefined ? {} : { quality }),
     stall: {
       ...stallRaw,
       quiet_turns: plan.stall?.quietTurns ?? stallRaw.quiet_turns,
@@ -269,26 +327,28 @@ function serializablePlan(plan) {
     },
   }, plan.body ?? '');
   const extras = Object.fromEntries(Object.entries(raw).filter(([key]) => !KNOWN_KEYS.has(key)));
+  const frontmatter = {
+    version: known.version,
+    status: known.status,
+    outcome: known.outcome,
+    verify: known.verify,
+    scope: {
+      touchpoints: known.scope.touchpoints,
+      non_goals: known.scope.nonGoals,
+      ...Object.fromEntries(Object.entries(scopeRaw).filter(([key]) => !['touchpoints', 'non_goals'].includes(key))),
+    },
+    invariants: known.invariants,
+    ...(known.quality ? { quality: serializeQuality(known.quality) } : {}),
+    stall: {
+      quiet_turns: known.stall.quietTurns,
+      same_failure: known.stall.sameFailure,
+      ...Object.fromEntries(Object.entries(stallRaw).filter(([key]) => !['quiet_turns', 'same_failure'].includes(key))),
+    },
+    ...extras,
+  };
   return {
     normalized: known,
-    frontmatter: {
-      version: known.version,
-      status: known.status,
-      outcome: known.outcome,
-      verify: known.verify,
-      scope: {
-        touchpoints: known.scope.touchpoints,
-        non_goals: known.scope.nonGoals,
-        ...Object.fromEntries(Object.entries(scopeRaw).filter(([key]) => !['touchpoints', 'non_goals'].includes(key))),
-      },
-      invariants: known.invariants,
-      stall: {
-        quiet_turns: known.stall.quietTurns,
-        same_failure: known.stall.sameFailure,
-        ...Object.fromEntries(Object.entries(stallRaw).filter(([key]) => !['quiet_turns', 'same_failure'].includes(key))),
-      },
-      ...extras,
-    },
+    frontmatter,
   };
 }
 
@@ -300,8 +360,6 @@ export async function readFlightPlan(cwd) {
   }
 }
 
-// TODO(v0.3): consolidate this strict reader with the hook copy only when the
-// packaged hook can remain a standalone process with no runtime coupling.
 export async function inspectFlightPlan(cwd) {
   let text;
   try {

@@ -1,16 +1,26 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { parseHookFlightPlan } from '../hooks/stop-supervisor.mjs';
+import { invokesCruiseGoal } from '../hooks/goal-session.mjs';
 import {
+  activateGoalSession,
+  deactivateGoalSession,
+  isGoalSessionActive,
+  MAX_WORKSPACE_LOCK_AGE_MS,
+} from '../hooks/session-marker.mjs';
+import {
+  captureWorkspaceFingerprint,
   GoalSupervisor,
   validSupervisorState,
   writeSupervisorState,
 } from '../scripts/lib/supervisor.mjs';
+import { writeFlightPlan } from '../scripts/lib/flight-plan.mjs';
+import { captureFlightContextFingerprint } from '../scripts/lib/assurance.mjs';
 
 const HOOK = resolve('hooks/stop-supervisor.mjs');
 
@@ -40,7 +50,10 @@ async function fixture(options = {}) {
   return cwd;
 }
 
-function invokeProcess(cwd, overrides = {}, { goalSession = true } = {}) {
+function invokeProcess(cwd, overrides = {}, {
+  goalSession = true,
+  pluginScoped = false,
+} = {}) {
   const input = {
     session_id: 'fixture-session',
     transcript_path: join(cwd, 'transcript.jsonl'),
@@ -54,7 +67,7 @@ function invokeProcess(cwd, overrides = {}, { goalSession = true } = {}) {
   const env = { ...process.env };
   if (goalSession) env.CRUISE_CLAUDE_GOAL = '1';
   else delete env.CRUISE_CLAUDE_GOAL;
-  const result = spawnSync(process.execPath, [HOOK], {
+  const result = spawnSync(process.execPath, [HOOK, ...(pluginScoped ? ['--plugin-hook'] : [])], {
     input: JSON.stringify(input),
     encoding: 'utf8',
     timeout: 10_000,
@@ -92,22 +105,37 @@ test('quiet evidence climbs through continuation, realignment, final experiment,
   }
 });
 
-test('missing, complete, and blocked flight plans leave non-active sessions inert', async () => {
+test('missing and legacy flights are corrected while blocked endpoints are labelled', async () => {
   for (const options of [{ withFlight: false }, { status: 'complete' }, { status: 'blocked' }]) {
     const cwd = await fixture(options);
     try {
-      assert.equal(invoke(cwd), null);
-      await assert.rejects(readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'), { code: 'ENOENT' });
+      const output = invoke(cwd);
+      if (options.withFlight === false) {
+        assert.equal(output.decision, 'block');
+        assert.match(output.reason, /FLIGHT\.md is absent/u);
+      }
+      else if (options.status === 'complete') {
+        assert.equal(output.decision, 'block');
+        assert.match(output.reason, /rejected Flight v1 completion/u);
+      }
+      else assert.match(output.systemMessage, /blocked/u);
+      if (options.withFlight === false || options.status === 'complete') {
+        assert.equal(typeof await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'), 'string');
+      } else {
+        await assert.rejects(readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'), { code: 'ENOENT' });
+      }
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   }
 });
 
-test('an absent flight plan emits byte-identical empty hook stdout', async () => {
+test('an absent executable flight receives a bounded corrective block', async () => {
   const cwd = await fixture({ withFlight: false });
   try {
-    assert.equal(invokeProcess(cwd).stdout, '');
+    const output = JSON.parse(invokeProcess(cwd).stdout);
+    assert.equal(output.decision, 'block');
+    assert.match(output.reason, /Create Flight v2/u);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -123,19 +151,70 @@ test('a fresh active plan is inert outside a launcher-marked Goal session', asyn
   }
 });
 
-test('an active flight plan older than 48 hours is inert', async () => {
+test('one workspace cannot host two concurrent Cruise Goal sessions', async () => {
   const cwd = await fixture();
   try {
-    const stale = new Date(Date.now() - (49 * 60 * 60 * 1_000));
-    await utimes(join(cwd, '.cruise', 'FLIGHT.md'), stale, stale);
-    assert.equal(invoke(cwd), null);
-    await assert.rejects(readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'), { code: 'ENOENT' });
+    await activateGoalSession({ cwd, session_id: 'one' });
+    assert.equal(invoke(cwd, { session_id: 'one' }, {
+      goalSession: false,
+      pluginScoped: true,
+    }).decision, 'block');
+    await assert.rejects(
+      activateGoalSession({ cwd, session_id: 'two' }),
+      { code: 'CRUISE_GOAL_CONFLICT' },
+    );
+    await deactivateGoalSession({ cwd, session_id: 'one' });
+    await activateGoalSession({ cwd, session_id: 'two' });
+    assert.equal(invoke(cwd, { session_id: 'two' }, {
+      goalSession: false,
+      pluginScoped: true,
+    }).decision, 'block');
+    const scratch = (await readdir(join(cwd, '.cruise')))
+      .filter((name) => name.startsWith('.supervisor-'));
+    assert.equal(scratch.length, 2);
+    assert.notEqual(scratch[0], scratch[1]);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test('changing flight-plan frontmatter resets the supervision cycle', async () => {
+test('an abandoned workspace lock has a documented bounded recovery lease', async () => {
+  const cwd = await fixture();
+  try {
+    await activateGoalSession({ cwd, session_id: 'abandoned' }, { now: 1 });
+    await assert.rejects(
+      activateGoalSession(
+        { cwd, session_id: 'replacement' },
+        { now: MAX_WORKSPACE_LOCK_AGE_MS },
+      ),
+      { code: 'CRUISE_GOAL_CONFLICT' },
+    );
+    await activateGoalSession(
+      { cwd, session_id: 'replacement' },
+      { now: MAX_WORKSPACE_LOCK_AGE_MS + 2 },
+    );
+    assert.equal(await isGoalSessionActive({ cwd, session_id: 'abandoned' }), false);
+    assert.equal(await isGoalSessionActive({ cwd, session_id: 'replacement' }), true);
+  } finally {
+    await deactivateGoalSession({ cwd, session_id: 'abandoned' });
+    await deactivateGoalSession({ cwd, session_id: 'replacement' });
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('an active flight remains supervised across a long resumable session', async () => {
+  const cwd = await fixture();
+  try {
+    const stale = new Date(Date.now() - (49 * 60 * 60 * 1_000));
+    await utimes(join(cwd, '.cruise', 'FLIGHT.md'), stale, stale);
+    assert.equal(invoke(cwd).decision, 'block');
+    assert.equal(typeof await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'), 'string');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('changing flight-plan metadata cannot reset the supervision cycle', async () => {
   const cwd = await fixture({ quietTurns: 1, outcome: 'First outcome' });
   try {
     const first = invoke(cwd);
@@ -147,11 +226,11 @@ test('changing flight-plan frontmatter resets the supervision cycle', async () =
     );
     const afterChange = invoke(cwd);
     assert.equal(afterChange.decision, 'block');
-    assert.match(afterChange.reason, /baseline fingerprint/u);
-    assert.doesNotMatch(afterChange.reason, /non-progress/u);
+    assert.match(afterChange.reason, /non-progress/u);
+    assert.doesNotMatch(afterChange.reason, /baseline fingerprint/u);
     const state = JSON.parse(await readFile(join(cwd, '.cruise', '.supervisor.json'), 'utf8'));
-    assert.equal(state.blocks_in_cycle, 1);
-    assert.equal(state.turns_observed, 1);
+    assert.equal(state.blocks_in_cycle, 2);
+    assert.equal(state.turns_observed, 2);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -219,15 +298,51 @@ test('a symlinked scratch directory fails open without writing through it', asyn
   }
 });
 
-test('hook registration uses the standalone plugin-root command form', async () => {
+test('host-specific plugin hooks activate and supervise Goal sessions', async () => {
+  const skill = await readFile(resolve('skills/goal/SKILL.md'), 'utf8');
+  assert.doesNotMatch(skill.split('---')[1], /\nhooks:/u);
   const registration = JSON.parse(await readFile(resolve('hooks/hooks.json'), 'utf8'));
-  const command = registration.hooks.Stop[0].hooks[0];
-  assert.deepEqual(command, {
-    type: 'command',
-    command: 'node',
-    args: ['${CLAUDE_PLUGIN_ROOT}/hooks/stop-supervisor.mjs'],
-    timeout: 30,
-  });
+  assert.match(
+    registration.hooks.UserPromptSubmit[0].hooks[0].command,
+    /goal-session\.mjs/u,
+  );
+  assert.match(
+    registration.hooks.Stop[0].hooks[0].command,
+    /stop-supervisor\.mjs.*--plugin-hook/u,
+  );
+  const claudeRegistration = JSON.parse(
+    await readFile(resolve('hooks/claude-hooks.json'), 'utf8'),
+  );
+  assert.match(
+    claudeRegistration.hooks.UserPromptExpansion[0].hooks[0].command,
+    /goal-session\.mjs/u,
+  );
+  assert.match(
+    claudeRegistration.hooks.Stop[0].hooks[0].command,
+    /stop-supervisor\.mjs.*--plugin-hook/u,
+  );
+});
+
+test('Codex prompt activation is exact and ignores non-Codex or non-Goal prompts', () => {
+  assert.equal(invokesCruiseGoal({
+    hook_event_name: 'UserPromptSubmit',
+    model: 'gpt-5.6',
+    prompt: 'Use $cruise:goal to complete this migration.',
+  }), true);
+  assert.equal(invokesCruiseGoal({
+    hook_event_name: 'UserPromptSubmit',
+    model: 'gpt-5.6',
+    prompt: 'Use $cruise:quick for this patch.',
+  }), false);
+  assert.equal(invokesCruiseGoal({
+    hook_event_name: 'UserPromptSubmit',
+    prompt: '/cruise:goal do it',
+  }), true);
+  assert.equal(invokesCruiseGoal({
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Skill',
+    tool_input: { skill: 'cruise:goal' },
+  }), true);
 });
 
 test('unsafe stall integers are invalid instead of defeating the block cap', () => {
@@ -386,6 +501,126 @@ test('adding the Claude host field preserves an existing pre-field supervision c
     assert.equal(continued.decision, 'block');
     assert.match(continued.reason, /realignment|non-progress/iu);
     assert.equal(JSON.parse(await readFile(path, 'utf8')).host, 'claude');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('Flight v2 completion blocks stale gates, never executes oracle text, and allows fresh assurance', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    await writeFile(join(cwd, '.cruise', 'ORIGIN.md'), 'Finish safely.', 'utf8');
+    await writeFile(join(cwd, 'product.txt'), 'done\n', 'utf8');
+    const pwned = join(cwd, 'PWNED');
+    const plan = {
+      version: 2,
+      status: 'complete',
+      outcome: 'Finish without executing data as code',
+      verify: ['node --test'],
+      scope: { touchpoints: ['product.txt'], nonGoals: ['No hook-side commands'] },
+      invariants: ['Oracle text remains inert'],
+      stall: { quietTurns: 1, sameFailure: 9 },
+      quality: {
+        risk: 'medium',
+        profiles: ['core'],
+        gates: [
+          ['intent', 'intent', 'review'],
+          ['functional', 'functional-correctness', 'command'],
+          ['regression', 'regression', 'command'],
+          ['failure', 'failure-paths', 'command'],
+          ['review', 'completion-review', 'review'],
+        ].map(([id, dimension, source]) => ({
+          id: `core.${id}`,
+          dimension,
+          criterion: `Close ${dimension}`,
+          oracle: dimension === 'functional-correctness' ? `touch ${pwned}` : `Review ${dimension}`,
+          severity: 'high',
+          state: 'pending',
+          evidence: null,
+          source,
+        })),
+      },
+      body: '# Flight v2',
+    };
+    await writeFlightPlan(cwd, plan);
+    const rejected = invoke(cwd);
+    assert.equal(rejected.decision, 'block');
+    assert.match(rejected.reason, /rejected unassured completion/u);
+    await assert.rejects(access(pwned), { code: 'ENOENT' });
+
+    const workspaceFingerprint = await captureWorkspaceFingerprint(cwd, {
+      excludeFlightPlan: true,
+    });
+    const contextFingerprint = await captureFlightContextFingerprint(cwd, plan, {
+      workspaceFingerprint,
+    });
+    for (const gate of plan.quality.gates) {
+      gate.state = 'passed';
+      gate.evidence = {
+        summary: `${gate.id} passed`,
+        contextFingerprint,
+        observedAt: 1_800_000_000_000,
+        source: gate.source,
+        rationale: '',
+        waivedBy: '',
+      };
+    }
+    await writeFlightPlan(cwd, plan);
+    const accepted = invoke(cwd);
+    assert.equal(accepted.decision, undefined);
+    assert.match(accepted.systemMessage, /assured completion/u);
+    await assert.rejects(access(pwned), { code: 'ENOENT' });
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('Flight contract churn cannot evade the absolute unassured-completion cap', async () => {
+  const cwd = await fixture({ withFlight: false });
+  try {
+    await writeFile(join(cwd, '.cruise', 'ORIGIN.md'), 'Finish the bounded Goal.', 'utf8');
+    const plan = {
+      version: 2,
+      status: 'complete',
+      outcome: 'Finish the bounded Goal',
+      verify: ['node --test'],
+      scope: { touchpoints: ['product.txt'], nonGoals: [] },
+      invariants: ['Completion remains bounded'],
+      stall: { quietTurns: 1, sameFailure: 9 },
+      quality: {
+        risk: 'medium',
+        profiles: ['core'],
+        gates: [
+          ['intent', 'intent'],
+          ['functional', 'functional-correctness'],
+          ['regression', 'regression'],
+          ['failure', 'failure-paths'],
+          ['review', 'completion-review'],
+        ].map(([id, dimension]) => ({
+          id: `core.${id}`,
+          dimension,
+          criterion: `Close ${dimension}`,
+          oracle: `Review ${dimension}`,
+          severity: 'high',
+          state: 'pending',
+          evidence: null,
+        })),
+      },
+      body: '# Bounded completion',
+    };
+    const outputs = [];
+    for (let index = 0; index < 4; index += 1) {
+      plan.quality.gates[0].criterion = `Close intent revision ${index}`;
+      await writeFlightPlan(cwd, plan);
+      outputs.push(invoke(cwd));
+    }
+    assert.deepEqual(outputs.slice(0, 3).map(({ decision }) => decision), [
+      'block',
+      'block',
+      'block',
+    ]);
+    assert.equal(outputs[3].decision, undefined);
+    assert.match(outputs[3].systemMessage, /correction cap|backstop/u);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

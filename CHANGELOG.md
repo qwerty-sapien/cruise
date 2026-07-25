@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 — 2026-07-25
+
+- Centered Cruise on Flight v2: an adaptive quality contract whose receipts are
+  bound to the exact original request, product workspace, and gate definitions.
+- Added deterministic `cruise attest`, required core quality dimensions, web,
+  backend/data, and C++/HPC profile packs, plus independent review for high-risk
+  work.
+- Interlocked Codex and Claude completion with the same shared assurance
+  evaluator; strengthened product fingerprints to include HEAD and untracked
+  contents while excluding Cruise scratch.
+- Folded Refine into Goal's executable and explicit plan-only paths, leaving
+  four public skills: Build, Quick, Goal, and Debug.
+- Added session-scoped Claude Stop supervision, workspace ownership, truthful
+  launcher results, explicit session IDs, and authentication-aware Doctor
+  checks.
+- Closed assurance-downgrade paths: Flight v1 is migration-only, mandatory core
+  gates must pass with non-empty explicit evidence, inherited obligations join
+  the context binding, and attestation now distinguishes a closed active
+  contract from accepted completion.
+- Preserved Claude resume intent, bounded completion correction despite
+  contract churn, rejected forged future queue completion, Flight substitution,
+  and milestone deletion, and made Codex Doctor verify the installed/enabled
+  Cruise version.
+
 ## 0.3.0 — 2026-07-21
 
 - Removed the retired v0.1 workflow control plane, state, archives, approval

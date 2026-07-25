@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,8 @@ import {
   CLI_VERSION,
   localDoctorReport,
   parseArgs,
+  PUBLIC_SKILLS,
+  runAttest,
   runOneGoal,
   runStart,
   runWorker,
@@ -17,6 +19,7 @@ import {
 } from '../index.js';
 import { readOriginPrompt } from '../scripts/lib/origin-note.mjs';
 import { SimpleCruiseSession } from '../scripts/lib/simple-session.mjs';
+import { isGoalSessionActive } from '../hooks/session-marker.mjs';
 
 test('the npm package entry runs the Cruise CLI', () => {
   const result = spawnSync(process.execPath, [resolve('index.js'), '--version'], {
@@ -77,6 +80,60 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
   assert.throws(() => parseArgs(['goal', '--packet', 'task.yaml']), /not supported/u);
   assert.throws(() => parseArgs(['doctor', '--install-worker-rule']), /not supported/u);
   assert.throws(() => parseArgs(['picker-demo']), /was removed/u);
+  assert.equal(parseArgs(['goal', '--plan', 'Design it']).planOnly, true);
+  assert.throws(() => parseArgs(['quick', '--plan', 'Patch it']), /only by cruise goal/u);
+  assert.equal(
+    parseArgs(['--claude', 'goal', '--resume', '12345678-abcd']).resumeSessionId,
+    '12345678-abcd',
+  );
+  assert.throws(
+    () => parseArgs(['--claude', 'goal', '--resume', '12345678-abcd', 'Continue']),
+    /preserves the original Goal/u,
+  );
+  assert.throws(
+    () => parseArgs(['goal', '--resume', '12345678-abcd', 'Continue']),
+    /only by `cruise --claude goal`/u,
+  );
+  assert.throws(
+    () => parseArgs(['refine', 'Plan it']),
+    /Refine was folded into Goal.*plan only/u,
+  );
+});
+
+test('the release exposes exactly four real skills with synchronized versions', async () => {
+  assert.deepEqual(PUBLIC_SKILLS, ['build', 'quick', 'goal', 'debug']);
+  const discovered = (await readdir(resolve('skills'), { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(discovered, [...PUBLIC_SKILLS].sort());
+  const packageVersion = JSON.parse(await readFile(resolve('package.json'), 'utf8')).version;
+  const codex = JSON.parse(await readFile(resolve('.codex-plugin/plugin.json'), 'utf8'));
+  const claude = JSON.parse(await readFile(resolve('.claude-plugin/plugin.json'), 'utf8'));
+  assert.equal(packageVersion, '0.4.0');
+  assert.equal(codex.version, packageVersion);
+  assert.equal(claude.version, packageVersion);
+  assert.doesNotMatch(JSON.stringify(codex.interface.defaultPrompt), /refine/u);
+});
+
+test('attest is a prompt-free inspection command with machine-readable output', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-attest-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const options = parseArgs(['attest', '--json', '-C', root]);
+  assert.equal(options.command, 'attest');
+  assert.equal(options.prompt, '');
+  let output = '';
+  assert.equal(await runAttest(options, {
+    output: { write(value) { output += value; } },
+    planInspector: async () => ({
+      state: 'valid',
+      plan: { version: 1, status: 'complete' },
+    }),
+  }), 2);
+  const report = JSON.parse(output);
+  assert.equal(report.level, 'legacy-unattested');
+  assert.equal(report.ready_for_completion, false);
+  assert.equal(report.allows_completion, false);
 });
 
 test('provider selectors are request-scoped, mutually exclusive, and default to Codex', () => {
@@ -275,32 +332,134 @@ test('Claude start uses the native Claude adapter and preserves the ORIGIN note'
   assert.match(calls[0].pluginRoot, /cruise$/u);
 });
 
-test('Doctor only checks local Codex availability, not profiles, rules, digests, or network health', () => {
+test('Claude resume preserves the original request and does not reinvoke the Goal skill', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-resume-claude-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await runStart({
+    cwd: root,
+    prompt: 'Original intention.',
+    skill: 'goal',
+    provider: 'claude',
+  }, {
+    async claudeRunner() {
+      return { status: 'complete', exitCode: 0 };
+    },
+  });
+  const calls = [];
+  assert.equal(await runStart({
+    cwd: root,
+    prompt: '',
+    skill: 'goal',
+    provider: 'claude',
+    resumeSessionId: '12345678-abcd',
+  }, {
+    async claudeRunner(input) {
+      calls.push(input);
+      return { status: 'complete', exitCode: 0 };
+    },
+  }), 0);
+  assert.equal(await readOriginPrompt(root), 'Original intention.');
+  assert.equal(calls[0].prompt, '');
+  assert.equal(calls[0].resumeSessionId, '12345678-abcd');
+});
+
+test('Claude non-Goal runs reserve the workspace without activating Goal supervision', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-quick-claude-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let active;
+  assert.equal(await runStart({
+    cwd: root,
+    prompt: 'Patch it.',
+    skill: 'quick',
+    provider: 'claude',
+  }, {
+    async claudeRunner(input) {
+      active = await isGoalSessionActive({
+        cwd: input.cwd,
+        session_id: input.sessionId,
+      });
+      return { status: 'complete', exitCode: 0 };
+    },
+  }), 0);
+  assert.equal(active, false);
+});
+
+test('Codex Doctor checks transport and the effective installed Cruise plugin version', () => {
   const calls = [];
   const report = localDoctorReport((binary, args) => {
     calls.push([binary, args]);
-    return { status: 0, output: args[0] === '--version' ? 'codex 1.0' : 'help', error: '' };
+    return {
+      status: 0,
+      output: args[0] === '--version'
+        ? 'codex 1.0'
+        : args[0] === 'plugin'
+          ? JSON.stringify({
+              installed: [{
+                name: 'cruise',
+                version: CLI_VERSION,
+                installed: true,
+                enabled: true,
+              }],
+            })
+          : 'help',
+      error: '',
+    };
   });
   assert.equal(report.ok, true);
   assert.equal(report.provider, 'codex');
-  assert.deepEqual(report.checks.map(({ id }) => id), ['codex', 'app-server']);
+  assert.deepEqual(report.checks.map(({ id }) => id), ['codex', 'app-server', 'codex-plugin']);
   assert.deepEqual(calls, [
     ['codex', ['--version']],
     ['codex', ['app-server', '--help']],
+    ['codex', ['plugin', 'list', '--json']],
   ]);
+  const stale = localDoctorReport((binary, args) => ({
+    status: 0,
+    output: args[0] === 'plugin'
+      ? JSON.stringify({
+          installed: [{
+            name: 'cruise',
+            version: '0.3.0',
+            installed: true,
+            enabled: true,
+          }],
+        })
+      : 'ok',
+    error: '',
+  }));
+  assert.equal(stale.ok, false);
+  assert.match(
+    stale.checks.find(({ id }) => id === 'codex-plugin').detail,
+    /Codex has Cruise 0\.3\.0/u,
+  );
 });
 
-test('Claude Doctor checks the CLI and validates the Claude plugin', () => {
+test('Claude Doctor checks the CLI, plugin, and authentication', () => {
   const calls = [];
   const report = localDoctorReport((binary, args) => {
     calls.push([binary, args]);
-    return { status: 0, output: args[0] === '--version' ? '2.1.209' : 'valid', error: '' };
+    return {
+      status: 0,
+      output: args[0] === '--version'
+        ? '2.1.209'
+        : args[0] === 'auth'
+          ? '{"loggedIn":true,"email":"dev@example.com"}'
+          : 'valid',
+      error: '',
+    };
   }, { provider: 'claude', pluginRoot: '/tmp/cruise' });
   assert.equal(report.ok, true);
   assert.equal(report.provider, 'claude');
-  assert.deepEqual(report.checks.map(({ id }) => id), ['claude', 'claude-plugin']);
+  assert.deepEqual(report.checks.map(({ id }) => id), [
+    'claude',
+    'claude-plugin',
+    'claude-auth',
+    'claude-health',
+  ]);
   assert.deepEqual(calls, [
     ['claude', ['--version']],
     ['claude', ['plugin', 'validate', '/tmp/cruise']],
+    ['claude', ['auth', 'status']],
+    ['claude', ['doctor']],
   ]);
 });

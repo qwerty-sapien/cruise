@@ -1,4 +1,0 @@
-[stdout]
-[harness verifier] python3 verify_release.py
-[stderr]
-ERROR: mandatory ACME_SIGNING_TOKEN is unavailable

@@ -11,35 +11,39 @@ the requested outcome determine whether legitimate work continues.
 
 | Field | Default | Trigger evidence |
 | --- | ---: | --- |
-| `stall.quiet_turns` | `3` | Consecutive unchanged workspace fingerprints or oscillation to an earlier fingerprint. |
+| `stall.quiet_turns` | `3` | Consecutive unchanged product/evidence-progress fingerprints or oscillation to an earlier fingerprint. |
 | `stall.same_failure` | `3` | Consecutive repetitions of the same normalized failure signature. |
 
 Reaching either threshold starts one ladder: realign, one final experiment,
-then stall. A new workspace fingerprint resets quiet and failure counts and the
-ladder. In signature-only supervision, changed or cleared failure evidence also
-resets it.
+then stall. A new product fingerprint resets quiet and failure counts and the
+active-work ladder. Flight prose, status churn, and evidence wording alone do
+not. Completion correction has an additional absolute cap, so editing gate
+contracts cannot extend it indefinitely. In signature-only supervision,
+changed or cleared failure evidence also resets the active-work ladder.
 
 Codex evaluates the ladder between native Goal continuation turns. On stall it
 attempts to pause the Goal, emits the observations and interventions, and exits
 `3`. There is no independent wall-clock or total-turn ceiling in this loop.
 
-Claude evaluates the ladder on `Stop` events only when
-`CRUISE_CLAUDE_GOAL=1` and a valid `active` flight is newer than 48 hours. It
-blocks ordinary stops with continuation guidance, then realignment and final
-experiment guidance. The following stop is allowed with a report. A hard
-backstop at `quiet_turns + 2` blocked stops also allows the stop if the normal
-ladder has not finished. New evidence resets the cycle.
+Claude evaluates the ladder on `Stop` events scoped to the active Goal skill
+session. Scratch is keyed by session ID, so another Claude or Codex session in
+the same worktree cannot reset its cycle. It blocks ordinary stops with
+continuation guidance, then realignment and final-experiment guidance. The
+following stop is allowed with a report. A hard backstop at `quiet_turns + 2`
+blocked stops also allows the stop if the normal ladder has not finished.
 
-Claude supervision is fail-open: a missing, terminal, stale, oversized, or
-malformed flight; unavailable evidence; damaged scratch; or hook exception may
-reduce supervision, but cannot trap the session. The hook command itself has a
-30-second host timeout.
+Missing or malformed Flight receives bounded correction. Damaged scratch or a
+hook exception fails open, and every correction path has a hard cap, so the
+hook cannot trap the session. Fail-open does not become false success: the
+Claude launcher independently returns stalled or unassured unless the shared
+attestor accepts the terminal Flight. The hook command itself has a 30-second
+host timeout.
 
 ## Advisory input and scratch bounds
 
 | Input or state | Bound | Overflow behavior |
 | --- | ---: | --- |
-| `.cruise/FLIGHT.md` | 1 MB, 1,000 frontmatter tokens, nesting depth 10 | Parser returns no plan; the run continues without artifact-driven supervision. |
+| `.cruise/FLIGHT.md` | 1 MB, 1,000 frontmatter tokens, nesting depth 10 | Parser reports invalid input; supervised Goal receives bounded correction and cannot claim assured completion. |
 | `.cruise/QUEUE.md` | 1 MB, 5,000 frontmatter tokens, nesting depth 12 | Parser returns no queue; queue commands stop with an invalid/missing-queue error. |
 | Claude Stop-hook JSON input | 1 MB | Hook catches the error, allows the stop, and emits a fail-open system message. |
 | Codex captured agent text per turn | 64 KiB | Additional text is not used for failure-signature supervision. |
@@ -58,7 +62,9 @@ real directory. These are path-safety boundaries, not workload budgets.
 | Queue execution | Sequential; stops at active, blocked, stalled, failed, or dependency-deadlocked work. No milestone-attempt budget is stored. |
 | Codex native Goal bootstrap | 120-second first-turn deadline, starting after Goal activation. On expiry Cruise uses a fixed 2-second budget to read the current Goal and attempt to pause it, then reports thread/model/status/elapsed diagnostics and exits `4`; timers are cancelled on turn start, interruption, error, and app-server exit. |
 | Codex app-server transport inactivity | Liveness-and-recovery bound sourced from observed inbound JSONL frames, not a workload budget. The request-scoped default is 300 seconds, tunable with `CRUISE_INACTIVITY_TIMEOUT_MS`; human-input waits suspend it. Expiry terminates the session with thread/turn/Goal/stderr-tail evidence and exits `5`. |
-| Launcher exits | `0` complete, `2` blocked/failed, `3` stalled, `4` Goal bootstrap timeout, `5` transport inactivity, `130` interrupted. |
+| Product fingerprint | 64 MiB cumulative untracked-file content | Freshness becomes unavailable; v2 completion remains unassured rather than hashing unbounded input. |
+| Workspace ownership lease | 24 hours, refreshed whenever the same session activates | A different session is rejected during the lease. After a crashed or abandoned host leaves no cleanup path, a new activation may recover the workspace once the lease expires. |
+| Launcher exits | `0` v2 contract ready or assured/qualified completion, `2` blocked/failed/unassured (including legacy v1), `3` stalled, `4` Goal bootstrap timeout, `5` transport inactivity, `130` interrupted. |
 
 Service quotas, model context windows, Claude hook timeouts, Codex host limits,
 OS limits, and external API policies remain host or protocol constraints.

@@ -1,17 +1,27 @@
 #!/usr/bin/env node
 
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 
-const execFileAsync = promisify(execFile);
-const FLIGHT_FILE = '.cruise/FLIGHT.md';
+import {
+  captureFlightContextFingerprint,
+  evaluateFlightAssurance,
+} from '../scripts/lib/assurance.mjs';
+import {
+  flightPlanTemplate,
+  inspectFlightPlan,
+  parseFlightPlan,
+} from '../scripts/lib/flight-plan.mjs';
+import { captureWorkspaceFingerprint as captureProductFingerprint } from '../scripts/lib/supervisor.mjs';
+import {
+  deactivateGoalSession,
+  isGoalSessionActive,
+} from './session-marker.mjs';
+
 const STATE_FILE = '.cruise/.supervisor.json';
 const GITIGNORE_FILE = '.cruise/.gitignore';
-const MAX_FLIGHT_AGE_MS = 48 * 60 * 60 * 1_000;
 const DEFAULT_STALL = Object.freeze({ quietTurns: 3, sameFailure: 3 });
 const FAILURE_LINE = /\b(?:error|fail(?:ed|ure)?|exception|panic|traceback)\b/iu;
 
@@ -27,219 +37,17 @@ function cleanMessage(value) {
   return String(value ?? 'unknown error').replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim();
 }
 
-function stripComment(value) {
-  let quote = null;
-  let escaped = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quote === '"' && character === '\\' && !escaped) {
-      escaped = true;
-      continue;
-    }
-    if (character === quote && !escaped) quote = null;
-    else if (!quote && (character === '"' || character === "'")) quote = character;
-    else if (!quote && character === '#' && (index === 0 || /\s/u.test(value[index - 1]))) {
-      return value.slice(0, index).trimEnd();
-    }
-    escaped = false;
-  }
-  if (quote) throw new Error('unterminated flight-plan scalar');
-  return value.trim();
-}
-
-function parseScalar(value) {
-  const text = stripComment(value).trim();
-  if (text === '[]') return [];
-  if (text === '{}') return {};
-  if (text === 'null' || text === '~') return null;
-  if (text === 'true') return true;
-  if (text === 'false') return false;
-  if (/^-?(?:0|[1-9]\d*)$/u.test(text)) return Number(text);
-  if (text.startsWith('"')) {
-    const parsed = JSON.parse(text);
-    if (typeof parsed !== 'string') throw new Error('quoted flight-plan values must be strings');
-    return parsed;
-  }
-  if (text.startsWith("'")) {
-    if (!text.endsWith("'") || text.length < 2) throw new Error('invalid flight-plan scalar');
-    return text.slice(1, -1).replace(/''/gu, "'");
-  }
-  if (!text || /^[!&*>|[{]/u.test(text)) throw new Error('unsupported flight-plan scalar');
-  return text;
-}
-
-function positiveInteger(value, fallback) {
-  const resolved = value === undefined ? fallback : value;
-  if (!Number.isSafeInteger(resolved) || resolved < 1) {
-    throw new Error('stall thresholds must be positive integers');
-  }
-  return resolved;
-}
-
-function tokensFor(frontmatter) {
-  const tokens = [];
-  for (const [index, raw] of frontmatter.split(/\r?\n/u).entries()) {
-    if (raw.includes('\t')) throw new Error(`tabs are not valid flight-plan indentation on line ${index + 2}`);
-    const indent = raw.match(/^ */u)[0].length;
-    const content = stripComment(raw.slice(indent)).trim();
-    if (!content) continue;
-    if (indent % 2 !== 0) throw new Error(`flight-plan indentation must use two spaces on line ${index + 2}`);
-    tokens.push({ indent, content, line: index + 2 });
-  }
-  if (tokens.length > 1_000) throw new Error('flight-plan frontmatter is too large');
-  return tokens;
-}
-
-function parseBlock(tokens, start, indent, depth = 0) {
-  if (depth > 10) throw new Error('flight-plan frontmatter is too deeply nested');
-  const sequence = tokens[start]?.content === '-' || tokens[start]?.content.startsWith('- ');
-  const result = sequence ? [] : {};
-  let cursor = start;
-  while (cursor < tokens.length && tokens[cursor].indent >= indent) {
-    const token = tokens[cursor];
-    if (token.indent !== indent) throw new Error(`unexpected indentation on line ${token.line}`);
-    const item = token.content === '-' || token.content.startsWith('- ');
-    if (item !== sequence) throw new Error(`mixed mapping and sequence on line ${token.line}`);
-    if (sequence) {
-      const rest = token.content.slice(1).trim();
-      if (rest) result.push(parseScalar(rest));
-      else if (tokens[cursor + 1]?.indent === indent + 2) {
-        const [child, next] = parseBlock(tokens, cursor + 1, indent + 2, depth + 1);
-        result.push(child);
-        cursor = next - 1;
-      } else result.push(null);
-    } else {
-      const separator = token.content.indexOf(':');
-      if (separator < 1) throw new Error(`expected a mapping on line ${token.line}`);
-      const key = token.content.slice(0, separator).trim();
-      if (
-        !/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(key) ||
-        ['__proto__', 'constructor', 'prototype'].includes(key) ||
-        Object.hasOwn(result, key)
-      ) {
-        throw new Error(`invalid or duplicate key on line ${token.line}`);
-      }
-      const rest = token.content.slice(separator + 1).trim();
-      if (rest) result[key] = parseScalar(rest);
-      else if (tokens[cursor + 1]?.indent === indent + 2) {
-        const [child, next] = parseBlock(tokens, cursor + 1, indent + 2, depth + 1);
-        result[key] = child;
-        cursor = next - 1;
-      } else result[key] = null;
-    }
-    cursor += 1;
-  }
-  return [result, cursor];
-}
-
-function isMapping(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function stringList(value) {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string' && !/[\r\n]/u.test(item));
-}
-
 function hookFlightPlanTemplate() {
-  return `---
-version: 1
-status: active
-outcome: <one line, falsifiable>
-verify:
-  - <command>
-scope:
-  touchpoints:
-    - <path-or-glob>
-  non_goals:
-    - <explicit exclusion>
-invariants:
-  - <protected behavior>
-stall:
-  quiet_turns: 3
-  same_failure: 3
----
-# Flight plan
-<prose>
-`;
-}
-
-// TODO(v0.3): consolidate this strict reader and fingerprint helper only when
-// the packaged hook can remain a standalone process with no runtime coupling.
-function parseHookFlightPlanStrict(text) {
-  if (typeof text !== 'string') throw new TypeError('flight plan must be text');
-  if (text.length > 1_000_000) throw new Error('flight plan exceeds 1 MB');
-  const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
-  if (lines[0]?.trim() !== '---') throw new Error('line 1: missing opening --- frontmatter fence');
-  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
-  if (closing < 0) throw new Error('missing closing --- frontmatter fence');
-  const frontmatter = lines.slice(1, closing).join('\n');
-  const tokens = tokensFor(frontmatter);
-  const [raw, consumed] = tokens.length ? parseBlock(tokens, 0, 0) : [{}, 0];
-  if (consumed !== tokens.length || !isMapping(raw)) throw new Error('frontmatter root must be a mapping');
-  const status = raw.status ?? 'active';
-  if (!['active', 'complete', 'blocked'].includes(status)) {
-    throw new Error('status must be active, complete, or blocked');
-  }
-  const version = raw.version ?? 1;
-  const outcome = raw.outcome ?? '';
-  const verify = raw.verify ?? [];
-  const scope = raw.scope ?? {};
-  const invariants = raw.invariants ?? [];
-  const stall = raw.stall ?? {};
-  if (!Number.isSafeInteger(version) || version < 1) throw new Error('version must be a positive integer');
-  if (typeof outcome !== 'string' || /[\r\n]/u.test(outcome)) throw new Error('outcome must be one line');
-  if (!stringList(verify)) throw new Error('verify must be an array of strings');
-  if (!isMapping(scope)) throw new Error('scope must be a mapping');
-  if (!stringList(scope.touchpoints ?? [])) throw new Error('scope.touchpoints must be an array of strings');
-  if (!stringList(scope.non_goals ?? [])) throw new Error('scope.non_goals must be an array of strings');
-  if (!stringList(invariants)) throw new Error('invariants must be an array of strings');
-  if (!isMapping(stall)) throw new Error('stall must be a mapping');
-  return {
-    version,
-    status,
-    outcome,
-    verify,
-    scope: {
-      touchpoints: scope.touchpoints ?? [],
-      nonGoals: scope.non_goals ?? [],
-    },
-    invariants,
-    stall: {
-      quietTurns: positiveInteger(stall.quiet_turns, DEFAULT_STALL.quietTurns),
-      sameFailure: positiveInteger(stall.same_failure, DEFAULT_STALL.sameFailure),
-    },
-    frontmatterHash: digest(frontmatter),
-  };
+  return flightPlanTemplate();
 }
 
 export function parseHookFlightPlan(text) {
-  try {
-    return parseHookFlightPlanStrict(text);
-  } catch {
-    return null;
-  }
+  return parseFlightPlan(text);
 }
 
 async function inspectHookFlightPlan(cwd, now) {
-  const path = join(cwd, FLIGHT_FILE);
-  try {
-    const [text, metadata] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
-    const age = now - metadata.mtimeMs;
-    if (age < 0 || age >= MAX_FLIGHT_AGE_MS) return { state: 'absent' };
-    const contentHash = digest(text);
-    try {
-      return { state: 'valid', plan: parseHookFlightPlanStrict(text), contentHash };
-    } catch (error) {
-      return {
-        state: 'invalid',
-        reason: cleanMessage(error?.message ?? error),
-        contentHash,
-      };
-    }
-  } catch (error) {
-    if (error?.code === 'ENOENT') return { state: 'absent' };
-    throw error;
-  }
+  void now;
+  return inspectFlightPlan(cwd);
 }
 
 async function ensureScratchDirectory(cwd) {
@@ -269,9 +77,18 @@ async function ensureGitignore(directory) {
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
-  if (text.split(/\r?\n/u).includes('.supervisor.json')) return;
-  const next = `${text}${text && !text.endsWith('\n') ? '\n' : ''}.supervisor.json\n`;
+  const lines = text.split(/\r?\n/u);
+  const additions = ['.supervisor.json', '.supervisor-*.json', '.attestation.json']
+    .filter((entry) => !lines.includes(entry));
+  if (!additions.length) return;
+  const next = `${text}${text && !text.endsWith('\n') ? '\n' : ''}${additions.join('\n')}\n`;
   await atomicWrite(path, next);
+}
+
+function sessionStateBasename(input) {
+  return typeof input?.session_id === 'string' && input.session_id
+    ? `.supervisor-${digest(input.session_id).slice(0, 24)}.json`
+    : basename(STATE_FILE);
 }
 
 function newState(flightHash, now) {
@@ -287,6 +104,7 @@ function newState(flightHash, now) {
     quiet_stops: 0,
     ladder: 'normal',
     blocks_in_cycle: 0,
+    completion_blocks: 0,
     turns_observed: 0,
     interventions: [],
     observations: [],
@@ -326,6 +144,7 @@ function validState(value) {
     Number.isInteger(value.quiet_stops) && value.quiet_stops >= 0 &&
     ['normal', 'realign', 'final', 'stalled'].includes(value.ladder) &&
     Number.isInteger(value.blocks_in_cycle) && value.blocks_in_cycle >= 0 &&
+    Number.isInteger(value.completion_blocks ?? 0) && (value.completion_blocks ?? 0) >= 0 &&
     Number.isInteger(value.turns_observed) && value.turns_observed >= 0 &&
     Array.isArray(value.interventions) && value.interventions.length <= 32 &&
     value.interventions.every(validIntervention) &&
@@ -354,8 +173,9 @@ function validState(value) {
 async function readState(directory, flightHash, now, {
   preserveCycle = false,
   preserveInvalidRepair = false,
+  filename = basename(STATE_FILE),
 } = {}) {
-  const path = join(directory, basename(STATE_FILE));
+  const path = join(directory, filename);
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     if (!validState(parsed)) throw new Error('supervisor scratch state is malformed');
@@ -379,23 +199,12 @@ async function readState(directory, flightHash, now, {
   }
 }
 
-async function writeState(directory, state) {
-  await atomicWrite(join(directory, basename(STATE_FILE)), `${JSON.stringify(state, null, 2)}\n`);
+async function writeState(directory, state, filename = basename(STATE_FILE)) {
+  await atomicWrite(join(directory, filename), `${JSON.stringify(state, null, 2)}\n`);
 }
 
 async function captureWorkspaceFingerprint(cwd) {
-  try {
-    const options = { cwd, encoding: 'utf8', maxBuffer: Infinity };
-    const pathspec = ['--', '.', ':(exclude).cruise/FLIGHT.md'];
-    const [statusResult, diffResult, cachedResult] = await Promise.all([
-      execFileAsync('git', ['status', '--porcelain=v1', ...pathspec], options),
-      execFileAsync('git', ['diff', ...pathspec], options),
-      execFileAsync('git', ['diff', '--cached', ...pathspec], options),
-    ]);
-    return digest(`${statusResult.stdout}\u0000${diffResult.stdout}\u0000${cachedResult.stdout}`);
-  } catch {
-    return null;
-  }
+  return captureProductFingerprint(cwd, { excludeFlightPlan: true });
 }
 
 function failureSignature(text) {
@@ -502,7 +311,9 @@ function stallMessage(state, observation, capReached = false) {
     `Cruise Goal stall supervisor allowed this stop after ${state.turns_observed} observed stops.`,
     `Observed: ${observation}.`,
     `Interventions attempted: ${interventions}.`,
-    capReached ? `The hard backstop of ${state.blocks_in_cycle} blocked stops was reached.` : 'The realignment and final-experiment ladder produced no new evidence.',
+    capReached
+      ? `The hard backstop of ${Math.max(state.blocks_in_cycle, state.completion_blocks ?? 0)} blocked stops was reached.`
+      : 'The realignment and final-experiment ladder produced no new evidence.',
     'Suggested next actions: inspect the last diff and failure, edit .cruise/FLIGHT.md if its scope or tuning is stale, provide missing evidence or a material decision, then resume explicitly.',
     'The stop was allowed; this scratch state grants no authority and is safe to delete.',
   ].join('\n');
@@ -531,17 +342,67 @@ function invalidFlightReport(state, reason, capReached) {
 export async function runStopSupervisor(input, {
   now = Date.now(),
   goalSession = process.env.CRUISE_CLAUDE_GOAL === '1',
+  sessionScoped = false,
 } = {}) {
   if (!input || input.hook_event_name !== 'Stop' || typeof input.cwd !== 'string' || !input.cwd) return null;
+  if (
+    !goalSession &&
+    process.argv.includes('--plugin-hook')
+  ) {
+    goalSession = await isGoalSessionActive(input);
+    sessionScoped = true;
+  }
   if (!goalSession) return null;
   const cwd = resolve(input.cwd);
   const inspected = await inspectHookFlightPlan(cwd, now);
-  if (inspected.state === 'absent') return null;
+  if (inspected.state === 'absent') {
+    if (input.permission_mode === 'plan') {
+      await deactivateGoalSession(input);
+      return { systemMessage: 'Cruise Goal completed a planning-only turn; no implementation assurance is claimed.' };
+    }
+    const directory = await ensureScratchDirectory(cwd);
+    const stateFilename = sessionScoped
+      ? sessionStateBasename(input)
+      : basename(STATE_FILE);
+    await ensureGitignore(directory);
+    const state = await readState(directory, 'absent', now, {
+      preserveCycle: true,
+      filename: stateFilename,
+    });
+    state.turns_observed += 1;
+    state.updated_at = now;
+    const cap = DEFAULT_STALL.quietTurns + 2;
+    let output;
+    if (state.blocks_in_cycle >= cap) {
+      state.ladder = 'stalled';
+      await deactivateGoalSession(input);
+      output = {
+        systemMessage: `Cruise allowed this stop after ${state.blocks_in_cycle} bounded corrections because .cruise/FLIGHT.md remained absent. Completion is unassured.`,
+      };
+    } else {
+      state.blocks_in_cycle += 1;
+      output = {
+        decision: 'block',
+        reason: [
+          'Cruise cannot attest completion because .cruise/FLIGHT.md is absent.',
+          'Create Flight v2 as the first execution artifact, include core and relevant domain profiles, then implement and record fresh evidence before stopping.',
+        ].join(' '),
+      };
+    }
+    await writeState(directory, state, stateFilename);
+    return output;
+  }
 
   const directory = await ensureScratchDirectory(cwd);
+  const stateFilename = sessionScoped
+    ? sessionStateBasename(input)
+    : basename(STATE_FILE);
   await ensureGitignore(directory);
   if (inspected.state === 'invalid') {
-    const state = await readState(directory, inspected.contentHash, now, { preserveCycle: true });
+    const state = await readState(directory, inspected.contentHash, now, {
+      preserveCycle: true,
+      filename: stateFilename,
+    });
     const invalidHashes = state.invalid_flight_hashes ?? [];
     const repeated = invalidHashes.includes(inspected.contentHash);
     const blockCap = DEFAULT_STALL.quietTurns + 2;
@@ -558,6 +419,7 @@ export async function runStopSupervisor(input, {
     let output;
     if (repeated || capReached) {
       state.ladder = 'stalled';
+      await deactivateGoalSession(input);
       output = { systemMessage: invalidFlightReport(state, inspected.reason, capReached) };
     } else {
       state.blocks_in_cycle += 1;
@@ -566,25 +428,76 @@ export async function runStopSupervisor(input, {
       state.interventions = state.interventions.slice(-32);
       output = { decision: 'block', reason: correctiveReason(inspected.reason) };
     }
-    await writeState(directory, state);
+    await writeState(directory, state, stateFilename);
     return output;
   }
   const flight = inspected.plan;
-  if (flight.status !== 'active') return null;
-  const state = await readState(directory, flight.frontmatterHash, now, {
+  if (flight.status === 'blocked') {
+    await deactivateGoalSession(input);
+    return { systemMessage: 'Cruise Goal is blocked as recorded in .cruise/FLIGHT.md; completion is not claimed.' };
+  }
+  if (input.permission_mode === 'plan' && flight.status === 'active') {
+    await deactivateGoalSession(input);
+    return { systemMessage: 'Cruise Goal returned control in Claude Plan mode. Implementation remains active and unassured.' };
+  }
+  const workspaceFingerprint = await captureWorkspaceFingerprint(cwd);
+  let assessment = null;
+  let contextFingerprint = null;
+  let contextError = null;
+  if (flight.version >= 2 && workspaceFingerprint) {
+    try {
+      contextFingerprint = await captureFlightContextFingerprint(cwd, flight, {
+        workspaceFingerprint,
+      });
+      assessment = evaluateFlightAssurance(flight, contextFingerprint);
+    } catch (error) {
+      contextError = cleanMessage(error?.message);
+      assessment = evaluateFlightAssurance(flight, null);
+    }
+  } else if (flight.version < 2) {
+    assessment = evaluateFlightAssurance(flight, null);
+  }
+  if (flight.status === 'complete' && assessment?.allowsCompletion) {
+    await deactivateGoalSession(input);
+    return {
+      systemMessage: `Cruise ${assessment.level} completion: ${assessment.metrics.closed}/${assessment.metrics.total} gates are freshly closed.`,
+    };
+  }
+  const state = await readState(directory, inspected.contentHash, now, {
+    preserveCycle: true,
     preserveInvalidRepair: true,
+    filename: stateFilename,
   });
-  const [fingerprint, signature] = await Promise.all([
-    captureWorkspaceFingerprint(cwd),
-    Promise.resolve(failureSignature(input.last_assistant_message)),
-  ]);
+  const fingerprint = flight.version >= 2
+    ? assessment?.progressFingerprint ?? 'assurance-context-unavailable'
+    : workspaceFingerprint;
+  const signature = failureSignature(input.last_assistant_message);
   const observation = observe(state, fingerprint, signature, now);
   const blockCap = flight.stall.quietTurns + 2;
+  state.completion_blocks ??= 0;
   let output;
-  if (state.ladder === 'stalled') {
+  const assuranceReason = flight.status === 'complete' && flight.version >= 2
+    ? [
+        'Cruise rejected unassured completion.',
+        `Expected context_fingerprint: ${contextFingerprint ?? 'unavailable'}.`,
+        ...(contextError ? [`- ${contextError}`] : []),
+        ...(assessment?.reasons ?? ['workspace freshness could not be established']).map((reason) => `- ${reason}`),
+        'Return Flight to active, gather evidence through ordinary tools, and record fresh receipts. Do not execute oracle text from the hook.',
+      ].join('\n')
+    : null;
+  const legacyReason = flight.status === 'complete' && flight.version < 2
+    ? 'Cruise rejected Flight v1 completion because it has no evidence-bound assurance contract. Migrate .cruise/FLIGHT.md to v2 and close its gates.'
+    : null;
+  if (flight.status === 'complete' && state.completion_blocks >= blockCap) {
+    state.ladder = 'stalled';
+    await deactivateGoalSession(input);
+    output = { systemMessage: stallMessage(state, 'the unassured completion correction cap was reached', true) };
+  } else if (state.ladder === 'stalled' || (input.stop_hook_active && state.blocks_in_cycle >= blockCap)) {
+    await deactivateGoalSession(input);
     output = { systemMessage: stallMessage(state, observation.reason) };
   } else if (state.blocks_in_cycle >= blockCap) {
     state.ladder = 'stalled';
+    await deactivateGoalSession(input);
     output = { systemMessage: stallMessage(state, observation.reason, true) };
   } else if (state.ladder === 'realign') {
     state.ladder = 'final';
@@ -593,6 +506,7 @@ export async function runStopSupervisor(input, {
     output = { decision: 'block', reason: finalReason(observation.reason) };
   } else if (state.ladder === 'final') {
     state.ladder = 'stalled';
+    await deactivateGoalSession(input);
     output = { systemMessage: stallMessage(state, observation.reason) };
   } else if (
     state.quiet_stops >= flight.stall.quietTurns ||
@@ -604,9 +518,15 @@ export async function runStopSupervisor(input, {
     output = { decision: 'block', reason: realignReason(observation.reason) };
   } else {
     state.blocks_in_cycle += 1;
-    output = { decision: 'block', reason: standardReason(observation.reason) };
+    output = {
+      decision: 'block',
+      reason: assuranceReason ?? legacyReason ?? standardReason(observation.reason),
+    };
   }
-  await writeState(directory, state);
+  if (flight.status === 'complete' && output.decision === 'block') {
+    state.completion_blocks += 1;
+  }
+  await writeState(directory, state, stateFilename);
   return output;
 }
 
@@ -620,10 +540,13 @@ async function readInput(stream) {
 }
 
 export async function main({ input = process.stdin, output = process.stdout } = {}) {
+  let hookInput = null;
   try {
-    const result = await runStopSupervisor(await readInput(input));
+    hookInput = await readInput(input);
+    const result = await runStopSupervisor(hookInput);
     if (result) output.write(JSON.stringify(result));
   } catch (error) {
+    if (hookInput) await deactivateGoalSession(hookInput).catch(() => {});
     output.write(JSON.stringify({
       systemMessage: `Cruise Goal stop supervisor failed open: ${cleanMessage(error?.message)}. The stop was allowed; delete .cruise/.supervisor.json if its scratch state is damaged.`,
     }));

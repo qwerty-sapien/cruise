@@ -1,15 +1,23 @@
 {
-  "description": "Cruise Goal liveness supervision",
+  "description": "Cruise Goal session activation and evidence supervision for Codex",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/goal-session.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/hooks/stop-supervisor.mjs"
-            ],
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-supervisor.mjs\" --plugin-hook",
             "timeout": 30
           }
         ]

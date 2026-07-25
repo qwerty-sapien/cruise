@@ -6,6 +6,10 @@ import {
   inspectFlightPlan,
 } from './flight-plan.mjs';
 import {
+  captureFlightContextFingerprint,
+  evaluateFlightAssurance,
+} from './assurance.mjs';
+import {
   captureWorkspaceFingerprint,
   extractFailureSignature,
   GoalSupervisor,
@@ -91,6 +95,19 @@ function correctiveFlightInstructions(reason) {
     `Cruise Goal supervision is degraded because .cruise/FLIGHT.md is invalid: ${reason}.`,
     'Rewrite .cruise/FLIGHT.md so it parses, preserving the intent already written there. Use this full canonical template:',
     flightPlanTemplate(),
+  ].join('\n\n');
+}
+
+function assuranceCorrectionInstructions(assessment) {
+  const unresolved = assessment.reasons.length
+    ? assessment.reasons.map((reason) => `- ${reason}`).join('\n')
+    : '- completion is not evidence-attested';
+  return [
+    'Cruise rejected the attempted completion because the Flight v2 assurance contract is not closed.',
+    `Expected context_fingerprint: ${assessment.contextFingerprint ?? 'unavailable'}`,
+    `Unresolved assurance:\n${unresolved}`,
+    'Keep the Goal active. Reconcile the quality profiles and required dimensions with the original request, run each oracle through ordinary host tools and permissions, then record truthful fresh evidence. A hook never executes oracle text.',
+    'Set a gate to not_applicable only with a fresh rationale. A waiver requires an explicit user decision. Do not weaken or delete a gate merely to obtain completion.',
   ].join('\n\n');
 }
 
@@ -300,6 +317,11 @@ export class SimpleCruiseSession extends EventEmitter {
     output = process.stdout,
     errorOutput = process.stderr,
     supervisor = new GoalSupervisor(),
+    assuranceSupervisor = new GoalSupervisor({
+      maxTurns: DEFAULT_STALL.quietTurns + 2,
+    }),
+    requireAssurance = false,
+    planOnly = false,
     captureFingerprint = captureWorkspaceFingerprint,
     readPlan = inspectFlightPlan,
     firstTurnDeadlineMs = DEFAULT_FIRST_TURN_DEADLINE_MS,
@@ -317,7 +339,7 @@ export class SimpleCruiseSession extends EventEmitter {
     this.prompt = prompt;
     this.skill = skill;
     this.skillPath = skillPath;
-    this.goalPreparationOnly = skill === 'goal' && isPreparationOnlyGoalPrompt(prompt);
+    this.goalPreparationOnly = skill === 'goal' && (planOnly || isPreparationOnlyGoalPrompt(prompt));
     this.pickOne = pickOne;
     this.readLine = readLine;
     this.lineReader = lineReader;
@@ -325,6 +347,8 @@ export class SimpleCruiseSession extends EventEmitter {
     this.output = output;
     this.errorOutput = errorOutput;
     this.supervisor = supervisor;
+    this.assuranceSupervisor = assuranceSupervisor;
+    this.requireAssurance = requireAssurance;
     this.captureFingerprint = captureFingerprint;
     this.readPlan = readPlan;
     this.supervisorFlightHash = 'absent';
@@ -429,6 +453,48 @@ export class SimpleCruiseSession extends EventEmitter {
         }
         const goal = await this.refreshGoal();
         if (TERMINAL_GOAL_STATUSES.has(goal?.status)) {
+          if (goal.status === 'complete' && !this.goalPreparationOnly) {
+            const assessment = await this.assessCompletion();
+            if (assessment.allowsCompletion) {
+              if (assessment.level !== 'legacy-unattested') {
+                this.errorOutput.write(
+                  `Cruise: ${assessment.level} completion (${assessment.metrics.closed}/${assessment.metrics.total} gates closed).\n`,
+                );
+              }
+              return this.finishResult({
+                status: goal.status,
+                skill: this.skill,
+                threadId: this.threadId,
+                goal,
+              });
+            }
+            const verdict = this.assuranceSupervisor.recordTurn({
+              fingerprint: assessment.progressFingerprint,
+              failureSignature: null,
+              turnId: result?.id ?? null,
+            });
+            if (verdict.level === 'stall') {
+              const report = [
+                'Cruise Goal stopped after repeated unchanged unassured completion attempts.',
+                ...assessment.reasons.map((reason) => `- ${reason}`),
+              ].join('\n');
+              this.errorOutput.write(`${report}\n`);
+              return this.finishResult({
+                status: 'stalled',
+                skill: this.skill,
+                threadId: this.threadId,
+                goal,
+                assurance: assessment,
+              });
+            }
+            result = await this.reactivateCompletedGoal(
+              goal,
+              assuranceCorrectionInstructions(assessment),
+            );
+            goalExecutionMode = true;
+            continuationCompleted = true;
+            continue;
+          }
           return this.finishResult({ status: goal.status, skill: this.skill, threadId: this.threadId, goal });
         }
         if (goal?.status !== 'active') {
@@ -639,6 +705,108 @@ export class SimpleCruiseSession extends EventEmitter {
     }
     this.goal = completed.goal;
     return this.goal;
+  }
+
+  async reactivateCompletedGoal(goal, instructions) {
+    const activated = deferred();
+    const nativeTurn = this.waitForNativeGoalTurn(activated.promise);
+    try {
+      const result = await this.client.request('thread/goal/set', {
+        threadId: this.threadId,
+        objective: `${goal.objective}\n\nCompletion correction:\n${instructions}`,
+        status: 'active',
+      });
+      this.goal = result?.goal ?? null;
+      if (this.goal?.status !== 'active') {
+        throw new Error('Codex did not reactivate the unassured Goal.');
+      }
+      activated.resolve();
+      return await nativeTurn;
+    } catch (error) {
+      activated.resolve();
+      this.pending?.reject(error);
+      await nativeTurn.catch(() => {});
+      throw error;
+    }
+  }
+
+  async assessCompletion() {
+    const inspection = await Promise.resolve()
+      .then(() => this.readPlan(this.cwd))
+      .catch((error) => ({ state: 'invalid', reason: String(error?.message ?? error) }));
+    if (inspection?.state !== 'valid') {
+      const state = inspection?.state ?? 'absent';
+      const reason = state === 'invalid'
+        ? `Flight is invalid: ${inspection.reason ?? 'unknown parse failure'}`
+        : 'Flight is absent';
+      if (!this.requireAssurance) {
+        return {
+          level: 'legacy-unattested',
+          allowsCompletion: true,
+          reasons: [reason],
+          progressFingerprint: `flight-${inspection?.contentHash ?? state}`,
+          contextFingerprint: null,
+          metrics: { total: 0, closed: 0, fresh: 0, passed: 0, waived: 0 },
+        };
+      }
+      return {
+        level: 'incomplete',
+        allowsCompletion: false,
+        reasons: [reason],
+        progressFingerprint: `flight-${inspection?.contentHash ?? state}`,
+        contextFingerprint: null,
+        metrics: { total: 0, closed: 0, fresh: 0, passed: 0, waived: 0 },
+      };
+    }
+    const { plan } = inspection;
+    if (plan.version < 2) {
+      const assessment = evaluateFlightAssurance(plan, null);
+      return !this.requireAssurance && !assessment.allowsCompletion
+        ? { ...assessment, allowsCompletion: true }
+        : assessment;
+    }
+    const workspaceFingerprint = await this.captureFingerprint(this.cwd, {
+      excludeFlightPlan: true,
+    });
+    if (!workspaceFingerprint) {
+      return {
+        level: 'incomplete',
+        allowsCompletion: false,
+        reasons: ['Product workspace fingerprint is unavailable; evidence freshness cannot be established.'],
+        progressFingerprint: 'workspace-fingerprint-unavailable',
+        contextFingerprint: null,
+        metrics: { total: plan.quality.gates.length, closed: 0, fresh: 0, passed: 0, waived: 0 },
+      };
+    }
+    let contextFingerprint;
+    try {
+      contextFingerprint = await captureFlightContextFingerprint(this.cwd, plan, {
+        workspaceFingerprint,
+      });
+    } catch (error) {
+      return {
+        level: 'incomplete',
+        contractClosed: false,
+        readyForCompletion: false,
+        allowsCompletion: false,
+        reasons: [String(error?.message ?? error)],
+        progressFingerprint: 'request-binding-unavailable',
+        contextFingerprint: null,
+        metrics: { total: plan.quality.gates.length, closed: 0, fresh: 0, passed: 0, waived: 0 },
+      };
+    }
+    const assessment = evaluateFlightAssurance(plan, contextFingerprint);
+    const result = { ...assessment, contextFingerprint };
+    await writeCruiseScratchJson(this.cwd, '.attestation.json', {
+      version: 1,
+      host: 'codex',
+      level: result.level,
+      context_fingerprint: contextFingerprint,
+      reasons: result.reasons,
+      metrics: result.metrics,
+      observed_at: Date.now(),
+    }).catch(() => {});
+    return result;
   }
 
   goalTurnSettings(mode) {

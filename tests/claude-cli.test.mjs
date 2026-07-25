@@ -28,6 +28,28 @@ test('Claude sessions load the plugin and invoke the slash-command skill nativel
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /no documented Codex-style Goal lifecycle API/u);
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /\.cruise\/FLIGHT\.md/u);
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /Stop-hook supervisor/u);
+  const planArgs = claudeSessionArgs({
+    pluginRoot: '/workspace/cruise',
+    skill: 'goal',
+    prompt: 'Design it.',
+    planOnly: true,
+  });
+  assert.deepEqual(
+    planArgs.slice(planArgs.indexOf('--permission-mode'), planArgs.indexOf('--permission-mode') + 2),
+    ['--permission-mode', 'plan'],
+  );
+  const resumeArgs = claudeSessionArgs({
+    pluginRoot: '/workspace/cruise',
+    skill: 'goal',
+    prompt: '',
+    resumeSessionId: '12345678-abcd',
+  });
+  assert.deepEqual(
+    resumeArgs.slice(resumeArgs.indexOf('--resume'), resumeArgs.indexOf('--resume') + 2),
+    ['--resume', '12345678-abcd'],
+  );
+  assert.equal(resumeArgs.includes('--session-id'), false);
+  assert.equal(resumeArgs.some((arg) => /cruise:goal/u.test(arg)), false);
 });
 
 test('the published package contains both plugin manifests and only the active runtime closure', async () => {
@@ -39,8 +61,10 @@ test('the published package contains both plugin manifests and only the active r
   assert.equal(metadata.files.includes('scripts/cruise.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/provider.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/claude-cli.mjs'), true);
+  assert.equal(metadata.files.includes('scripts/lib/assurance.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/flight-plan.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/queue.mjs'), true);
+  assert.equal(metadata.files.some((entry) => entry.includes('refine')), false);
 });
 
 test('Claude worker levels map to Claude model aliases and native effort values', () => {
@@ -76,7 +100,7 @@ test('Claude CLI transport inherits the native TUI and returns its exit status',
   assert.equal(calls[0].options.cwd, '/workspace');
 });
 
-test('only launcher-started Goal sessions activate the Claude Stop supervisor', async () => {
+test('Claude Goal sessions use explicit ids and session-scoped supervision without process markers', async () => {
   const calls = [];
   class Child extends EventEmitter {}
   const spawnFn = (command, args, options) => {
@@ -101,6 +125,60 @@ test('only launcher-started Goal sessions activate the Claude Stop supervisor', 
     env: { BASE: 'kept', CRUISE_CLAUDE_GOAL: '1' },
     spawnFn,
   });
-  assert.deepEqual(calls[0].options.env, { BASE: 'kept', CRUISE_CLAUDE_GOAL: '1' });
+  assert.deepEqual(calls[0].options.env, { BASE: 'kept' });
   assert.deepEqual(calls[1].options.env, { BASE: 'kept' });
+  assert.equal(calls[0].args.includes('--session-id'), true);
+  assert.equal(calls[1].args.includes('--session-id'), true);
+  assert.notEqual(
+    calls[0].args[calls[0].args.indexOf('--session-id') + 1],
+    calls[1].args[calls[1].args.indexOf('--session-id') + 1],
+  );
+});
+
+test('Claude process exit zero cannot masquerade as Goal completion', async () => {
+  class Child extends EventEmitter {}
+  const spawnFn = () => {
+    const child = new Child();
+    queueMicrotask(() => child.emit('exit', 0, null));
+    return child;
+  };
+  const common = {
+    cwd: '/workspace',
+    pluginRoot: '/plugin',
+    skill: 'goal',
+    prompt: 'Finish it.',
+    spawnFn,
+  };
+  const active = await runClaudeSession({
+    ...common,
+    inspectPlan: async () => ({
+      state: 'valid',
+      plan: { version: 1, status: 'active' },
+    }),
+  });
+  assert.deepEqual(
+    { status: active.status, exitCode: active.exitCode },
+    { status: 'stalled', exitCode: 3 },
+  );
+
+  const blocked = await runClaudeSession({
+    ...common,
+    inspectPlan: async () => ({
+      state: 'valid',
+      plan: { version: 1, status: 'blocked' },
+    }),
+  });
+  assert.deepEqual(
+    { status: blocked.status, exitCode: blocked.exitCode },
+    { status: 'blocked', exitCode: 2 },
+  );
+
+  const absent = await runClaudeSession({
+    ...common,
+    inspectPlan: async () => ({ state: 'absent' }),
+  });
+  assert.deepEqual(
+    { status: absent.status, exitCode: absent.exitCode },
+    { status: 'unassured', exitCode: 2 },
+  );
 });

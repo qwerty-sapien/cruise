@@ -12,7 +12,7 @@ export const MODEL_POLICY_DEFAULTS = Object.freeze({
   capability_inventory: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
   quick_implementation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
   quick_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  refine_clarification_and_planning: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  goal_clarification_and_planning: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
   normal_planned_execution: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
   independent_normal_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
   debug_hypothesis_generation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),

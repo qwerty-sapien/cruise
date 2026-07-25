@@ -1,6 +1,6 @@
 {
   "name": "cruise-code",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Cruise plugins and terminal launcher for Codex and Claude Code",
   "main": "index.js",
@@ -21,6 +21,7 @@
     "hooks/",
     "index.js",
     "scripts/cruise.mjs",
+    "scripts/lib/assurance.mjs",
     "scripts/lib/app-server-client.mjs",
     "scripts/lib/claude-cli.mjs",
     "scripts/lib/flight-plan.mjs",

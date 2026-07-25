@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -39,6 +39,18 @@ test('quiet turns climb once through realign, final experiment, and stall', () =
     'realign',
     'final-experiment',
   ]);
+});
+
+test('an absolute completion-attempt cap cannot be reset by fingerprint churn', () => {
+  const supervisor = new GoalSupervisor({
+    stall: { quietTurns: 99, sameFailure: 99 },
+    maxTurns: 3,
+  });
+  assert.equal(supervisor.recordTurn({ fingerprint: 'contract-a' }).level, 'ok');
+  assert.equal(supervisor.recordTurn({ fingerprint: 'contract-b' }).level, 'ok');
+  const capped = supervisor.recordTurn({ fingerprint: 'contract-c' });
+  assert.equal(capped.level, 'stall');
+  assert.match(capped.reason, /absolute supervision cap of 3/u);
 });
 
 test('an invalid-flight correction replaces rather than duplicates a ladder intervention', () => {
@@ -118,6 +130,58 @@ test('invalid flight rewrites do not hide real workspace progress', async (t) =>
   assert.equal(await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }), baseline);
   await writeFile(join(cwd, 'work.txt'), 'after\n', 'utf8');
   assert.notEqual(await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }), baseline);
+});
+
+test('product fingerprints include HEAD and exact untracked contents', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-strong-fingerprint-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await writeFile(join(cwd, 'tracked.txt'), 'stable\n', 'utf8');
+  assert.equal(spawnSync('git', ['init', '--quiet'], { cwd }).status, 0);
+  assert.equal(spawnSync('git', ['add', 'tracked.txt'], { cwd }).status, 0);
+  assert.equal(spawnSync('git', [
+    '-c',
+    'user.name=Cruise Tests',
+    '-c',
+    'user.email=tests@example.com',
+    'commit',
+    '--quiet',
+    '-m',
+    'baseline',
+  ], { cwd }).status, 0);
+  const baseline = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  assert.equal(spawnSync('git', [
+    '-c',
+    'user.name=Cruise Tests',
+    '-c',
+    'user.email=tests@example.com',
+    'commit',
+    '--quiet',
+    '--allow-empty',
+    '-m',
+    'new head',
+  ], { cwd }).status, 0);
+  const changedHead = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  assert.notEqual(changedHead, baseline);
+
+  await writeFile(join(cwd, 'untracked.txt'), 'first\n', 'utf8');
+  const firstUntracked = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  await writeFile(join(cwd, 'untracked.txt'), 'second\n', 'utf8');
+  const secondUntracked = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  assert.notEqual(secondUntracked, firstUntracked);
+
+  await symlink('tracked.txt', join(cwd, 'link.txt'));
+  const firstLink = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  await unlink(join(cwd, 'link.txt'));
+  await symlink('untracked.txt', join(cwd, 'link.txt'));
+  const secondLink = await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true });
+  assert.notEqual(secondLink, firstLink);
+
+  await mkdir(join(cwd, '.cruise'));
+  await writeFile(join(cwd, '.cruise', '.attestation.json'), '{}\n', 'utf8');
+  assert.equal(
+    await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
+    secondLink,
+  );
 });
 
 test('failure signatures ignore paths, line numbers, hex values, and whitespace', () => {
