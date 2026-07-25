@@ -198,7 +198,7 @@ cruise --claude queue run -C ~/src/app
 
 | Command | Purpose |
 | --- | --- |
-| `cruise <build|quick|goal|debug> <request>` | Start one intent-based session. |
+| `cruise <build/quick/goal/debug> <request>` | Start one intent-based session. |
 | `cruise goal --plan <request>` | Produce a read-only repository-aware plan without implementation assurance. |
 | `cruise --claude goal --resume <session-id>` | Resume the exact Claude session without replacing its original request; the local plugin and supervision are reloaded. |
 | `cruise attest [--json]` | Show the current Flight context fingerprint, gate counts, and unresolved assurance. |
