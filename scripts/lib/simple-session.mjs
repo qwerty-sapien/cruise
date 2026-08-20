@@ -10,12 +10,16 @@ import {
   evaluateFlightAssurance,
 } from './assurance.mjs';
 import {
+  atomicWriteText,
   captureWorkspaceFingerprint,
+  ensureCruiseScratch,
   extractFailureSignature,
   GoalSupervisor,
   writeCruiseScratchJson,
   writeSupervisorState,
 } from './supervisor.mjs';
+import { UsageMeter } from './usage-meter.mjs';
+import { CompactionController } from './compaction-controller.mjs';
 import {
   codexHome,
   codexSessionsDirectory,
@@ -63,6 +67,14 @@ const GOAL_CONTINUATION_INSTRUCTIONS = [
 ].join(' ');
 
 const MAX_TURN_AGENT_TEXT = 64 * 1024;
+const MAX_HANDOFF_BYTES = 4 * 1024;
+const CONTEXT_STATE_FILES = Object.freeze([
+  'LAST-RUN.json',
+  'USAGE.json',
+  'HANDOFF.md',
+  'BUDGET-PAUSE.json',
+  'artifacts/',
+]);
 export const DEFAULT_FIRST_TURN_DEADLINE_MS = 120_000;
 const DEFAULT_FIRST_TURN_CLEANUP_DEADLINE_MS = 2_000;
 
@@ -72,6 +84,14 @@ function formatDuration(milliseconds) {
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+function truncateUtf8(value, maximumBytes) {
+  const text = String(value ?? '').replace(/\s+/gu, ' ').trim();
+  if (Buffer.byteLength(text) <= maximumBytes) return text;
+  let end = text.length;
+  while (end > 0 && Buffer.byteLength(text.slice(0, end)) > maximumBytes - 3) end -= 1;
+  return `${text.slice(0, end)}...`;
 }
 
 function realignmentInstructions(reason) {
@@ -299,6 +319,15 @@ export class SimpleCruiseGoalBootstrapTimeoutError extends Error {
   }
 }
 
+export class SimpleCruiseContextPressurePauseError extends Error {
+  constructor(pressure) {
+    super(`Cruise paused because context pressure remained at ${(pressure * 100).toFixed(1)}% after compaction.`);
+    this.name = 'CruiseContextPressurePauseError';
+    this.code = 'CRUISE_CONTEXT_PRESSURE_PAUSE';
+    this.pressure = pressure;
+  }
+}
+
 /**
  * A normal Codex session. Goal is the autonomous lane: its native Goal remains
  * active across as many ordinary turns as are needed to satisfy its evidence.
@@ -329,6 +358,9 @@ export class SimpleCruiseSession extends EventEmitter {
     locateTrace = locateRollout,
     traceHome = codexHome(),
     clock = () => new Date(),
+    usageMeter = new UsageMeter(),
+    compactionController = null,
+    quotaGuard = null,
   }) {
     super();
     if (!client || !cwd || !prompt || !skill || !skillPath) {
@@ -357,6 +389,9 @@ export class SimpleCruiseSession extends EventEmitter {
     this.locateTrace = locateTrace;
     this.traceHome = traceHome;
     this.clock = clock;
+    this.usageMeter = usageMeter;
+    this.quotaGuard = quotaGuard;
+    this.usagePersistence = Promise.resolve();
     this.runStartedAt = null;
     this.runFinalStatus = 'failed';
     this.rolloutPath = null;
@@ -382,6 +417,16 @@ export class SimpleCruiseSession extends EventEmitter {
     this.onRequest = (message) => this.enqueueRequest(message);
     this.onNotification = (message) => this.handleNotification(message);
     this.onExit = (info) => this.handleExit(info);
+    this.compactionController = compactionController ?? new CompactionController({
+      client: this.client,
+      usageMeter: this.usageMeter,
+      refreshHandoff: () => this.refreshCompactionHandoff(),
+      persist: (summary) => {
+        this.usageMeter.setCompaction(summary);
+        return this.persistUsageNow();
+      },
+      now: this.clock,
+    });
   }
 
   async run() {
@@ -391,6 +436,12 @@ export class SimpleCruiseSession extends EventEmitter {
     this.client.on('exit', this.onExit);
     try {
       await this.client.start();
+      if (this.quotaGuard) {
+        await this.quotaGuard.start({
+          client: this.client,
+          goalId: `cruise-${this.skill}`,
+        });
+      }
       if (this.skill === 'goal') this.errorOutput.write('Cruise: app-server started.\n');
       const started = await this.client.request('thread/start', {
         cwd: this.cwd,
@@ -446,6 +497,7 @@ export class SimpleCruiseSession extends EventEmitter {
           },
         ]);
       }
+      await this.afterCompletedTurn(result);
       while (this.skill === 'goal') {
         await this.interactions;
         if (result.status !== 'completed') {
@@ -487,10 +539,12 @@ export class SimpleCruiseSession extends EventEmitter {
                 assurance: assessment,
               });
             }
+            await this.prepareExpensiveContinuation();
             result = await this.reactivateCompletedGoal(
               goal,
               assuranceCorrectionInstructions(assessment),
             );
+            await this.afterCompletedTurn(result);
             goalExecutionMode = true;
             continuationCompleted = true;
             continue;
@@ -542,6 +596,7 @@ export class SimpleCruiseSession extends EventEmitter {
           await this.updateGoalMode('default');
           goalExecutionMode = true;
         }
+        await this.prepareExpensiveContinuation();
         result = await this.startTurn([
           {
             type: 'text',
@@ -549,6 +604,7 @@ export class SimpleCruiseSession extends EventEmitter {
             text_elements: [],
           },
         ], { mode: 'default' });
+        await this.afterCompletedTurn(result);
         continuationCompleted = true;
       }
       await this.interactions;
@@ -557,11 +613,18 @@ export class SimpleCruiseSession extends EventEmitter {
       }
       return this.finishResult({ status: 'complete', skill: this.skill, threadId: this.threadId });
     } catch (error) {
+      if (['CRUISE_BUDGET_PAUSE', 'CRUISE_CONTEXT_PRESSURE_PAUSE'].includes(error?.code)) {
+        await this.pauseActiveGoal().catch(() => {});
+      }
       this.runFinalStatus = this.interrupted
         ? 'interrupted'
         : error?.code === 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT'
           ? 'bootstrap-timeout'
-          : 'failed';
+          : error?.code === 'CRUISE_BUDGET_PAUSE'
+            ? 'budget-paused'
+            : error?.code === 'CRUISE_CONTEXT_PRESSURE_PAUSE'
+              ? 'context-paused'
+              : 'failed';
       throw error;
     } finally {
       this.stopping = true;
@@ -569,13 +632,18 @@ export class SimpleCruiseSession extends EventEmitter {
       this.client.off?.('notification', this.onNotification);
       this.client.off?.('exit', this.onExit);
       await this.traceLookup.catch(() => {});
+      await this.usagePersistence.catch(() => {});
       if (this.threadId) {
         await this.persistRunPointer({
           finalStatus: this.runFinalStatus,
           endedAt: this.timestamp(),
         });
+        if (this.usageMeter.summary().observed_threads > 0 || this.compactionController.summary().attempts > 0) {
+          await this.persistUsageNow().catch(() => {});
+        }
         this.printClosingTraceSignpost();
       }
+      await this.quotaGuard?.release().catch(() => {});
       await this.client.stop().catch(() => {});
     }
   }
@@ -588,6 +656,65 @@ export class SimpleCruiseSession extends EventEmitter {
   finishResult(result) {
     this.runFinalStatus = result.status;
     return result;
+  }
+
+  async afterCompletedTurn(turn) {
+    if (turn?.status !== 'completed') return;
+    await this.interactions;
+    const result = await this.compactionController.afterTurn({
+      threadId: this.threadId,
+      activeTurn: this.turnId !== null,
+    });
+    this.usageMeter.setCompaction(this.compactionController.summary());
+    if (result.action === 'compacted') await this.persistUsageNow();
+  }
+
+  async prepareExpensiveContinuation() {
+    if (this.quotaGuard) await this.quotaGuard.check();
+    if (!this.compactionController.shouldSplitOrPause()) return;
+    await this.refreshCompactionHandoff();
+    const pressure = this.usageMeter.thread(this.threadId)?.pressure ?? 1;
+    throw new SimpleCruiseContextPressurePauseError(pressure);
+  }
+
+  scheduleUsagePersistence() {
+    this.usagePersistence = this.usagePersistence
+      .then(() => this.persistUsageNow())
+      .catch((error) => {
+        this.errorOutput.write(
+          `Cruise warning: could not persist usage: ${String(error?.message ?? error).replace(/\s+/gu, ' ').trim()}.\n`,
+        );
+      });
+  }
+
+  async persistUsageNow() {
+    this.usageMeter.setCompaction(this.compactionController.summary());
+    await this.usageMeter.persist(this.cwd);
+  }
+
+  async refreshCompactionHandoff() {
+    const directory = await ensureCruiseScratch(this.cwd, CONTEXT_STATE_FILES);
+    const usage = this.usageMeter.thread(this.threadId);
+    const lines = [
+      '# Cruise handoff',
+      '',
+      `- Outcome: ${truncateUtf8(this.prompt, 1_024)}`,
+      '- Request source of truth: `.cruise/ORIGIN.md`.',
+      `- Skill: ${this.skill}.`,
+      `- Thread: ${this.threadId ?? 'not-started'}.`,
+      `- Goal status: ${this.goal?.status ?? 'not-applicable'}.`,
+      `- Goal objective: ${truncateUtf8(this.goal?.objective ?? this.prompt, 1_024)}`,
+      `- Last completed turn: ${usage?.latestTurnId ?? 'unknown'}.`,
+      `- Usage accounting known: ${usage?.accountingKnown ?? false}.`,
+      `- Context pressure: ${Number.isFinite(usage?.pressure) ? usage.pressure.toFixed(4) : 'unknown'}.`,
+      '- Next action: continue from the active Goal and repository evidence; do not infer completion from compaction.',
+      '',
+    ];
+    const content = lines.join('\n');
+    if (Buffer.byteLength(content) > MAX_HANDOFF_BYTES) {
+      throw new Error(`compaction handoff exceeds ${MAX_HANDOFF_BYTES} bytes`);
+    }
+    await atomicWriteText(`${directory}/HANDOFF.md`, content);
   }
 
   async initializeTraceSignpost() {
@@ -645,6 +772,18 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async persistRunPointer({ finalStatus, endedAt }) {
     try {
+      const usage = this.usageMeter.summary();
+      const usageFields = usage.observed_threads > 0
+        ? {
+            usage: {
+              accounting_known: usage.accounting_known,
+              rate_version: usage.rate_version,
+              totals: usage.totals,
+              estimated_credits: usage.estimated_credits,
+            },
+            compaction: this.compactionController.summary(),
+          }
+        : {};
       await writeCruiseScratchJson(this.cwd, 'LAST-RUN.json', {
         thread_id: this.threadId,
         rollout_path: this.rolloutPath,
@@ -653,6 +792,7 @@ export class SimpleCruiseSession extends EventEmitter {
         started_at: this.runStartedAt,
         ended_at: endedAt,
         final_status: finalStatus,
+        ...usageFields,
       });
     } catch (error) {
       this.errorOutput.write(
@@ -1138,6 +1278,19 @@ export class SimpleCruiseSession extends EventEmitter {
   handleNotification(message) {
     const params = message.params ?? {};
     if (params.threadId && this.threadId && params.threadId !== this.threadId) return;
+    if (message.method === 'thread/tokenUsage/updated') {
+      try {
+        this.usageMeter.consume(params, { model: this.threadModel });
+        this.compactionController.observeUsage(params.threadId);
+        this.scheduleUsagePersistence();
+      } catch (error) {
+        this.errorOutput.write(
+          `Cruise warning: invalid token usage notification: ${String(error?.message ?? error).replace(/\s+/gu, ' ').trim()}.\n`,
+        );
+      }
+      return;
+    }
+    if (this.compactionController.handleNotification(message)) return;
     if (message.method === 'item/agentMessage/delta') {
       const delta = String(params.delta ?? '');
       this.output.write(delta);

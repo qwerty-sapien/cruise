@@ -22,6 +22,7 @@
     "index.js",
     "scripts/cruise.mjs",
     "scripts/lib/assurance.mjs",
+    "scripts/lib/compaction-controller.mjs",
     "scripts/lib/app-server-client.mjs",
     "scripts/lib/claude-cli.mjs",
     "scripts/lib/flight-plan.mjs",
@@ -31,15 +32,17 @@
     "scripts/lib/picker.mjs",
     "scripts/lib/provider.mjs",
     "scripts/lib/queue.mjs",
+    "scripts/lib/quota-guard.mjs",
     "scripts/lib/simple-session.mjs",
     "scripts/lib/simple-worker.mjs",
     "scripts/lib/supervisor.mjs",
     "scripts/lib/trace-locator.mjs",
+    "scripts/lib/usage-meter.mjs",
     "scripts/lib/worker-policy.mjs",
     "skills/"
   ],
   "scripts": {
-    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs",
+    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/usage-meter.test.mjs tests/compaction-controller.test.mjs tests/quota-guard.test.mjs tests/context-runtime.test.mjs tests/quota-cli.test.mjs",
     "validate": "npm test"
   },
   "engines": {

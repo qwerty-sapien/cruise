@@ -59,6 +59,9 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
     help: false,
     version: false,
     level: null,
+    weeklyDeltaCap: 9,
+    goalReservation: 2.25,
+    strictBudget: false,
     promptParts: ['Fix', 'it'],
     prompt: 'Fix it',
   });
@@ -71,6 +74,9 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
     help: false,
     version: false,
     level: 6,
+    weeklyDeltaCap: 9,
+    goalReservation: 2.25,
+    strictBudget: false,
     promptParts: ['Run', 'tests'],
     prompt: 'Run tests',
   });

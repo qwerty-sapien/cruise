@@ -17,6 +17,11 @@ const POLICY_FILES = [
   'skills/context-economy/assets/context-capsule.schema.json',
   'skills/context-economy/assets/usage-ledger.schema.json',
 ];
+const RUNTIME_FILES = [
+  'scripts/lib/compaction-controller.mjs',
+  'scripts/lib/quota-guard.mjs',
+  'scripts/lib/usage-meter.mjs',
+];
 
 test('context-economy policy files stay within one bounded file window', async () => {
   for (const path of POLICY_FILES) {
@@ -28,7 +33,7 @@ test('context-economy policy files stay within one bounded file window', async (
   }
 });
 
-test('npm package ships the context-economy skill, references, and schemas', async () => {
+test('npm package ships the context-economy policy and runtime modules', async () => {
   const cache = await mkdtemp(join(tmpdir(), 'cruise-npm-cache-'));
   try {
     const output = execFileSync(
@@ -44,7 +49,10 @@ test('npm package ships the context-economy skill, references, and schemas', asy
     const [{ files }] = JSON.parse(output);
     const shipped = new Set(files.map(({ path }) => path));
 
-    for (const path of POLICY_FILES.filter((path) => path.startsWith('skills/'))) {
+    for (const path of [
+      ...POLICY_FILES.filter((path) => path.startsWith('skills/')),
+      ...RUNTIME_FILES,
+    ]) {
       assert.ok(shipped.has(path), `${path} is absent from the npm package`);
     }
   } finally {

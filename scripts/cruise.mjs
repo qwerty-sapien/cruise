@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { stat, realpath } from 'node:fs/promises';
+import { readFile, stat, realpath } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +39,11 @@ import {
 import { runSimpleWorker } from './lib/simple-worker.mjs';
 import { captureWorkspaceFingerprint } from './lib/supervisor.mjs';
 import {
+  BUDGET_PAUSE_EXIT_CODE,
+  QuotaGuard,
+  resolveBudgetOptions,
+} from './lib/quota-guard.mjs';
+import {
   activateGoalSession,
   deactivateGoalSession,
   releaseCruiseWorkspace,
@@ -65,7 +70,14 @@ Usage:
   cruise [--codex|--claude] queue <status|run> [-C <directory>]
   cruise attest [-C <directory>] [--json]
   cruise [--codex|--claude] worker [--level <1-7>] [-C <directory>] <task...>
+  cruise usage [-C <directory>] [--json]
+  cruise budget [-C <directory>] [--json] [--strict-budget]
   cruise [--codex|--claude] doctor [--json]
+
+Budget options:
+  --weekly-delta-cap <percent>   Campaign increase allowed within the weekly window (default 9.0)
+  --goal-reservation <percent>  Reservation required before Goal or worker launch (default 2.25)
+  --strict-budget               Pause when weekly account data is unavailable
 
 Cruise records exact executable skill requests in .cruise/ORIGIN.md. Build may compile an
 advisory .cruise/QUEUE.md; queue run turns each ready milestone into an advisory
@@ -77,7 +89,7 @@ and effects. Codex is the default; CRUISE_PROVIDER may set a request-scoped
 default to codex or claude.
 
 Exit codes: 0 contract-ready/complete/assured, 2 blocked/failed/unassured, 3 stalled, 4 Goal bootstrap timeout,
-5 transport inactivity, 130 interrupted.
+5 transport inactivity, 6 budget pause, 130 interrupted.
 `;
 
 function displayError(value) {
@@ -130,7 +142,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
     throw new Error('Cruise Refine was folded into Goal. Use `cruise goal "<request>"`; for read-only planning, say "plan only".');
   }
   let command = 'start';
-  if (['start', ...PUBLIC_SKILLS, 'queue', 'attest', 'worker', 'doctor', 'help'].includes(args[0])) {
+  if (['start', ...PUBLIC_SKILLS, 'queue', 'attest', 'worker', 'usage', 'budget', 'doctor', 'help'].includes(args[0])) {
     command = args.shift();
   }
   let queueAction = null;
@@ -144,6 +156,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
     version: false,
     level: null,
     promptParts: [],
+    ...resolveBudgetOptions({ env }),
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -156,7 +169,20 @@ export function parseArgs(argv, { env = process.env } = {}) {
     }
     if (arg === '-h' || arg === '--help') options.help = true;
     else if (arg === '-V' || arg === '--version') options.version = true;
-    else if (arg === '--json' && ['doctor', 'attest'].includes(command)) options.json = true;
+    else if (arg === '--json' && ['doctor', 'attest', 'usage', 'budget'].includes(command)) options.json = true;
+    else if (arg === '--weekly-delta-cap') {
+      const value = args[++index];
+      if (value === undefined) throw new Error('--weekly-delta-cap requires a percent.');
+      options.weeklyDeltaCap = value;
+    }
+    else if (arg === '--goal-reservation') {
+      const value = args[++index];
+      if (value === undefined) throw new Error('--goal-reservation requires a percent.');
+      options.goalReservation = value;
+    }
+    else if (arg === '--strict-budget') {
+      options.strictBudget = true;
+    }
     else if (arg === '--plan') {
       if (command !== 'goal') throw new Error('--plan is supported only by cruise goal.');
       options.planOnly = true;
@@ -187,7 +213,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
       options.cwd = resolve(value);
     } else if (arg.startsWith('-')) {
       throw new Error(`${arg} is not supported by the prompt-only Cruise runtime.`);
-    } else if (['doctor', 'attest'].includes(command)) {
+    } else if (['doctor', 'attest', 'usage', 'budget'].includes(command)) {
       throw new Error(`Unexpected ${command} argument: ${arg}`);
     } else if (command === 'queue') {
       if (queueAction !== null || !['status', 'run'].includes(arg)) {
@@ -196,8 +222,9 @@ export function parseArgs(argv, { env = process.env } = {}) {
       queueAction = arg;
     } else options.promptParts.push(arg);
   }
-  if (options.json && !['doctor', 'attest'].includes(command)) {
-    throw new Error('--json is supported only by cruise doctor and cruise attest.');
+  Object.assign(options, resolveBudgetOptions(options));
+  if (options.json && !['doctor', 'attest', 'usage', 'budget'].includes(command)) {
+    throw new Error('--json is supported only by cruise doctor, cruise attest, cruise usage, and cruise budget.');
   }
   const prompt = options.promptParts.join(' ');
   if (!options.help && !options.version && command === 'queue' && queueAction === null) {
@@ -213,7 +240,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
     !options.help &&
     !options.version &&
     !options.resumeSessionId &&
-    !['doctor', 'help', 'queue', 'attest'].includes(command) &&
+    !['doctor', 'help', 'queue', 'attest', 'usage', 'budget'].includes(command) &&
     !prompt
   ) {
     throw new Error('Cruise requires a request.');
@@ -267,9 +294,10 @@ async function runHostedSession(
   options,
   cwd,
   {
-    clientFactory = (input) => new AppServerClient(input),
+    clientFactory = null,
     claudeRunner = runClaudeSession,
     sessionFactory = (input) => new SimpleCruiseSession(input),
+    quotaGuardFactory = (input) => new QuotaGuard(input),
   } = {},
 ) {
   const provider = resolveProvider(options.provider);
@@ -288,7 +316,9 @@ async function runHostedSession(
       exitCode: result.exitCode,
     };
   }
-  const client = clientFactory({
+  const injectedClientFactory = clientFactory !== null;
+  const createClient = clientFactory ?? ((input) => new AppServerClient(input));
+  const client = createClient({
     spawnOptions: { cwd },
     clientInfo: { name: 'cruise', title: 'Cruise', version: CLI_VERSION },
     onError(error) {
@@ -306,6 +336,15 @@ async function runHostedSession(
     readLine: readLineOnce,
     requireAssurance: true,
     planOnly: Boolean(options.planOnly),
+    quotaGuard: !injectedClientFactory && options.skill === 'goal'
+      ? quotaGuardFactory({
+          cwd,
+          weeklyDeltaCap: options.weeklyDeltaCap,
+          goalReservation: options.goalReservation,
+          strictBudget: options.strictBudget,
+          resumeCommand: `cruise goal --strict-budget --weekly-delta-cap ${options.weeklyDeltaCap} --goal-reservation ${options.goalReservation} -C ${JSON.stringify(cwd)} <request>`,
+        })
+      : null,
   });
   const onSigint = () => void session.interrupt();
   process.on('SIGINT', onSigint);
@@ -324,6 +363,14 @@ async function runHostedSession(
     if (error instanceof AppServerInactivityError || error?.code === 'CRUISE_TRANSPORT_INACTIVITY') {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
       return { status: 'failed', exitCode: 5 };
+    }
+    if (error?.code === 'CRUISE_BUDGET_PAUSE') {
+      process.stderr.write(`cruise: ${displayError(error.message)}\n`);
+      return { status: 'budget-paused', exitCode: BUDGET_PAUSE_EXIT_CODE };
+    }
+    if (error?.code === 'CRUISE_CONTEXT_PRESSURE_PAUSE') {
+      process.stderr.write(`cruise: ${displayError(error.message)}\n`);
+      return { status: 'blocked', exitCode: 2 };
     }
     throw error;
   } finally {
@@ -618,23 +665,137 @@ export async function runQueue(options, {
 }
 
 export async function runWorker(options, {
-  worker = runSimpleWorker,
+  worker = null,
   claudeWorker = runClaudeWorker,
+  budgetClientFactory = (input) => new AppServerClient(input),
+  quotaGuardFactory = (input) => new QuotaGuard(input),
+  enforceBudget = worker === null,
 } = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const provider = resolveProvider(options.provider);
-  const selectedWorker = provider === 'claude' ? claudeWorker : worker;
-  const result = await selectedWorker({
-    cwd,
-    task: options.prompt,
-    level: options.level ?? null,
-    onOutput(delta) {
-      process.stdout.write(delta);
-    },
-    onServerRequest: (message, client) => answerWorkerRequest(message, { client }),
-  });
-  if (result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
+  const selectedWorker = provider === 'claude' ? claudeWorker : worker ?? runSimpleWorker;
+  const sessionId = randomUUID();
+  let budgetClient = null;
+  let quotaGuard = null;
+  try {
+    if (provider === 'codex' && enforceBudget) {
+      budgetClient = budgetClientFactory({
+        spawnOptions: { cwd },
+        clientInfo: { name: 'cruise', title: 'Cruise', version: CLI_VERSION },
+      });
+      quotaGuard = quotaGuardFactory({
+        cwd,
+        weeklyDeltaCap: options.weeklyDeltaCap,
+        goalReservation: options.goalReservation,
+        strictBudget: options.strictBudget,
+        resumeCommand: `cruise worker --weekly-delta-cap ${options.weeklyDeltaCap} --goal-reservation ${options.goalReservation} -C ${JSON.stringify(cwd)} <task>`,
+      });
+      await budgetClient.start();
+      await quotaGuard.start({ client: budgetClient, goalId: `worker:${sessionId}` });
+    }
+    const result = await selectedWorker({
+      cwd,
+      task: options.prompt,
+      level: options.level ?? null,
+      onOutput(delta) {
+        process.stdout.write(delta);
+      },
+      onServerRequest: (message, client) => answerWorkerRequest(message, { client }),
+    });
+    if (result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
+    return 0;
+  } catch (error) {
+    if (error?.code === 'CRUISE_BUDGET_PAUSE') {
+      process.stderr.write(`cruise: ${displayError(error.message)}\n`);
+      return BUDGET_PAUSE_EXIT_CODE;
+    }
+    throw error;
+  } finally {
+    await quotaGuard?.release().catch(() => {});
+    await budgetClient?.stop().catch(() => {});
+  }
+}
+
+export async function runUsage(options, {
+  read = readFile,
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  let usage;
+  try {
+    usage = JSON.parse(await read(resolve(cwd, '.cruise', 'USAGE.json'), 'utf8'));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    usage = {
+      schema_version: 1,
+      accounting_known: false,
+      observed_threads: 0,
+      estimated_credits: null,
+      reason: 'no local usage summary is available',
+    };
+  }
+  if (options.json) output.write(`${JSON.stringify(usage)}\n`);
+  else {
+    output.write(`Cruise usage accounting: ${usage.accounting_known ? 'known' : 'unknown'}\n`);
+    output.write(`Observed threads: ${usage.observed_threads ?? 0}\n`);
+    output.write(`Estimated credits: ${usage.estimated_credits ?? 'unknown'}\n`);
+    if (usage.reason) output.write(`Reason: ${usage.reason}\n`);
+  }
   return 0;
+}
+
+export async function runBudget(options, {
+  clientFactory = (input) => new AppServerClient(input),
+  quotaGuardFactory = (input) => new QuotaGuard(input),
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  const client = clientFactory({
+    spawnOptions: { cwd },
+    clientInfo: { name: 'cruise', title: 'Cruise', version: CLI_VERSION },
+  });
+  const guard = quotaGuardFactory({
+    cwd,
+    weeklyDeltaCap: options.weeklyDeltaCap,
+    goalReservation: options.goalReservation,
+    strictBudget: options.strictBudget,
+    resumeCommand: `cruise budget --strict-budget --weekly-delta-cap ${options.weeklyDeltaCap} --goal-reservation ${options.goalReservation} -C ${JSON.stringify(cwd)}`,
+  });
+  try {
+    await client.start();
+    const status = await guard.status(client);
+    const report = {
+      metered: status.metered,
+      used_percent: status.usedPercent ?? null,
+      baseline_used_percent: status.baselineUsedPercent ?? null,
+      observed_delta_percent: status.observedDelta ?? null,
+      active_reservations_percent: status.activeReservations ?? null,
+      weekly_delta_cap_percent: options.weeklyDeltaCap,
+      goal_reservation_percent: options.goalReservation,
+      resets_at: status.resetsAt ?? null,
+      remaining_percent: status.remaining ?? null,
+      ...(status.reason ? { reason: status.reason } : {}),
+    };
+    if (options.json) output.write(`${JSON.stringify(report)}\n`);
+    else {
+      output.write(`Cruise weekly budget: ${report.metered ? 'metered' : 'unmetered'}\n`);
+      output.write(`Observed campaign delta: ${report.observed_delta_percent ?? 'unknown'}%\n`);
+      output.write(`Active reservations: ${report.active_reservations_percent ?? 'unknown'}%\n`);
+      output.write(`Remaining before safety margin: ${report.remaining_percent ?? 'unknown'}%\n`);
+      output.write(`Resets at: ${report.resets_at ?? 'unknown'}\n`);
+      if (report.reason) output.write(`Reason: ${report.reason}\n`);
+    }
+    return 0;
+  } catch (error) {
+    if (error?.code === 'CRUISE_BUDGET_PAUSE') {
+      if (options.json) output.write(`${JSON.stringify(error.report)}\n`);
+      else output.write(`Cruise weekly budget: paused (${error.message})\n`);
+      return BUDGET_PAUSE_EXIT_CODE;
+    }
+    throw error;
+  } finally {
+    await client.stop().catch(() => {});
+  }
 }
 
 async function answerWorkerRequest(message, { client = null } = {}) {
@@ -835,6 +996,8 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     if (options.command === 'doctor') return await runDoctor(options);
     if (options.command === 'attest') return await runAttest(options);
+    if (options.command === 'usage') return await runUsage(options);
+    if (options.command === 'budget') return await runBudget(options);
     if (options.command === 'worker') return await runWorker(options);
     if (options.command === 'queue') {
       return options.queueAction === 'status' ? await runQueueStatus(options) : await runQueue(options);

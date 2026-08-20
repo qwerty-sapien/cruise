@@ -64,11 +64,27 @@ real directory. These are path-safety boundaries, not workload budgets.
 | Codex app-server transport inactivity | Liveness-and-recovery bound sourced from observed inbound JSONL frames, not a workload budget. The request-scoped default is 300 seconds, tunable with `CRUISE_INACTIVITY_TIMEOUT_MS`; human-input waits suspend it. Expiry terminates the session with thread/turn/Goal/stderr-tail evidence and exits `5`. |
 | Product fingerprint | 64 MiB cumulative untracked-file content | Freshness becomes unavailable; v2 completion remains unassured rather than hashing unbounded input. |
 | Workspace ownership lease | 24 hours, refreshed whenever the same session activates | A different session is rejected during the lease. After a crashed or abandoned host leaves no cleanup path, a new activation may recover the workspace once the lease expires. |
-| Launcher exits | `0` v2 contract ready or assured/qualified completion, `2` blocked/failed/unassured (including legacy v1), `3` stalled, `4` Goal bootstrap timeout, `5` transport inactivity, `130` interrupted. |
+| Launcher exits | `0` v2 contract ready or assured/qualified completion, `2` blocked/failed/unassured (including legacy v1), `3` stalled, `4` Goal bootstrap timeout, `5` transport inactivity, `6` resumable budget pause, `130` interrupted. |
 
 Service quotas, model context windows, Claude hook timeouts, Codex host limits,
 OS limits, and external API policies remain host or protocol constraints.
 Cruise reports them as such and cannot weaken or extend them.
+
+## Account quota containment
+
+When the user requests account-resource containment, Cruise may reserve a
+bounded share of the authoritative weekly `account/rateLimits/read` window.
+The campaign baseline, observed `usedPercent` delta, and concurrent active
+reservations form a quota budget. This is distinct from an evidence budget:
+evidence thresholds decide when work needs a new observation or assurance,
+while the quota budget decides only whether account-funded work may start or
+continue. It never creates a generic attempt cap.
+
+Crossing the configured quota boundary pauses before the next Goal or worker
+effect, writes a resumable report, and exits `6`. Productive authorized work
+still has no arbitrary wall-clock kill. A later reset or explicit user budget
+change may resume the work; Cruise never consumes earned rate-limit reset
+credits automatically.
 
 ## Allowed limit classes
 
