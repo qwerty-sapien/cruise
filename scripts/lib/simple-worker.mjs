@@ -60,13 +60,44 @@ function hasEffectNotification(message) {
   return /(?:commandExecution|fileChange|applyPatch|tool)/iu.test(`${method} ${type}`);
 }
 
-async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerRequest }) {
+async function oneAttempt({
+  cwd,
+  task,
+  level,
+  clientFactory,
+  onOutput,
+  onServerRequest,
+  runtimeDirectory,
+  sessionId,
+  readOnly,
+  timeoutMs,
+  exceptionalConsequence,
+}) {
   const client = clientFactory({
-    spawnOptions: { cwd },
+    spawnOptions: {
+      cwd,
+      ...(runtimeDirectory
+        ? {
+            env: {
+              ...process.env,
+              CRUISE_RUNTIME_DIR: runtimeDirectory,
+              CRUISE_SESSION_ID: sessionId,
+            },
+          }
+        : {}),
+    },
     clientInfo: { name: 'cruise-worker', title: 'Cruise Worker', version: '0.1.0' },
     onServerRequest,
   });
   const completion = deferred();
+  const timeout = timeoutMs === null
+    ? null
+    : setTimeout(() => {
+        const error = new Error(`worker exceeded its ${timeoutMs}ms execution bound`);
+        error.code = 'CRUISE_WORKER_TIMEOUT';
+        completion.reject(error);
+      }, timeoutMs);
+  timeout?.unref?.();
   let threadId = null;
   let turnId = null;
   let effectsObserved = false;
@@ -98,7 +129,11 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
     let policy = null;
     if (level !== null) {
       const catalog = await client.request('model/list', { limit: 100 });
-      policy = resolveWorkerPolicy({ recommendedLevel: level, catalog });
+      policy = resolveWorkerPolicy({
+        recommendedLevel: level,
+        catalog,
+        exceptionalConsequence,
+      });
       if (policy.degraded || !policy.worker.resolved.model || !policy.worker.resolved.reasoning_effort) {
         throw new Error(`required worker pair is unavailable: ${policy.degradation_reasons.join('; ')}`);
       }
@@ -107,7 +142,7 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
       cwd,
       runtimeWorkspaceRoots: [],
       approvalPolicy: 'on-request',
-      sandbox: 'workspace-write',
+      sandbox: readOnly ? 'read-only' : 'workspace-write',
       ...(policy
         ? {
             model: policy.worker.resolved.model,
@@ -116,7 +151,7 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
         : {}),
       serviceName: 'cruise_worker',
       ephemeral: true,
-      developerInstructions: 'Execute the requested bounded task. Use normal Codex approvals. Do not create Cruise reports, packets, archives, or workflow state.',
+      developerInstructions: 'Execute the requested bounded task. Use normal Codex approvals. Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Do not create Cruise reports, packets, archives, or workflow state.',
     });
     threadId = started.thread.id;
     const turn = await client.request('turn/start', {
@@ -125,7 +160,9 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
       cwd,
       runtimeWorkspaceRoots: [],
       approvalPolicy: 'on-request',
-      sandboxPolicy: { type: 'workspaceWrite', writableRoots: [cwd] },
+      sandboxPolicy: readOnly
+        ? { type: 'readOnly' }
+        : { type: 'workspaceWrite', writableRoots: [cwd] },
       ...(policy
         ? {
             model: policy.worker.resolved.model,
@@ -154,6 +191,7 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
     }
     throw error;
   } finally {
+    if (timeout !== null) clearTimeout(timeout);
     client.off?.('notification', notification);
     client.off?.('exit', exited);
     await client.stop().catch(() => {});
@@ -172,13 +210,34 @@ export async function runSimpleWorker({
   clientFactory = (options) => new AppServerClient(options),
   onOutput = null,
   onServerRequest = null,
+  runtimeDirectory = null,
+  sessionId = null,
+  readOnly = false,
+  timeoutMs = null,
+  exceptionalConsequence = null,
 } = {}) {
   if (typeof cwd !== 'string' || !cwd) throw new TypeError('worker cwd is required');
   if (typeof task !== 'string' || !task.trim()) throw new TypeError('worker task is required');
   if (level !== null) normalizeRecommendedLevel(level);
+  if (typeof readOnly !== 'boolean') throw new TypeError('worker readOnly must be a boolean');
+  if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)) {
+    throw new TypeError('worker timeoutMs must be a positive integer or null');
+  }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return await oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerRequest });
+      return await oneAttempt({
+        cwd,
+        task,
+        level,
+        clientFactory,
+        onOutput,
+        onServerRequest,
+        runtimeDirectory,
+        sessionId,
+        readOnly,
+        timeoutMs,
+        exceptionalConsequence,
+      });
     } catch (cause) {
       const failure = classifyWorkerFailure(cause);
       const effectsObserved = cause?.effectsObserved === true;

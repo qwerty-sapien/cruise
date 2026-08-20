@@ -109,7 +109,7 @@ test('Goal auto-advances each completed active turn until native completion', as
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-goal' }, model: 'gpt-test', reasoningEffort: 'medium' };
+        return { thread: { id: 'thread-goal' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
@@ -224,7 +224,7 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-no-turn' }, model: 'gpt-test' };
+        return { thread: { id: 'thread-no-turn' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
@@ -281,19 +281,19 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
     assert.equal(error.name, 'CruiseGoalBootstrapTimeoutError');
     assert.equal(error.code, 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT');
     assert.equal(error.threadId, 'thread-no-turn');
-    assert.equal(error.model, 'gpt-test');
+    assert.equal(error.model, 'gpt-5.6-sol');
     assert.equal(error.goalStatus, 'active');
     assert.ok(error.elapsedMs >= 20);
     assert.match(error.message, /never started the native Goal turn within 20ms/u);
     assert.match(error.message, /thread=thread-no-turn/u);
-    assert.match(error.message, /model=gpt-test/u);
+    assert.match(error.message, /model=gpt-5\.6-sol/u);
     assert.match(error.message, /goal=active/u);
   }
 
   assert.equal(output, '');
   assert.equal(errorOutput, [
     'Cruise: app-server started.',
-    'Cruise: thread thread-no-turn started (model gpt-test).',
+    'Cruise: thread thread-no-turn started (model gpt-5.6-sol).',
     `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-no-turn.`,
     'Cruise: goal activated.',
     'Cruise: waiting for the native Goal turn.',
@@ -327,7 +327,7 @@ test('Goal bootstrap timeout cannot hang in diagnostic cleanup', async (t) => {
 
     async request(method, params = {}) {
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-test' };
+        return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') {
@@ -489,7 +489,7 @@ test('a native Goal turn just before the deadline cancels the timer without chan
 
     async request(method, params = {}) {
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-just-in-time' }, model: 'gpt-test' };
+        return { thread: { id: 'thread-just-in-time' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
@@ -548,7 +548,7 @@ test('a native Goal turn just before the deadline cancels the timer without chan
   assert.equal(output, 'healthy transcript\n');
   assert.equal(errorOutput, [
     'Cruise: app-server started.',
-    'Cruise: thread thread-just-in-time started (model gpt-test).',
+    'Cruise: thread thread-just-in-time started (model gpt-5.6-sol).',
     `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-just-in-time.`,
     'Cruise: goal activated.',
     'Cruise: waiting for the native Goal turn.',

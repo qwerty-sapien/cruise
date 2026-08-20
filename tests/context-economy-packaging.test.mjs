@@ -18,9 +18,13 @@ const POLICY_FILES = [
   'skills/context-economy/assets/usage-ledger.schema.json',
 ];
 const RUNTIME_FILES = [
+  'scripts/context-view.mjs',
   'scripts/lib/compaction-controller.mjs',
+  'scripts/lib/context-capsule.mjs',
   'scripts/lib/quota-guard.mjs',
+  'scripts/lib/root-policy.mjs',
   'scripts/lib/usage-meter.mjs',
+  'scripts/lib/worker-dispatcher.mjs',
 ];
 
 test('context-economy policy files stay within one bounded file window', async () => {

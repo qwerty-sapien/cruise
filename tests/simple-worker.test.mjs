@@ -130,6 +130,32 @@ test('model selection is untouched without an explicit level', async () => {
   assert.equal(Object.hasOwn(turn, 'effort'), false);
 });
 
+test('internal read-only workers cannot mutate the product workspace', async () => {
+  const client = new FakeWorkerClient([
+    { method: 'turn/completed', params: { turn: { status: 'completed' } } },
+  ]);
+  await runSimpleWorker({
+    cwd: process.cwd(),
+    task: 'Summarize the supplied immutable evidence.',
+    readOnly: true,
+    timeoutMs: 1_000,
+    clientFactory: () => client,
+  });
+  assert.equal(client.requests[0].params.sandbox, 'read-only');
+  assert.deepEqual(client.requests[1].params.sandboxPolicy, { type: 'readOnly' });
+});
+
+test('internal workers have a bounded execution timeout', async () => {
+  const client = new FakeWorkerClient([]);
+  await assert.rejects(runSimpleWorker({
+    cwd: process.cwd(),
+    task: 'Never completes.',
+    readOnly: true,
+    timeoutMs: 5,
+    clientFactory: () => client,
+  }), /exceeded its 5ms execution bound/u);
+});
+
 test('every explicit level overrides the worker with its exact model and effort', async () => {
   const expected = [
     [1, 'gpt-5.6-luna', 'medium'],
@@ -148,6 +174,14 @@ test('every explicit level overrides the worker with its exact model and effort'
       cwd: process.cwd(),
       task: 'Use the explicitly requested worker.',
       level,
+      ...(level === 7
+        ? {
+            exceptionalConsequence: {
+              consequence: 'exceptional irreversible effect',
+              rationale: 'the caller supplied a reviewed L7 record',
+            },
+          }
+        : {}),
       clientFactory: () => client,
     });
 

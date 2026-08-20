@@ -64,6 +64,10 @@ Use deterministic tooling before model inspection:
 
 Do not print the full repository tree.
 
+Use `node scripts/context-view.mjs <command>` for deterministic retrieval. The commands are `map`, `search`, `slice`, `symbols`, `json-summary`, `table-summary`, `log-summary`, and `changed`. They use tracked-file enumeration, repository exclusions, bounded visible output, raw artifacts, source digests, and content-keyed caching. RTK is optional and never required for correctness.
+
+Start with an 80-line window. Expand only to complete a definition or caller, inspect governing configuration, resolve a test contradiction, or verify an invariant. Stop after six windows, summarize, and replan before another discovery round.
+
 ### 3. Form competing hypotheses
 
 For a bug or ambiguous change, retain up to three candidates:
@@ -85,6 +89,8 @@ High confidence requires direct code evidence plus behavior, test, configuration
 Use `references/ROUTING.md`. High consequence sets a minimum level. Complexity sets the normal level. Use the higher of the two.
 
 ### 5. Dispatch a capsule
+
+For every ready Goal micro-goal, use `cruise worker --managed --complexity <class> --owns <path> --evidence <fact> --range <path:start-end> --verify <command> <task>`. Cruise applies consequence floors automatically. Pass `--level <1-7>` only as a stronger explicit override; it cannot lower the routed floor, and L7 also requires `--exceptional-consequence` plus `--exceptional-rationale`. The root writes the capsule before quota reservation, remains the integrator and final reviewer, and consumes the worker's schema-constrained `.cruise/HANDOFF.md`. A Goal may have at most three active workers. Debug begins with at most three evidence-distinct probes and needs confirmed evidence before another wave.
 
 The capsule must be at most 8 KB and contain:
 

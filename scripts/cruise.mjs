@@ -37,6 +37,15 @@ import {
   SimpleCruiseSession,
 } from './lib/simple-session.mjs';
 import { runSimpleWorker } from './lib/simple-worker.mjs';
+import {
+  buildContextCapsule,
+  parseWorkerHandoff,
+  WORKER_HANDOFF_SCHEMA_INSTRUCTIONS,
+  writeContextCapsule,
+  writeRootHandoff,
+} from './lib/context-capsule.mjs';
+import { routeWorkerTask } from './lib/worker-policy.mjs';
+import { WorkerDispatchLedger } from './lib/worker-dispatcher.mjs';
 import { captureWorkspaceFingerprint } from './lib/supervisor.mjs';
 import {
   BUDGET_PAUSE_EXIT_CODE,
@@ -183,6 +192,26 @@ export function parseArgs(argv, { env = process.env } = {}) {
     else if (arg === '--strict-budget') {
       options.strictBudget = true;
     }
+    else if (arg === '--root-model') {
+      if (command !== 'goal') throw new Error('--root-model is supported only by cruise goal.');
+      const value = args[++index];
+      if (!/^gpt-5\.6-(?:luna|terra|sol)$/u.test(value ?? '')) {
+        throw new Error('--root-model requires gpt-5.6-luna, gpt-5.6-terra, or gpt-5.6-sol.');
+      }
+      options.rootModel = value;
+    }
+    else if (arg === '--root-effort') {
+      if (command !== 'goal') throw new Error('--root-effort is supported only by cruise goal.');
+      const value = String(args[++index] ?? '').toLowerCase();
+      if (!['medium', 'high', 'xhigh', 'ultra', 'max'].includes(value)) {
+        throw new Error('--root-effort requires medium, high, xhigh, ultra, or max.');
+      }
+      options.rootEffort = value;
+    }
+    else if (arg === '--cheaper-diagnostic') {
+      if (command !== 'goal') throw new Error('--cheaper-diagnostic is supported only by cruise goal.');
+      options.cheaperDiagnostic = true;
+    }
     else if (arg === '--plan') {
       if (command !== 'goal') throw new Error('--plan is supported only by cruise goal.');
       options.planOnly = true;
@@ -206,6 +235,58 @@ export function parseArgs(argv, { env = process.env } = {}) {
       if (options.level < 1 || options.level > 7) {
         throw new Error('--level requires an integer from 1 through 7.');
       }
+    }
+    else if (arg === '--managed') {
+      if (command !== 'worker') throw new Error('--managed is supported only by cruise worker.');
+      options.managedWorker = true;
+    }
+    else if (arg === '--complexity') {
+      if (command !== 'worker') throw new Error('--complexity is supported only by cruise worker.');
+      const value = args[++index];
+      if (!['naming', 'retrieval', 'bounded', 'complex', 'consequential', 'repeated', 'exceptional'].includes(value)) {
+        throw new Error('--complexity requires naming, retrieval, bounded, complex, consequential, repeated, or exceptional.');
+      }
+      options.workerComplexity = value;
+    }
+    else if (['--owns', '--evidence', '--range', '--verify'].includes(arg)) {
+      if (command !== 'worker') throw new Error(`${arg} is supported only by cruise worker.`);
+      const value = args[++index];
+      if (!value) throw new Error(`${arg} requires a value.`);
+      const key = {
+        '--owns': 'workerOwnership',
+        '--evidence': 'workerEvidence',
+        '--range': 'workerRanges',
+        '--verify': 'workerVerification',
+      }[arg];
+      (options[key] ??= []).push(value);
+    }
+    else if (arg === '--read-only') {
+      if (command !== 'worker') throw new Error('--read-only is supported only by cruise worker.');
+      options.workerReadOnly = true;
+    }
+    else if (arg === '--debug-probe') {
+      if (command !== 'worker') throw new Error('--debug-probe is supported only by cruise worker.');
+      const value = args[++index];
+      if (!value) throw new Error('--debug-probe requires an evidence-distinct key.');
+      options.debugProbeKey = value;
+    }
+    else if (arg === '--expansion-evidence') {
+      if (command !== 'worker') throw new Error('--expansion-evidence is supported only by cruise worker.');
+      const value = args[++index];
+      if (!value) throw new Error('--expansion-evidence requires confirmed evidence.');
+      options.expansionEvidence = value;
+    }
+    else if (arg === '--exceptional-consequence') {
+      if (command !== 'worker') throw new Error('--exceptional-consequence is supported only by cruise worker.');
+      const value = args[++index];
+      if (!value) throw new Error('--exceptional-consequence requires a value.');
+      options.exceptionalConsequence = value;
+    }
+    else if (arg === '--exceptional-rationale') {
+      if (command !== 'worker') throw new Error('--exceptional-rationale is supported only by cruise worker.');
+      const value = args[++index];
+      if (!value) throw new Error('--exceptional-rationale requires a value.');
+      options.exceptionalRationale = value;
     }
     else if (arg === '-C' || arg === '--cwd') {
       const value = args[++index];
@@ -235,6 +316,25 @@ export function parseArgs(argv, { env = process.env } = {}) {
   }
   if (options.resumeSessionId && prompt) {
     throw new Error('--resume preserves the original Goal and does not accept a replacement request.');
+  }
+  if ((options.rootModel == null) !== (options.rootEffort == null)) {
+    throw new Error('--root-model and --root-effort must be supplied together.');
+  }
+  if ((options.exceptionalConsequence == null) !== (options.exceptionalRationale == null)) {
+    throw new Error('--exceptional-consequence and --exceptional-rationale must be supplied together.');
+  }
+  if (options.expansionEvidence && !options.debugProbeKey) {
+    throw new Error('--expansion-evidence requires --debug-probe.');
+  }
+  if (options.managedWorker) {
+    for (const [key, flag] of [
+      ['workerOwnership', '--owns'],
+      ['workerEvidence', '--evidence'],
+      ['workerRanges', '--range'],
+      ['workerVerification', '--verify'],
+    ]) {
+      if (!options[key]?.length) throw new Error(`managed workers require ${flag}.`);
+    }
   }
   if (
     !options.help &&
@@ -336,6 +436,10 @@ async function runHostedSession(
     readLine: readLineOnce,
     requireAssurance: true,
     planOnly: Boolean(options.planOnly),
+    rootOverride: options.rootModel
+      ? { model: options.rootModel, reasoning_effort: options.rootEffort }
+      : null,
+    cheaperDiagnostic: Boolean(options.cheaperDiagnostic),
     quotaGuard: !injectedClientFactory && options.skill === 'goal'
       ? quotaGuardFactory({
           cwd,
@@ -669,15 +773,66 @@ export async function runWorker(options, {
   claudeWorker = runClaudeWorker,
   budgetClientFactory = (input) => new AppServerClient(input),
   quotaGuardFactory = (input) => new QuotaGuard(input),
+  dispatchLedgerFactory = (input) => new WorkerDispatchLedger(input),
   enforceBudget = worker === null,
 } = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const provider = resolveProvider(options.provider);
   const selectedWorker = provider === 'claude' ? claudeWorker : worker ?? runSimpleWorker;
+  const managed = provider === 'codex' && options.managedWorker === true;
+  const exceptionalRecord = options.exceptionalConsequence
+    ? {
+        consequence: options.exceptionalConsequence,
+        rationale: options.exceptionalRationale,
+      }
+    : null;
+  const route = managed
+    ? routeWorkerTask({
+        task: options.prompt,
+        complexity: options.workerComplexity ?? 'bounded',
+        exceptionalConsequence: exceptionalRecord,
+      })
+    : null;
+  const selectedLevel = managed
+    ? Math.max(options.level ?? 1, route.recommended_level)
+    : options.level ?? null;
+  if (selectedLevel === 7 && !exceptionalRecord) {
+    throw new Error('L7 requires an explicit exceptional-consequence record');
+  }
+  if (managed) {
+    for (const [value, label] of [
+      [options.workerOwnership, 'ownership'],
+      [options.workerEvidence, 'evidence'],
+      [options.workerRanges, 'relevant ranges'],
+      [options.workerVerification, 'focused verification'],
+    ]) {
+      if (!Array.isArray(value) || value.length === 0) throw new Error(`managed worker capsule requires ${label}`);
+    }
+  }
+  const capsule = managed ? buildContextCapsule({
+    task: options.prompt,
+    nonGoals: ['Do not expand beyond the single assigned work item.'],
+    evidence: options.workerEvidence,
+    relevantRanges: options.workerRanges,
+    invariants: ['Preserve repository safety, privacy, assurance, and human-gate controls.'],
+    ownership: options.workerOwnership,
+    verification: options.workerVerification,
+    uncertainty: ['Stop and report uncertainty that requires paths outside the capsule.'],
+    stopConditions: ['Stop after the bounded work item and focused evidence are complete.'],
+    escalationConditions: ['Escalate only with new discriminating evidence; never for tool or transport failure.'],
+  }) : null;
+  if (capsule) await writeContextCapsule(cwd, capsule);
   const sessionId = randomUUID();
   let budgetClient = null;
   let quotaGuard = null;
+  let dispatchLease = null;
   try {
+    if (managed) {
+      dispatchLease = await dispatchLedgerFactory({ cwd }).reserve({
+        debugProbeKey: options.debugProbeKey ?? null,
+        expansionEvidence: options.expansionEvidence ?? null,
+      });
+    }
     if (provider === 'codex' && enforceBudget) {
       budgetClient = budgetClientFactory({
         spawnOptions: { cwd },
@@ -695,13 +850,21 @@ export async function runWorker(options, {
     }
     const result = await selectedWorker({
       cwd,
-      task: options.prompt,
-      level: options.level ?? null,
+      task: capsule
+        ? `${capsule.serialized}\n${WORKER_HANDOFF_SCHEMA_INSTRUCTIONS}`
+        : options.prompt,
+      level: selectedLevel,
+      readOnly: Boolean(options.workerReadOnly),
+      exceptionalConsequence: exceptionalRecord,
       onOutput(delta) {
         process.stdout.write(delta);
       },
       onServerRequest: (message, client) => answerWorkerRequest(message, { client }),
     });
+    if (managed) {
+      const handoff = parseWorkerHandoff(result.output);
+      await writeRootHandoff(cwd, handoff);
+    }
     if (result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
     return 0;
   } catch (error) {
@@ -711,8 +874,19 @@ export async function runWorker(options, {
     }
     throw error;
   } finally {
-    await quotaGuard?.release().catch(() => {});
-    await budgetClient?.stop().catch(() => {});
+    const cleanupErrors = [];
+    for (const [label, action] of [
+      ['quota reservation release', () => quotaGuard?.release()],
+      ['worker dispatch release', () => dispatchLease?.release()],
+      ['budget client stop', () => budgetClient?.stop()],
+    ]) {
+      try {
+        await action();
+      } catch (error) {
+        cleanupErrors.push(new Error(`${label} failed: ${displayError(error?.message)}`, { cause: error }));
+      }
+    }
+    if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'managed worker cleanup failed');
   }
 }
 

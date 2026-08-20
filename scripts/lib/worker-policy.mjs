@@ -19,6 +19,38 @@ export const WORKER_LEVELS = Object.freeze(
   Object.keys(WORKER_LEVEL_POLICY).map(Number),
 );
 
+const COMPLEXITY_LEVELS = Object.freeze({
+  naming: 1,
+  retrieval: 2,
+  bounded: 3,
+  complex: 4,
+  consequential: 5,
+  repeated: 6,
+  exceptional: 7,
+});
+
+const CONSEQUENCE_RULES = Object.freeze([
+  ['identity_access', /\b(?:auth(?:entication|orization)?|tenant isolation)\b/iu],
+  ['sensitive_data', /\b(?:PII|biometrics?|retention|egress)\b/iu],
+  ['payment', /\bpayment\b/iu],
+  ['integrity_concurrency', /\b(?:signing|replay|idempotenc\w*|concurrenc\w*)\b/iu],
+  ['database_control', /\b(?:database migration|row level security|RLS)\b/iu],
+  ['scientific_claim', /\b(?:protected holdout|scorer|estimand|statistical claim)\b/iu],
+  ['production_action', /\bproduction external action\b/iu],
+  ['physical_effect', /\b(?:hardware|physical effects?)\b/iu],
+]);
+
+const NON_ESCALATING_FAILURES = new Set([
+  'tool',
+  'permission',
+  'environment',
+  'dependency',
+  'transport',
+  'dns',
+  'connection',
+  'upstream',
+]);
+
 const WORKER_AGENTS = Object.freeze(Object.values(WORKER_LEVEL_POLICY).map(({ agent_type }) => agent_type));
 
 export const WORKER_POLICY_RECORD_SCHEMA = Object.freeze({
@@ -87,6 +119,34 @@ export const WORKER_POLICY_RECORD_SCHEMA = Object.freeze({
       type: 'array',
       items: { type: 'string', minLength: 1 },
     },
+    exceptional_consequence: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['consequence', 'rationale'],
+      properties: {
+        consequence: { type: 'string', minLength: 1 },
+        rationale: { type: 'string', minLength: 1 },
+      },
+    },
+    transition: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'work_item', 'evidence'],
+      properties: {
+        kind: { type: 'string', enum: ['escalation', 'deescalation'] },
+        work_item: { type: 'string', minLength: 1 },
+        evidence: { type: 'string', minLength: 1 },
+        exceptional_consequence: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['consequence', 'rationale'],
+          properties: {
+            consequence: { type: 'string', minLength: 1 },
+            rationale: { type: 'string', minLength: 1 },
+          },
+        },
+      },
+    },
   }),
 });
 
@@ -124,14 +184,77 @@ export function normalizeRecommendedLevel(value) {
   return value;
 }
 
+function nonEmpty(value, label) {
+  if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${label} is required`);
+  return value.trim();
+}
+
+/** Classify a single work item from deterministic complexity labels and consequence evidence. */
+export function classifyWorkerTask({ task, complexity = 'bounded', consequences = [] } = {}) {
+  const text = nonEmpty(task, 'worker task');
+  if (!Object.hasOwn(COMPLEXITY_LEVELS, complexity)) {
+    throw new TypeError(`worker complexity must be one of ${Object.keys(COMPLEXITY_LEVELS).join(', ')}`);
+  }
+  if (!Array.isArray(consequences) || consequences.some((item) => typeof item !== 'string')) {
+    throw new TypeError('worker consequences must be an array of strings');
+  }
+  const haystack = [text, ...consequences].join('\n');
+  const consequenceMatches = CONSEQUENCE_RULES
+    .filter(([, pattern]) => pattern.test(haystack))
+    .map(([id]) => id);
+  const complexityLevel = COMPLEXITY_LEVELS[complexity];
+  const consequenceFloor = consequenceMatches.length > 0 ? 5 : 1;
+  return Object.freeze({
+    schema_version: 1,
+    task: text,
+    complexity,
+    complexity_level: complexityLevel,
+    consequence_matches: Object.freeze(consequenceMatches),
+    consequence_floor: consequenceFloor,
+    recommended_level: Math.max(complexityLevel, consequenceFloor),
+  });
+}
+
+function normalizeExceptionalConsequence(value) {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    !String(value.consequence ?? '').trim() ||
+    !String(value.rationale ?? '').trim()
+  ) {
+    throw new Error('L7 requires an explicit exceptional-consequence record');
+  }
+  return Object.freeze({
+    consequence: String(value.consequence).trim(),
+    rationale: String(value.rationale).trim(),
+  });
+}
+
+export function routeWorkerTask({ exceptionalConsequence = null, ...input } = {}) {
+  const classification = classifyWorkerTask(input);
+  const exceptionalRecord = classification.recommended_level === 7
+    ? normalizeExceptionalConsequence(exceptionalConsequence)
+    : null;
+  return Object.freeze({
+    ...classification,
+    exceptional_consequence: exceptionalRecord,
+  });
+}
+
 /** Resolve the required child model and effort against the live model/list catalog. */
 export function resolveWorkerPolicy({
   recommendedLevel,
   catalog = [],
   attemptNumber = 1,
   softEscalationReason = null,
+  transition = null,
+  exceptionalConsequence = null,
 } = {}) {
   const level = normalizeRecommendedLevel(recommendedLevel);
+  const exceptionalRecord = level === 7
+    ? normalizeExceptionalConsequence(exceptionalConsequence)
+    : null;
   if (!Number.isInteger(attemptNumber) || attemptNumber < 1) {
     throw new TypeError('worker attemptNumber must be a positive integer');
   }
@@ -185,6 +308,8 @@ export function resolveWorkerPolicy({
     },
     degraded: resolution.degraded,
     degradation_reasons: [...resolution.degradation_reasons],
+    ...(exceptionalRecord ? { exceptional_consequence: exceptionalRecord } : {}),
+    ...(transition ? { transition } : {}),
   };
   assertPolicySchema(record, WORKER_POLICY_RECORD_SCHEMA);
   return deepFreeze(record);
@@ -195,15 +320,69 @@ export function resolveWorkerPolicy({
  * and is capped at 7, so selection remains monotonic even when a workflow's
  * reviewed stop conditions permit additional attempts at the strongest level.
  */
-export function escalateWorkerPolicy(previous, { catalog = [], reason } = {}) {
+export function escalateWorkerPolicy(previous, {
+  catalog = [],
+  reason,
+  evidence,
+  workItem,
+  failureCategory = null,
+  exceptionalConsequence = null,
+} = {}) {
   assertPolicySchema(previous, WORKER_POLICY_RECORD_SCHEMA);
-  if (typeof reason !== 'string' || !reason.trim()) {
-    throw new TypeError('a soft worker escalation reason is required');
+  const escalationReason = nonEmpty(reason, 'a soft worker escalation reason');
+  const discriminatingEvidence = nonEmpty(evidence, 'new discriminating evidence');
+  const narrowWorkItem = nonEmpty(workItem, 'a narrow work item');
+  if (previous.transition?.evidence === discriminatingEvidence) {
+    throw new Error('worker escalation requires new discriminating evidence');
+  }
+  const normalizedFailure = failureCategory == null ? null : String(failureCategory).trim().toLowerCase();
+  if (normalizedFailure && NON_ESCALATING_FAILURES.has(normalizedFailure)) {
+    throw new Error(`${normalizedFailure} failure does not justify a model escalation`);
+  }
+  const nextLevel = Math.min(previous.recommended_level + 1, 7);
+  let exceptionalRecord = null;
+  if (nextLevel === 7) {
+    exceptionalRecord = routeWorkerTask({
+      task: narrowWorkItem,
+      complexity: 'exceptional',
+      exceptionalConsequence,
+    }).exceptional_consequence;
   }
   return resolveWorkerPolicy({
-    recommendedLevel: Math.min(previous.recommended_level + 1, 7),
+    recommendedLevel: nextLevel,
     catalog,
     attemptNumber: previous.attempt_number + 1,
-    softEscalationReason: reason,
+    softEscalationReason: escalationReason,
+    exceptionalConsequence: exceptionalRecord,
+    transition: {
+      kind: 'escalation',
+      work_item: narrowWorkItem,
+      evidence: discriminatingEvidence,
+      ...(exceptionalRecord ? { exceptional_consequence: exceptionalRecord } : {}),
+    },
+  });
+}
+
+/** Lower only the isolated work item after evidence identifies the uncertainty. */
+export function deescalateWorkerPolicy(previous, {
+  catalog = [],
+  targetLevel,
+  workItem,
+  evidence,
+} = {}) {
+  assertPolicySchema(previous, WORKER_POLICY_RECORD_SCHEMA);
+  const level = normalizeRecommendedLevel(targetLevel);
+  if (level >= previous.recommended_level) {
+    throw new Error('de-escalation target must be below the previous worker level');
+  }
+  return resolveWorkerPolicy({
+    recommendedLevel: level,
+    catalog,
+    attemptNumber: 1,
+    transition: {
+      kind: 'deescalation',
+      work_item: nonEmpty(workItem, 'a narrow work item'),
+      evidence: nonEmpty(evidence, 'uncertainty-isolation evidence'),
+    },
   });
 }

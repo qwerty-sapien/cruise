@@ -109,7 +109,11 @@ class HostileAppServer extends EventEmitter {
     }
     if (message.method === 'thread/start') {
       if (this.mode === 'B_no_thread_start') return;
-      this.respond(message, { thread: { id: 'thread-hostile' }, model: 'gpt-fake' });
+      this.respond(message, {
+        thread: { id: 'thread-hostile' },
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+      });
       return;
     }
     if (message.method === 'thread/settings/update') {

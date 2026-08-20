@@ -20,6 +20,8 @@ import {
 } from './supervisor.mjs';
 import { UsageMeter } from './usage-meter.mjs';
 import { CompactionController } from './compaction-controller.mjs';
+import { readContinuationContext } from './context-capsule.mjs';
+import { selectRootRequest } from './root-policy.mjs';
 import {
   codexHome,
   codexSessionsDirectory,
@@ -361,6 +363,9 @@ export class SimpleCruiseSession extends EventEmitter {
     usageMeter = new UsageMeter(),
     compactionController = null,
     quotaGuard = null,
+    rootOverride = null,
+    cheaperDiagnostic = false,
+    continuationContextReader = readContinuationContext,
   }) {
     super();
     if (!client || !cwd || !prompt || !skill || !skillPath) {
@@ -391,6 +396,10 @@ export class SimpleCruiseSession extends EventEmitter {
     this.clock = clock;
     this.usageMeter = usageMeter;
     this.quotaGuard = quotaGuard;
+    this.rootRequest = skill === 'goal'
+      ? selectRootRequest({ override: rootOverride, cheaperDiagnostic })
+      : null;
+    this.continuationContextReader = continuationContextReader;
     this.usagePersistence = Promise.resolve();
     this.runStartedAt = null;
     this.runFinalStatus = 'failed';
@@ -450,17 +459,42 @@ export class SimpleCruiseSession extends EventEmitter {
         sandbox: 'workspace-write',
         serviceName: 'cruise',
         ephemeral: false,
+        ...(this.rootRequest
+          ? {
+              model: this.rootRequest.model,
+              allowProviderModelFallback: false,
+              config: {
+                model_reasoning_effort: this.rootRequest.reasoning_effort,
+              },
+            }
+          : {}),
         developerInstructions: [
           'Work directly with the user request and the repository.',
           'Cruise keeps .cruise/ORIGIN.md as a verbatim request note; Goal work may also maintain the user-editable advisory .cruise/FLIGHT.md.',
           'Do not create Cruise run-control files, approval digests, archives, or YAML workflow state. FLIGHT.md frontmatter is an advisory note, not workflow authority.',
           'Use normal Codex approvals and report failures factually.',
+          ...(this.skill === 'goal'
+            ? [
+                'The root remains the Sol-high coordinator, integrator, and final reviewer. For each ready micro-goal, invoke `cruise worker --managed` with one bounded task, its classified complexity, and the required ownership, evidence, range, and verification fields. Let Cruise enforce consequence floors; use an explicit level only as a stronger override. Keep ownership disjoint, cap active workers at three, consume only `.cruise/HANDOFF.md`, its changed-path summary, and focused evidence, then let the ephemeral worker close. Debug starts with at most three evidence-distinct probes and expands only after confirmed evidence.',
+              ]
+            : []),
           ...(this.skill === 'goal' ? [AUTONOMOUS_GOAL_INSTRUCTIONS] : []),
         ].join(' '),
       });
       this.threadId = started.thread.id;
-      this.threadModel = started.model ?? null;
-      this.threadReasoningEffort = started.reasoningEffort ?? null;
+      this.threadModel = started.model ?? this.rootRequest?.model ?? null;
+      this.threadReasoningEffort = started.reasoningEffort ?? this.rootRequest?.reasoning_effort ?? null;
+      if (this.rootRequest) {
+        const resolvedModel = this.threadModel;
+        const resolvedEffort = this.threadReasoningEffort;
+        if (resolvedModel !== this.rootRequest.model || resolvedEffort !== this.rootRequest.reasoning_effort) {
+          const error = new Error(
+            `Goal root resolved to ${resolvedModel}/${resolvedEffort}; required ${this.rootRequest.model}/${this.rootRequest.reasoning_effort}`,
+          );
+          error.code = 'CRUISE_ROOT_POLICY_UNAVAILABLE';
+          throw error;
+        }
+      }
       await this.initializeTraceSignpost();
       if (this.skill === 'goal') {
         // Replace any prior run's liveness scratch before this run can finish
@@ -540,9 +574,10 @@ export class SimpleCruiseSession extends EventEmitter {
               });
             }
             await this.prepareExpensiveContinuation();
+            const correctionContext = await this.continuationContextReader(this.cwd);
             result = await this.reactivateCompletedGoal(
               goal,
-              assuranceCorrectionInstructions(assessment),
+              `${assuranceCorrectionInstructions(assessment)}\n\n${correctionContext}`,
             );
             await this.afterCompletedTurn(result);
             goalExecutionMode = true;
@@ -597,10 +632,11 @@ export class SimpleCruiseSession extends EventEmitter {
           goalExecutionMode = true;
         }
         await this.prepareExpensiveContinuation();
+        const continuationContext = await this.continuationContextReader(this.cwd);
         result = await this.startTurn([
           {
             type: 'text',
-            text: continuationInstructions,
+            text: `${continuationInstructions}\n\n${continuationContext}`,
             text_elements: [],
           },
         ], { mode: 'default' });
@@ -699,15 +735,16 @@ export class SimpleCruiseSession extends EventEmitter {
       '# Cruise handoff',
       '',
       `- Outcome: ${truncateUtf8(this.prompt, 1_024)}`,
+      `- Completed work: turn ${usage?.latestTurnId ?? 'unknown'} completed.`,
       '- Request source of truth: `.cruise/ORIGIN.md`.',
-      `- Skill: ${this.skill}.`,
-      `- Thread: ${this.threadId ?? 'not-started'}.`,
       `- Goal status: ${this.goal?.status ?? 'not-applicable'}.`,
-      `- Goal objective: ${truncateUtf8(this.goal?.objective ?? this.prompt, 1_024)}`,
-      `- Last completed turn: ${usage?.latestTurnId ?? 'unknown'}.`,
-      `- Usage accounting known: ${usage?.accountingKnown ?? false}.`,
-      `- Context pressure: ${Number.isFinite(usage?.pressure) ? usage.pressure.toFixed(4) : 'unknown'}.`,
-      '- Next action: continue from the active Goal and repository evidence; do not infer completion from compaction.',
+      '- Changed files: use the injected capped `git status --short` summary.',
+      '- Decisions and invariants: `.cruise/FLIGHT.md` and the exact request in `.cruise/ORIGIN.md` remain authoritative.',
+      '- Exact tests: use the current Flight `verify` commands and their artifact pointers.',
+      '- Active blocker or next work item: continue from the active Goal and repository evidence; compaction is not completion.',
+      '- Files that need not be reread: files explicitly listed as completed in the next worker handoff.',
+      '- Evidence pointers: `.cruise/FLIGHT.md`, `.cruise/artifacts/`, and `LAST-RUN.json`.',
+      `- Usage and quota summary: accounting known ${usage?.accountingKnown ?? false}; context pressure ${Number.isFinite(usage?.pressure) ? usage.pressure.toFixed(4) : 'unknown'}; quota guard checked before continuation.`,
       '',
     ];
     const content = lines.join('\n');
@@ -792,6 +829,19 @@ export class SimpleCruiseSession extends EventEmitter {
         started_at: this.runStartedAt,
         ended_at: endedAt,
         final_status: finalStatus,
+        ...(this.rootRequest
+          ? {
+              root_policy: {
+                role: 'coordinator_integrator_final_reviewer',
+                requested_model: this.rootRequest.model,
+                requested_reasoning_effort: this.rootRequest.reasoning_effort,
+                resolved_model: this.threadModel,
+                resolved_reasoning_effort: this.threadReasoningEffort,
+                source: this.rootRequest.source,
+                cheaper_diagnostic: this.rootRequest.cheaper_diagnostic,
+              },
+            }
+          : {}),
         ...usageFields,
       });
     } catch (error) {
@@ -951,11 +1001,13 @@ export class SimpleCruiseSession extends EventEmitter {
 
   goalTurnSettings(mode) {
     const collaborationMode = { mode };
-    if (this.threadModel) {
+    const model = this.rootRequest?.model ?? this.threadModel;
+    const reasoningEffort = this.rootRequest?.reasoning_effort ?? this.threadReasoningEffort;
+    if (model) {
       collaborationMode.settings = {
-        model: this.threadModel,
-        ...(this.threadReasoningEffort
-          ? { reasoning_effort: this.threadReasoningEffort }
+        model,
+        ...(reasoningEffort
+          ? { reasoning_effort: reasoningEffort }
           : {}),
         developer_instructions: AUTONOMOUS_GOAL_INSTRUCTIONS,
       };
