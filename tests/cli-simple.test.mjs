@@ -100,13 +100,13 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
   );
 });
 
-test('the release exposes exactly four real skills with synchronized versions', async () => {
+test('the release exposes four public skills plus the internal context policy', async () => {
   assert.deepEqual(PUBLIC_SKILLS, ['build', 'quick', 'goal', 'debug']);
   const discovered = (await readdir(resolve('skills'), { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.deepEqual(discovered, [...PUBLIC_SKILLS].sort());
+  assert.deepEqual(discovered, [...PUBLIC_SKILLS, 'context-economy'].sort());
   const packageVersion = JSON.parse(await readFile(resolve('package.json'), 'utf8')).version;
   const codex = JSON.parse(await readFile(resolve('.codex-plugin/plugin.json'), 'utf8'));
   const claude = JSON.parse(await readFile(resolve('.claude-plugin/plugin.json'), 'utf8'));
