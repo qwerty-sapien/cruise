@@ -19,8 +19,11 @@
     ".codex-plugin/",
     ".claude-plugin/",
     "hooks/",
+    "benchmark/",
     "index.js",
     "scripts/context-view.mjs",
+    "scripts/mock-efficiency-benchmark.mjs",
+    "scripts/validate-context-economy-audit.mjs",
     "scripts/cruise.mjs",
     "scripts/lib/assurance.mjs",
     "scripts/lib/compaction-controller.mjs",
@@ -38,6 +41,7 @@
     "scripts/lib/root-policy.mjs",
     "scripts/lib/simple-session.mjs",
     "scripts/lib/simple-worker.mjs",
+    "scripts/lib/skill-trigger-policy.mjs",
     "scripts/lib/supervisor.mjs",
     "scripts/lib/trace-locator.mjs",
     "scripts/lib/usage-meter.mjs",
@@ -46,7 +50,9 @@
     "skills/"
   ],
   "scripts": {
-    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/usage-meter.test.mjs tests/compaction-controller.test.mjs tests/quota-guard.test.mjs tests/context-runtime.test.mjs tests/quota-cli.test.mjs tests/context-router.test.mjs tests/context-view.test.mjs tests/worker-dispatcher.test.mjs tests/root-session-policy.test.mjs",
+    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/usage-meter.test.mjs tests/compaction-controller.test.mjs tests/quota-guard.test.mjs tests/context-runtime.test.mjs tests/quota-cli.test.mjs tests/context-router.test.mjs tests/context-view.test.mjs tests/worker-dispatcher.test.mjs tests/root-session-policy.test.mjs tests/context-economy-packaging.test.mjs tests/mock-efficiency-benchmark.test.mjs tests/skill-trigger-policy.test.mjs tests/context-economy-audit.test.mjs",
+    "benchmark:mock": "node scripts/mock-efficiency-benchmark.mjs",
+    "audit:context-economy": "node scripts/validate-context-economy-audit.mjs",
     "validate": "npm test"
   },
   "engines": {

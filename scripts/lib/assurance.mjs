@@ -111,6 +111,7 @@ function normalizeGate(value, index) {
     dimension: oneLine(value.dimension, `${name}.dimension`, { required: true }),
     criterion: oneLine(value.criterion, `${name}.criterion`, { required: true }),
     oracle: oneLine(value.oracle, `${name}.oracle`, { required: true }),
+    surface: stringArray(value.surface ?? ['.'], `${name}.surface`, { nonempty: true }),
     severity,
     state,
     evidence: normalizeEvidence(value.evidence, `${name}.evidence`),
@@ -153,6 +154,7 @@ export function serializeQuality(quality) {
       dimension: gate.dimension,
       criterion: gate.criterion,
       oracle: gate.oracle,
+      surface: gate.surface,
       severity: gate.severity,
       state: gate.state,
       ...(gate.evidence === null
@@ -195,6 +197,7 @@ function contractFor(plan) {
         dimension: gate.dimension,
         criterion: gate.criterion,
         oracle: gate.oracle,
+        surface: gateSurface(gate),
         severity: gate.severity,
       })),
     },
@@ -202,9 +205,39 @@ function contractFor(plan) {
   };
 }
 
-export function computeFlightContextFingerprint(plan, {
+function gateSurface(gate) {
+  return Array.isArray(gate.surface) && gate.surface.length ? gate.surface : ['.'];
+}
+
+function globalGate(gate) {
+  const surface = gateSurface(gate);
+  return ['intent', 'completion-review', 'independent-review'].includes(gate.dimension) ||
+    surface.includes('.') ||
+    surface.includes('*');
+}
+
+function scopedContractFor(plan, gate, originBinding) {
+  return {
+    origin: originBinding,
+    outcome: plan.outcome,
+    verify: plan.verify,
+    non_goals: plan.scope.nonGoals,
+    invariants: plan.invariants,
+    gate: {
+      id: gate.id,
+      dimension: gate.dimension,
+      criterion: gate.criterion,
+      oracle: gate.oracle,
+      severity: gate.severity,
+      surface: gateSurface(gate),
+    },
+  };
+}
+
+export function computeFlightAssuranceContext(plan, {
   workspaceFingerprint,
   originText = null,
+  surfaceFingerprints = {},
 } = {}) {
   if (!plan || plan.version < 2 || !plan.quality) {
     throw new TypeError('a valid Flight v2 plan is required');
@@ -216,11 +249,71 @@ export function computeFlightContextFingerprint(plan, {
     throw new TypeError('a non-empty .cruise/ORIGIN.md request binding is required');
   }
   const originBinding = `origin:present:${digest(originText)}`;
-  return digest(JSON.stringify({
+  const contextFingerprint = digest(JSON.stringify({
     origin: originBinding,
     workspace: workspaceFingerprint,
     contract: contractFor(plan),
   }));
+  const gateFingerprints = Object.fromEntries(plan.quality.gates.map((gate) => {
+    if (globalGate(gate)) return [gate.id, contextFingerprint];
+    const surfaceFingerprint = surfaceFingerprints[gate.id];
+    if (typeof surfaceFingerprint !== 'string' || !surfaceFingerprint) {
+      throw new TypeError(`surface fingerprint is required for gate ${gate.id}`);
+    }
+    return [gate.id, digest(JSON.stringify({
+      workspace: surfaceFingerprint,
+      contract: scopedContractFor(plan, gate, originBinding),
+    }))];
+  }));
+  return Object.freeze({
+    contextFingerprint,
+    gateFingerprints: Object.freeze(gateFingerprints),
+  });
+}
+
+export function computeFlightContextFingerprint(plan, {
+  workspaceFingerprint,
+  originText = null,
+} = {}) {
+  return computeFlightAssuranceContext(plan, {
+    workspaceFingerprint,
+    originText,
+    surfaceFingerprints: Object.fromEntries(
+      plan?.quality?.gates?.map((gate) => [gate.id, workspaceFingerprint]) ?? [],
+    ),
+  }).contextFingerprint;
+}
+
+export async function captureFlightAssuranceContext(cwd, plan, {
+  workspaceFingerprint,
+  surfaceFingerprintReader = null,
+} = {}) {
+  let originText;
+  try {
+    originText = await readFile(join(cwd, '.cruise', 'ORIGIN.md'), 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw new Error('Cruise cannot attest Flight v2 without .cruise/ORIGIN.md');
+    }
+    throw error;
+  }
+  const surfaceFingerprints = {};
+  for (const gate of plan.quality.gates) {
+    if (globalGate(gate)) continue;
+    if (typeof surfaceFingerprintReader !== 'function') {
+      throw new TypeError(`surfaceFingerprintReader is required for gate ${gate.id}`);
+    }
+    const fingerprint = await surfaceFingerprintReader(gateSurface(gate));
+    if (typeof fingerprint !== 'string' || !fingerprint) {
+      throw new Error(`surface fingerprint is unavailable for gate ${gate.id}`);
+    }
+    surfaceFingerprints[gate.id] = fingerprint;
+  }
+  return computeFlightAssuranceContext(plan, {
+    workspaceFingerprint,
+    originText,
+    surfaceFingerprints,
+  });
 }
 
 export async function captureFlightContextFingerprint(cwd, plan, {
@@ -263,15 +356,19 @@ export function evaluateFlightAssurance(plan, contextFingerprint) {
     });
   }
 
+  const context = typeof contextFingerprint === 'string'
+    ? { contextFingerprint, gateFingerprints: null }
+    : contextFingerprint ?? { contextFingerprint: null, gateFingerprints: null };
   const dimensions = requiredDimensions(plan.quality);
   const missingDimensions = [...dimensions].filter((dimension) =>
     !plan.quality.gates.some((gate) => gate.dimension === dimension));
   const gateResults = plan.quality.gates.map((gate) => {
     const evidence = gate.evidence;
+    const expectedFingerprint = context.gateFingerprints?.[gate.id] ?? context.contextFingerprint;
     const fresh = Boolean(
       evidence &&
-      contextFingerprint &&
-      evidence.contextFingerprint === contextFingerprint &&
+      expectedFingerprint &&
+      evidence.contextFingerprint === expectedFingerprint &&
       Number.isSafeInteger(evidence.observedAt),
     );
     let closed = false;

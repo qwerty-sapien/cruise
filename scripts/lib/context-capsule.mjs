@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -126,30 +125,24 @@ export function parseWorkerHandoff(raw) {
   return Object.freeze(normalized);
 }
 
-function bulletLines(values) {
-  return values.length ? values.map((value) => `  - ${value}`) : ['  - none'];
-}
-
 export function formatRootHandoff(handoff) {
   const value = typeof handoff === 'string' ? parseWorkerHandoff(handoff) : handoff;
+  const compact = [
+    ...value.completed_work.map((item) => `completed ${item}`),
+    ...value.changed_files.map((item) => `changed ${item}`),
+    ...value.decisions_and_invariants.map((item) => `preserve ${item}`),
+  ].join('; ') || 'No completed worker state was recorded.';
+  const assurance = [
+    ...value.exact_tests.map((item) => `check ${item}`),
+    ...value.evidence_pointers.map((item) => `evidence ${item}`),
+  ].join('; ') || 'No focused assurance pointer was recorded.';
   const lines = [
-    '# Cruise handoff',
+    '# Cruise continuation',
     '',
-    `- Outcome: ${value.outcome}`,
-    '- Completed work:',
-    ...bulletLines(value.completed_work),
-    '- Changed files:',
-    ...bulletLines(value.changed_files),
-    '- Decisions and invariants:',
-    ...bulletLines(value.decisions_and_invariants),
-    '- Exact tests:',
-    ...bulletLines(value.exact_tests),
-    `- Active blocker or next work item: ${value.active_blocker_or_next_work_item}`,
-    '- Files that need not be reread:',
-    ...bulletLines(value.files_not_to_reread),
-    '- Evidence pointers:',
-    ...bulletLines(value.evidence_pointers),
-    `- Usage and quota summary: ${value.usage_and_quota_summary}`,
+    `- Compact handoff: ${truncateUtf8(compact, 1_800)}`,
+    `- Next work item: ${value.active_blocker_or_next_work_item}`,
+    `- Quota state: ${value.usage_and_quota_summary}`,
+    `- Unresolved assurance: ${truncateUtf8(assurance, 1_200)}`,
     '',
   ];
   const content = lines.join('\n');
@@ -174,10 +167,9 @@ function truncateUtf8(value, bytes) {
   return buffer.subarray(0, Math.max(0, bytes - 3)).toString('utf8').replace(/\uFFFD$/u, '') + '...';
 }
 
-/** Read only the compact handoff and a capped changed-path summary for a root continuation. */
+/** Read only the compact handoff for a root continuation. */
 export async function readContinuationContext(cwd, {
   read = readFile,
-  run = spawnSync,
 } = {}) {
   let handoff = 'No handoff is available.';
   try {
@@ -186,14 +178,7 @@ export async function readContinuationContext(cwd, {
     if (error?.code !== 'ENOENT') throw error;
   }
   assertByteCap(handoff, MAX_WORKER_HANDOFF_BYTES, 'stored root handoff');
-  const status = run('git', ['status', '--short'], {
-    cwd,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024,
-  });
-  if (status.error) throw status.error;
-  const changed = truncateUtf8(String(status.stdout ?? ''), 2 * 1024).trim() || '(none)';
-  return `Resume from this compact handoff and changed-path summary. Do not restate prior findings.\n\n${handoff}\nChanged paths:\n${changed}`;
+  return `Resume only from this compact continuation state. Do not restate the request, Flight, or prior plan.\n\n${handoff}`;
 }
 
 export const WORKER_HANDOFF_SCHEMA_INSTRUCTIONS = [

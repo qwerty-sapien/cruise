@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
 
 import {
   DEFAULT_STALL,
@@ -6,7 +7,7 @@ import {
   inspectFlightPlan,
 } from './flight-plan.mjs';
 import {
-  captureFlightContextFingerprint,
+  captureFlightAssuranceContext,
   evaluateFlightAssurance,
 } from './assurance.mjs';
 import {
@@ -21,6 +22,7 @@ import {
 import { UsageMeter } from './usage-meter.mjs';
 import { CompactionController } from './compaction-controller.mjs';
 import { readContinuationContext } from './context-capsule.mjs';
+import { skillTriggerInstructions } from './skill-trigger-policy.mjs';
 import { selectRootRequest } from './root-policy.mjs';
 import {
   codexHome,
@@ -47,7 +49,7 @@ const MATERIAL_GOAL_DECISION = /\b(?:not\s+requested|out(?:side)?\s+(?:the\s+)?s
 const AUTONOMOUS_GOAL_INSTRUCTIONS = [
   'The user explicitly invoked Cruise Goal, which authorizes autonomous end-to-end progress within the normal Codex workspace and permission boundaries.',
   'Use the first read-only Plan turn only to inspect the repository, resolve the outcome, touchpoints, non-goals, invariants, acceptance commands, and stall tuning, and form a strongly aligned plan for the first ready micro-goal. Unless the user explicitly requested planning or research only, that plan is not an endpoint: the following native Goal turn must immediately implement it and write the advisory .cruise/FLIGHT.md as its first execution act.',
-  'For every micro-goal, reread and reconcile the user-editable flight plan with the requested outcome and current repository evidence; realign before work outside its touchpoints or inside its non-goals; re-verify affected invariants; make a compact plan for the next ready slice; implement it; run focused verification; remediate in-scope failures; recheck alignment and regression risk; then immediately execute the next ready micro-goal.',
+  'For every micro-goal, use the compact Flight digest and unresolved-gate summary; reopen detailed receipts only for stale surfaces. Realign before work outside touchpoints or inside non-goals; re-verify affected invariants; implement the next ready slice; run focused verification; remediate in-scope failures; then continue.',
   'When changed behavior has meaningful concurrency, lifecycle, migration, public-contract, security, integration, or edge-case risk, use available independent reviewers or a bounded agent swarm to try to break it. Give them non-overlapping probes, reproduce credible findings, and refine before advancing. Skip this for simple low-risk work and never claim independent coverage that did not run.',
   'Do not ask the user to approve a phase, checkpoint, plan handoff, or ordinary next step. Ask only for a material product decision that repository evidence cannot resolve, a scope or safety expansion, authentication or secret entry, or a host-required external or destructive approval.',
   'Do not mark the Goal paused or blocked merely because a phase ended or because a fresh continuation is needed. Cruise starts another turn automatically while the Goal remains active.',
@@ -62,9 +64,9 @@ const GOAL_BOOTSTRAP_INSTRUCTIONS = [
 
 const GOAL_CONTINUATION_INSTRUCTIONS = [
   'Continue the active Cruise Goal now; this is execution, not a request for a new plan review.',
-  'Write .cruise/FLIGHT.md first if execution has not created it yet, then reread and reconcile its user-editable outcome, scope fence, invariants, acceptance commands, and stall tuning with current repository evidence, completed work, and remaining criteria.',
-  'Draft only a compact, codebase-aware plan for the next ready micro-goal, then immediately implement it and run focused verification.',
-  'Remediate in-scope failures, recheck alignment and regression risk, use bounded independent breakage probes when the change warrants them, and continue until the flight plan and Goal are truthfully complete or both report a concrete material blocker.',
+  'Use only the injected compact handoff, next work item, quota state, and unresolved assurance; do not restate the original request, full Flight, or prior plan.',
+  'Immediately implement the next ready micro-goal and run focused verification.',
+  'Rerun only invalidated checks, use bounded independent breakage probes when warranted, and continue until the Flight and Goal are truthfully complete or both report a concrete material blocker.',
   'Routine micro-goal progression is already authorized; do not ask the user for a phase or plan approval.',
 ].join(' ');
 
@@ -473,6 +475,7 @@ export class SimpleCruiseSession extends EventEmitter {
           'Cruise keeps .cruise/ORIGIN.md as a verbatim request note; Goal work may also maintain the user-editable advisory .cruise/FLIGHT.md.',
           'Do not create Cruise run-control files, approval digests, archives, or YAML workflow state. FLIGHT.md frontmatter is an advisory note, not workflow authority.',
           'Use normal Codex approvals and report failures factually.',
+          skillTriggerInstructions(),
           ...(this.skill === 'goal'
             ? [
                 'The root remains the Sol-high coordinator, integrator, and final reviewer. For each ready micro-goal, invoke `cruise worker --managed` with one bounded task, its classified complexity, and the required ownership, evidence, range, and verification fields. Let Cruise enforce consequence floors; use an explicit level only as a stronger override. Keep ownership disjoint, cap active workers at three, consume only `.cruise/HANDOFF.md`, its changed-path summary, and focused evidence, then let the ephemeral worker close. Debug starts with at most three evidence-distinct probes and expands only after confirmed evidence.',
@@ -731,20 +734,31 @@ export class SimpleCruiseSession extends EventEmitter {
   async refreshCompactionHandoff() {
     const directory = await ensureCruiseScratch(this.cwd, CONTEXT_STATE_FILES);
     const usage = this.usageMeter.thread(this.threadId);
+    let prior = '';
+    try {
+      prior = await readFile(`${directory}/HANDOFF.md`, 'utf8');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    const field = (label) => prior.match(new RegExp(`^- ${label}: (.+)$`, 'mu'))?.[1] ?? null;
+    const compact = field('Compact handoff') ?? 'Completed state remains in the current diff and focused evidence pointers.';
+    const inspection = await Promise.resolve().then(() => this.readPlan(this.cwd)).catch(() => null);
+    const pendingGate = inspection?.state === 'valid' && inspection.plan.version >= 2
+      ? inspection.plan.quality.gates.find(({ state }) => state !== 'passed')
+      : null;
+    const nextWork = field('Next work item') ?? field('Active blocker or next work item') ?? (pendingGate
+      ? `Close Flight gate ${pendingGate.id} using its affected surface and evidence pointer.`
+      : 'Continue the active bounded micro-goal.');
+    const unresolved = inspection?.state === 'valid' && inspection.plan.version >= 2
+      ? inspection.plan.quality.gates.filter(({ state }) => state !== 'passed').map(({ id }) => id).join(', ') || 'none by state; confirm freshness'
+      : 'Flight assurance digest unavailable';
     const lines = [
-      '# Cruise handoff',
+      '# Cruise continuation',
       '',
-      `- Outcome: ${truncateUtf8(this.prompt, 1_024)}`,
-      `- Completed work: turn ${usage?.latestTurnId ?? 'unknown'} completed.`,
-      '- Request source of truth: `.cruise/ORIGIN.md`.',
-      `- Goal status: ${this.goal?.status ?? 'not-applicable'}.`,
-      '- Changed files: use the injected capped `git status --short` summary.',
-      '- Decisions and invariants: `.cruise/FLIGHT.md` and the exact request in `.cruise/ORIGIN.md` remain authoritative.',
-      '- Exact tests: use the current Flight `verify` commands and their artifact pointers.',
-      '- Active blocker or next work item: continue from the active Goal and repository evidence; compaction is not completion.',
-      '- Files that need not be reread: files explicitly listed as completed in the next worker handoff.',
-      '- Evidence pointers: `.cruise/FLIGHT.md`, `.cruise/artifacts/`, and `LAST-RUN.json`.',
-      `- Usage and quota summary: accounting known ${usage?.accountingKnown ?? false}; context pressure ${Number.isFinite(usage?.pressure) ? usage.pressure.toFixed(4) : 'unknown'}; quota guard checked before continuation.`,
+      `- Compact handoff: ${truncateUtf8(compact, 1_800)}`,
+      `- Next work item: ${truncateUtf8(nextWork, 800)}`,
+      `- Quota state: accounting known ${usage?.accountingKnown ?? false}; context pressure ${Number.isFinite(usage?.pressure) ? usage.pressure.toFixed(4) : 'unknown'}; quota guard checked before continuation.`,
+      `- Unresolved assurance: ${truncateUtf8(unresolved, 800)}.`,
       '',
     ];
     const content = lines.join('\n');
@@ -968,10 +982,14 @@ export class SimpleCruiseSession extends EventEmitter {
         metrics: { total: plan.quality.gates.length, closed: 0, fresh: 0, passed: 0, waived: 0 },
       };
     }
-    let contextFingerprint;
+    let assuranceContext;
     try {
-      contextFingerprint = await captureFlightContextFingerprint(this.cwd, plan, {
+      assuranceContext = await captureFlightAssuranceContext(this.cwd, plan, {
         workspaceFingerprint,
+        surfaceFingerprintReader: (paths) => this.captureFingerprint(this.cwd, {
+          excludeFlightPlan: true,
+          paths,
+        }),
       });
     } catch (error) {
       return {
@@ -985,13 +1003,18 @@ export class SimpleCruiseSession extends EventEmitter {
         metrics: { total: plan.quality.gates.length, closed: 0, fresh: 0, passed: 0, waived: 0 },
       };
     }
-    const assessment = evaluateFlightAssurance(plan, contextFingerprint);
-    const result = { ...assessment, contextFingerprint };
+    const assessment = evaluateFlightAssurance(plan, assuranceContext);
+    const result = {
+      ...assessment,
+      contextFingerprint: assuranceContext.contextFingerprint,
+      gateFingerprints: assuranceContext.gateFingerprints,
+    };
     await writeCruiseScratchJson(this.cwd, '.attestation.json', {
-      version: 1,
+      version: 2,
       host: 'codex',
       level: result.level,
-      context_fingerprint: contextFingerprint,
+      context_fingerprint: assuranceContext.contextFingerprint,
+      gate_fingerprints: assuranceContext.gateFingerprints,
       reasons: result.reasons,
       metrics: result.metrics,
       observed_at: Date.now(),

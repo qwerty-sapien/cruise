@@ -19,7 +19,7 @@ import {
   writeFlightPlan,
 } from './lib/flight-plan.mjs';
 import {
-  captureFlightContextFingerprint,
+  captureFlightAssuranceContext,
   evaluateFlightAssurance,
 } from './lib/assurance.mjs';
 import { writeOriginPrompt } from './lib/origin-note.mjs';
@@ -585,10 +585,14 @@ export async function runQueueGoal({ cwd, provider, milestone, prompt }, {
     return { status: 'failed', reason: 'product workspace freshness could not be established' };
   }
   try {
-    const contextFingerprint = await captureFlightContextFingerprint(cwd, flight, {
+    const assuranceContext = await captureFlightAssuranceContext(cwd, flight, {
       workspaceFingerprint,
+      surfaceFingerprintReader: (paths) => captureWorkspaceFingerprint(cwd, {
+        excludeFlightPlan: true,
+        paths,
+      }),
     });
-    const assurance = evaluateFlightAssurance(flight, contextFingerprint);
+    const assurance = evaluateFlightAssurance(flight, assuranceContext);
     if (!assurance.allowsCompletion) {
       return {
         status: 'failed',
@@ -647,10 +651,14 @@ async function assessQueueFlightCompletion(cwd, expectedContract) {
     return { status: 'blocked', reason: 'product workspace freshness could not be established' };
   }
   try {
-    const contextFingerprint = await captureFlightContextFingerprint(cwd, flight, {
+    const assuranceContext = await captureFlightAssuranceContext(cwd, flight, {
       workspaceFingerprint,
+      surfaceFingerprintReader: (paths) => captureWorkspaceFingerprint(cwd, {
+        excludeFlightPlan: true,
+        paths,
+      }),
     });
-    const assurance = evaluateFlightAssurance(flight, contextFingerprint);
+    const assurance = evaluateFlightAssurance(flight, assuranceContext);
     return assurance.allowsCompletion
       ? { status: 'complete', reason: 'Flight v2 completion is freshly assured' }
       : {
@@ -1109,15 +1117,20 @@ export async function runAttest(options, {
     );
   }
   const { plan } = inspection;
-  let contextFingerprint = null;
+  let assuranceContext = null;
   if (plan.version >= 2) {
     const workspaceFingerprint = await fingerprintCapture(cwd, { excludeFlightPlan: true });
     if (!workspaceFingerprint) throw new Error('Product workspace fingerprint is unavailable.');
-    contextFingerprint = await captureFlightContextFingerprint(cwd, plan, {
+    assuranceContext = await captureFlightAssuranceContext(cwd, plan, {
       workspaceFingerprint,
+      surfaceFingerprintReader: (paths) => fingerprintCapture(cwd, {
+        excludeFlightPlan: true,
+        paths,
+      }),
     });
   }
-  const assurance = evaluateFlightAssurance(plan, contextFingerprint);
+  const contextFingerprint = assuranceContext?.contextFingerprint ?? null;
+  const assurance = evaluateFlightAssurance(plan, assuranceContext);
   const report = {
     version: plan.version,
     status: plan.status,
@@ -1126,6 +1139,7 @@ export async function runAttest(options, {
     ready_for_completion: assurance.readyForCompletion,
     allows_completion: assurance.allowsCompletion,
     context_fingerprint: contextFingerprint,
+    gate_fingerprints: assuranceContext?.gateFingerprints ?? {},
     metrics: assurance.metrics,
     reasons: assurance.reasons,
   };

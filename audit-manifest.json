@@ -1,0 +1,63 @@
+{
+  "created_at": "2026-08-20T04:24:25.298698+00:00",
+  "source_snapshots": {
+    "cruise": {
+      "files": 57,
+      "bytes": 520042
+    },
+    "general_skill_bundle": {
+      "files": 26,
+      "bytes": 275546
+    },
+    "auto_experiment": {
+      "files": 7,
+      "bytes": 67593
+    },
+    "cell_tracking": {
+      "files": 1254,
+      "bytes": 57449232
+    },
+    "booking_support_site": {
+      "files": 1126,
+      "bytes": 32973838
+    },
+    "check_in": {
+      "files": 792,
+      "bytes": 3305324
+    },
+    "window": {
+      "source": "connected GitHub"
+    },
+    "hotel_locker": {
+      "source": "connected GitHub"
+    }
+  },
+  "primary_findings": [
+    "Cruise durable Goal thread grows without manual compaction",
+    "root model and effort are inherited",
+    "bounded worker router is not automatically used by Goal",
+    "no token or account quota telemetry is consumed",
+    "no shared weekly quota guard exists",
+    "cell_tracking routine instructions force a 319562-byte archived state read",
+    "check-in plan is stale relative to authoritative state",
+    "booking APPI policy overuses full scans and recursive debugging"
+  ],
+  "targets": {
+    "l1_l4_median_credit_ratio_max": 0.2,
+    "l5_median_credit_ratio_max": 0.33,
+    "campaign_weekly_delta_cap_percent": 9.0,
+    "goal_reservation_percent": 2.25
+  },
+  "phase_3_validation": {
+    "mode": "deterministic_mock_no_model_calls",
+    "l1_l4_median_credit_ratio": 0.058136,
+    "l5_median_credit_ratio": 0.231061,
+    "four_goal_reservations_percent": 9.0,
+    "correctness": "pass",
+    "focused_tests": "119/119 pass",
+    "evidence": [
+      ".cruise/artifacts/phase-3-mock-benchmark.json",
+      ".cruise/artifacts/phase-3-affected-focused-final.log"
+    ]
+  }
+}

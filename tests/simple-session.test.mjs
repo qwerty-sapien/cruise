@@ -187,14 +187,15 @@ test('Goal auto-advances each completed active turn until native completion', as
   const objective = client.calls.find(({ method }) => method === 'thread/goal/set').params.objective;
   const developerInstructions = client.calls.find(({ method }) => method === 'thread/start').params.developerInstructions;
   assert.match(developerInstructions, /Goal work may also maintain.*\.cruise\/FLIGHT\.md/u);
+  assert.match(developerInstructions, /seeking-alpha only for an explicit novelty/u);
   assert.match(objective, /sole read-only Plan-mode bootstrap/u);
   assert.match(objective, /\.cruise\/FLIGHT\.md/u);
   assert.match(objective, /implement, verify, realign, and continue/u);
   assert.equal(continuation.some((item) => item.type === 'skill'), false);
   assert.match(continuation[0].text, /next ready micro-goal/u);
-  assert.match(continuation[0].text, /immediately implement/u);
+  assert.match(continuation[0].text, /immediately implement/iu);
   assert.match(continuation[0].text, /independent breakage probes/u);
-  assert.match(continuation[0].text, /flight plan/u);
+  assert.match(continuation[0].text, /compact handoff, next work item, quota state, and unresolved assurance/u);
   const [planSettings, executionSettings] = client.calls
     .filter(({ method }) => method === 'thread/settings/update')
     .map(({ params }) => params);
@@ -1022,7 +1023,7 @@ test('Codex completion assessment rejects stale gates and accepts fresh Flight v
     gate.state = 'passed';
     gate.evidence = {
       summary: `${gate.id} passed`,
-      contextFingerprint: incomplete.contextFingerprint,
+      contextFingerprint: incomplete.gateFingerprints[gate.id],
       observedAt: 1,
       source: gate.dimension === 'completion-review' ? 'review' : 'command',
       rationale: '',

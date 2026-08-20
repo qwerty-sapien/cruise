@@ -184,6 +184,22 @@ test('product fingerprints include HEAD and exact untracked contents', async (t)
   );
 });
 
+test('surface fingerprints ignore edits outside their repository-relative paths', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-surface-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(join(cwd, 'src'));
+  await mkdir(join(cwd, 'docs'));
+  await writeFile(join(cwd, 'src', 'owner.mjs'), 'export const value = 1;\n', 'utf8');
+  await writeFile(join(cwd, 'docs', 'note.md'), 'first\n', 'utf8');
+  assert.equal(spawnSync('git', ['init', '--quiet'], { cwd }).status, 0);
+  assert.equal(spawnSync('git', ['add', '.'], { cwd }).status, 0);
+  const baseline = await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] });
+  await writeFile(join(cwd, 'docs', 'note.md'), 'second\n', 'utf8');
+  assert.equal(await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] }), baseline);
+  await writeFile(join(cwd, 'src', 'owner.mjs'), 'export const value = 2;\n', 'utf8');
+  assert.notEqual(await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] }), baseline);
+});
+
 test('failure signatures ignore paths, line numbers, hex values, and whitespace', () => {
   const first = 'Error: parser failed at /Users/alice/app/parser.js:142 id deadbeef1234';
   const second = 'ERROR:   parser failed at /opt/build/parser.js:987 id cafe01234567';

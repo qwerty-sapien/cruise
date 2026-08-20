@@ -213,7 +213,10 @@ test('managed worker writes a bounded capsule before quota and persists its comp
     'client:stop',
   ]);
   const persisted = await readFile(join(root, '.cruise', 'HANDOFF.md'), 'utf8');
-  assert.match(persisted, /Repair payment idempotency/u);
+  for (const label of ['Compact handoff', 'Next work item', 'Quota state', 'Unresolved assurance']) {
+    assert.match(persisted, new RegExp(label, 'u'));
+  }
+  assert.doesNotMatch(persisted, /Repair payment idempotency/u);
   assert.ok(Buffer.byteLength(persisted) <= 4 * 1024);
 });
 

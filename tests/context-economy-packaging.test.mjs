@@ -14,15 +14,22 @@ const POLICY_FILES = [
   'skills/context-economy/references/RETRIEVAL.md',
   'skills/context-economy/references/ROUTING.md',
   'skills/context-economy/references/USAGE_ACCOUNTING.md',
+  'skills/context-economy/references/SKILL_TRIGGERS.md',
+  'skills/context-economy/templates/HANDOFF.template.md',
+  'skills/context-economy/templates/cell_tracking-CURRENT.template.md',
+  'skills/context-economy/templates/check-in-CURRENT.template.md',
   'skills/context-economy/assets/context-capsule.schema.json',
   'skills/context-economy/assets/usage-ledger.schema.json',
 ];
 const RUNTIME_FILES = [
   'scripts/context-view.mjs',
+  'scripts/mock-efficiency-benchmark.mjs',
+  'scripts/validate-context-economy-audit.mjs',
   'scripts/lib/compaction-controller.mjs',
   'scripts/lib/context-capsule.mjs',
   'scripts/lib/quota-guard.mjs',
   'scripts/lib/root-policy.mjs',
+  'scripts/lib/skill-trigger-policy.mjs',
   'scripts/lib/usage-meter.mjs',
   'scripts/lib/worker-dispatcher.mjs',
 ];
@@ -54,6 +61,8 @@ test('npm package ships the context-economy policy and runtime modules', async (
     const shipped = new Set(files.map(({ path }) => path));
 
     for (const path of [
+      'benchmark/BENCHMARK_PLAN.md',
+      'benchmark/mock-transcripts.json',
       ...POLICY_FILES.filter((path) => path.startsWith('skills/')),
       ...RUNTIME_FILES,
     ]) {

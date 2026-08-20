@@ -17,6 +17,7 @@ Read only the reference needed for the current action:
 - `references/RETRIEVAL.md` for repository navigation and read-more decisions.
 - `references/USAGE_ACCOUNTING.md` for token, credit, compaction, and quota rules.
 - `references/HANDOFF.md` when creating or consuming a worker capsule.
+- `references/SKILL_TRIGGERS.md` when deciding whether a broad scientific, DAG, environment, release, novelty, or privacy skill applies.
 
 ## Non-negotiable invariants
 
@@ -117,6 +118,10 @@ The root inspects:
 - unresolved risks.
 
 Open full diff hunks only where the handoff or test indicates risk. Run affected-surface checks next. Run the full suite only at a stable final diff or for a genuine high-risk release boundary.
+
+### 6a. Attest stable surfaces
+
+Keep `.cruise/FLIGHT.md` below 8 KB. Give every gate an affected surface and keep detailed evidence behind a compact digest and pointer. Record focused evidence after a stable micro-goal. At the stable final diff, run one deterministic attestation and one independent semantic review for L5+ work. Later edits invalidate only gates whose surfaces changed; intent and final-review gates may remain whole-diff. Never weaken waivers, scientific controls, privacy controls, or fail-closed completion to save context.
 
 ### 7. Compact at safe boundaries
 

@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "id": "T1-baseline", "task_id": "T1", "variant": "baseline", "level": 3,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-sol",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":100000,"cached_input_tokens":80000,"output_tokens":3000,"reasoning_output_tokens":1200},
+        {"model":"gpt-5.6-sol","input_tokens":200000,"cached_input_tokens":160000,"output_tokens":5000,"reasoning_output_tokens":2000}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 50000, "command_visible_bytes": 50000, "filtering_applies": false,
+      "unique_files_read": 80, "repeated_file_reads": 30, "full_file_reads_above_64kb": 4, "compactions": 0, "worker_count": 0,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 9000, "large_item_reviewed": true, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T1-optimized", "task_id": "T1", "variant": "optimized", "level": 3,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-terra",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":8000,"cached_input_tokens":6000,"output_tokens":300,"reasoning_output_tokens":100},
+        {"model":"gpt-5.6-terra","input_tokens":12000,"cached_input_tokens":8000,"output_tokens":500,"reasoning_output_tokens":180}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 50000, "command_visible_bytes": 8000, "filtering_applies": true,
+      "unique_files_read": 8, "repeated_file_reads": 1, "full_file_reads_above_64kb": 0, "compactions": 0, "worker_count": 1,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 900, "large_item_reviewed": false, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T2-baseline", "task_id": "T2", "variant": "baseline", "level": 2,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-sol",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":100000,"cached_input_tokens":80000,"output_tokens":3000,"reasoning_output_tokens":1200},
+        {"model":"gpt-5.6-sol","input_tokens":200000,"cached_input_tokens":160000,"output_tokens":5000,"reasoning_output_tokens":2000}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 40000, "command_visible_bytes": 40000, "filtering_applies": false,
+      "unique_files_read": 70, "repeated_file_reads": 25, "full_file_reads_above_64kb": 3, "compactions": 0, "worker_count": 0,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 8000, "large_item_reviewed": true, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T2-optimized", "task_id": "T2", "variant": "optimized", "level": 2,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-terra",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":7000,"cached_input_tokens":5000,"output_tokens":250,"reasoning_output_tokens":80},
+        {"model":"gpt-5.6-terra","input_tokens":10000,"cached_input_tokens":7000,"output_tokens":400,"reasoning_output_tokens":150}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 40000, "command_visible_bytes": 6000, "filtering_applies": true,
+      "unique_files_read": 6, "repeated_file_reads": 0, "full_file_reads_above_64kb": 0, "compactions": 0, "worker_count": 1,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 800, "large_item_reviewed": false, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T3-baseline", "task_id": "T3", "variant": "baseline", "level": 3,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-sol",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":100000,"cached_input_tokens":80000,"output_tokens":3000,"reasoning_output_tokens":1200},
+        {"model":"gpt-5.6-sol","input_tokens":200000,"cached_input_tokens":160000,"output_tokens":5000,"reasoning_output_tokens":2000}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 60000, "command_visible_bytes": 60000, "filtering_applies": false,
+      "unique_files_read": 90, "repeated_file_reads": 35, "full_file_reads_above_64kb": 5, "compactions": 0, "worker_count": 0,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 9500, "large_item_reviewed": true, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T3-optimized", "task_id": "T3", "variant": "optimized", "level": 3,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-terra",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":9000,"cached_input_tokens":7000,"output_tokens":320,"reasoning_output_tokens":100},
+        {"model":"gpt-5.6-terra","input_tokens":13000,"cached_input_tokens":9000,"output_tokens":520,"reasoning_output_tokens":190}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 60000, "command_visible_bytes": 9000, "filtering_applies": true,
+      "unique_files_read": 9, "repeated_file_reads": 1, "full_file_reads_above_64kb": 0, "compactions": 0, "worker_count": 2,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 950, "large_item_reviewed": false, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T4-baseline", "task_id": "T4", "variant": "baseline", "level": 4,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-sol",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":100000,"cached_input_tokens":80000,"output_tokens":3000,"reasoning_output_tokens":1200},
+        {"model":"gpt-5.6-sol","input_tokens":200000,"cached_input_tokens":160000,"output_tokens":5000,"reasoning_output_tokens":2000}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 70000, "command_visible_bytes": 70000, "filtering_applies": false,
+      "unique_files_read": 95, "repeated_file_reads": 40, "full_file_reads_above_64kb": 4, "compactions": 1, "worker_count": 0,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 9800, "large_item_reviewed": true, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T4-optimized", "task_id": "T4", "variant": "optimized", "level": 4,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-terra",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":10000,"cached_input_tokens":7000,"output_tokens":350,"reasoning_output_tokens":110},
+        {"model":"gpt-5.6-terra","input_tokens":15000,"cached_input_tokens":10000,"output_tokens":600,"reasoning_output_tokens":220}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 70000, "command_visible_bytes": 10000, "filtering_applies": true,
+      "unique_files_read": 10, "repeated_file_reads": 2, "full_file_reads_above_64kb": 0, "compactions": 1, "worker_count": 3,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 1500, "large_item_reviewed": true, "item_cap_tokens": 8000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T5-baseline", "task_id": "T5", "variant": "baseline", "level": 5,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-sol",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":100000,"cached_input_tokens":80000,"output_tokens":3000,"reasoning_output_tokens":1200},
+        {"model":"gpt-5.6-sol","input_tokens":200000,"cached_input_tokens":160000,"output_tokens":5000,"reasoning_output_tokens":2000}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 80000, "command_visible_bytes": 80000, "filtering_applies": false,
+      "unique_files_read": 100, "repeated_file_reads": 45, "full_file_reads_above_64kb": 5, "compactions": 1, "worker_count": 0,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 10000, "large_item_reviewed": true, "item_cap_tokens": 10000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    },
+    {
+      "id": "T5-optimized", "task_id": "T5", "variant": "optimized", "level": 5,
+      "root_model": "gpt-5.6-sol", "worker_model": "gpt-5.6-sol",
+      "usage": [
+        {"model":"gpt-5.6-sol","input_tokens":20000,"cached_input_tokens":15000,"output_tokens":800,"reasoning_output_tokens":300},
+        {"model":"gpt-5.6-sol","input_tokens":30000,"cached_input_tokens":20000,"output_tokens":1200,"reasoning_output_tokens":500}
+      ],
+      "rate_limit_used_percent_before": 1, "rate_limit_used_percent_after": 1, "command_raw_bytes": 80000, "command_visible_bytes": 12000, "filtering_applies": true,
+      "unique_files_read": 12, "repeated_file_reads": 2, "full_file_reads_above_64kb": 0, "compactions": 1, "worker_count": 1,
+      "focused_test_outcome": "pass", "final_test_outcome": "pass", "diff_correctness": true, "invariant_failures": 0, "largest_injected_item_tokens": 1800, "large_item_reviewed": true, "item_cap_tokens": 8000, "full_suite_runs": 1, "goal_reservation_percent": 2.25
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -108,18 +108,40 @@ test('contextCompaction items are not implementation progress or stall observati
   assert.equal(session.turnAgentText, '');
 });
 
-test('the pre-compaction handoff retains task identity within the hard cap', async (t) => {
+test('the pre-compaction handoff retains compact task state without restating the request', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-context-handoff-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const prompt = 'Keep the quota guard and all assurance gates intact while continuing phase two.';
   const session = newSession({ client: new UsageClient(), cwd: root, prompt });
   session.threadId = THREAD_ID;
   session.goal = { status: 'active', objective: prompt };
+  session.readPlan = async () => ({
+    state: 'valid',
+    plan: {
+      version: 2,
+      quality: { gates: [{ id: 'core.functional', state: 'pending' }] },
+    },
+  });
+  await session.refreshCompactionHandoff();
+  const initial = await readFile(join(root, '.cruise', 'HANDOFF.md'), 'utf8');
+  assert.match(initial, /Next work item: Close Flight gate core\.functional/u);
+  await writeFile(join(root, '.cruise', 'HANDOFF.md'), [
+    '# Cruise continuation',
+    '',
+    '- Compact handoff: completed quota guard implementation; preserve assurance gates',
+    '- Next work item: continue phase two focused validation',
+    '- Quota state: reservation remains within 2.25 points',
+    '- Unresolved assurance: core.regression',
+    '',
+  ].join('\n'), 'utf8');
   await session.refreshCompactionHandoff();
   const handoff = await readFile(join(root, '.cruise', 'HANDOFF.md'), 'utf8');
-  assert.match(handoff, new RegExp(prompt, 'u'));
-  assert.match(handoff, /Request source of truth: `.cruise\/ORIGIN\.md`/u);
-  assert.match(handoff, /Goal status: active/u);
+  assert.match(handoff, /completed quota guard implementation; preserve assurance gates/u);
+  assert.match(handoff, /continue phase two focused validation/u);
+  assert.match(handoff, /Quota state: accounting known/u);
+  assert.match(handoff, /Unresolved assurance: core\.functional/u);
+  assert.doesNotMatch(handoff, new RegExp(prompt, 'u'));
+  assert.doesNotMatch(handoff, /Request source of truth|full Flight|prior plan/u);
   assert.ok(Buffer.byteLength(handoff) <= 4 * 1_024);
 });
 

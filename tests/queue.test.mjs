@@ -8,7 +8,7 @@ import test from 'node:test';
 import { parseArgs, runQueue, runQueueGoal, runQueueStatus } from '../scripts/cruise.mjs';
 import { readFlightPlan, writeFlightPlan } from '../scripts/lib/flight-plan.mjs';
 import {
-  captureFlightContextFingerprint,
+  captureFlightAssuranceContext,
 } from '../scripts/lib/assurance.mjs';
 import { captureWorkspaceFingerprint } from '../scripts/lib/supervisor.mjs';
 
@@ -122,7 +122,8 @@ test('milestoneToFlightPlan carries scope and verification plus inherited obliga
     plan.quality.gates.map(({ dimension }) => dimension),
     ['intent', 'functional-correctness', 'regression', 'failure-paths', 'completion-review'],
   );
-  assert.match(plan.body, /Keep parser results backward compatible/u);
+  assert.match(plan.body, /Inherited cross-milestone detail remains in `.cruise\/QUEUE\.md`/u);
+  assert.doesNotMatch(plan.body, /Keep parser results backward compatible/u);
 });
 
 test('Queue v2 carries risk and profiles into domain-aware Flight gates', () => {
@@ -213,14 +214,18 @@ async function completeCurrentFlight(cwd) {
   const workspaceFingerprint = await captureWorkspaceFingerprint(cwd, {
     excludeFlightPlan: true,
   });
-  const contextFingerprint = await captureFlightContextFingerprint(cwd, plan, {
+  const assuranceContext = await captureFlightAssuranceContext(cwd, plan, {
     workspaceFingerprint,
+    surfaceFingerprintReader: (paths) => captureWorkspaceFingerprint(cwd, {
+      excludeFlightPlan: true,
+      paths,
+    }),
   });
   for (const gate of plan.quality.gates) {
     gate.state = 'passed';
     gate.evidence = {
       summary: `${gate.id} passed`,
-      contextFingerprint,
+      contextFingerprint: assuranceContext.gateFingerprints[gate.id],
       observedAt: Date.now(),
       source: ['completion-review', 'independent-review'].includes(gate.dimension)
         ? 'review'
@@ -274,7 +279,7 @@ test('queue run preserves mid-queue edits and stops honestly on a stalled milest
           return { status: 'complete' };
         }
         assert.equal(input.milestone.outcome, 'Migrate the edited callers');
-        assert.match(flight.body, /Keep old and new implementations compatible/u);
+        assert.match(flight.body, /Inherited cross-milestone detail remains in `.cruise\/QUEUE\.md`/u);
         return { status: 'stalled', reason: 'no new workspace evidence' };
       },
     });

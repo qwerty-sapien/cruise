@@ -51,28 +51,22 @@ test('capsules and schema-constrained handoffs enforce byte caps', () => {
   );
 });
 
-test('root handoff contains every lifecycle field and continuation injects only compact state', async (t) => {
+test('root handoff retains only the compact continuation contract', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-handoff-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const persisted = await writeRootHandoff(root, parseWorkerHandoff(JSON.stringify(handoff())));
   assert.ok(persisted.bytes <= MAX_WORKER_HANDOFF_BYTES);
   const content = await readFile(persisted.path, 'utf8');
   for (const label of [
-    'Outcome',
-    'Completed work',
-    'Changed files',
-    'Decisions and invariants',
-    'Exact tests',
-    'Active blocker or next work item',
-    'Files that need not be reread',
-    'Evidence pointers',
-    'Usage and quota summary',
+    'Compact handoff',
+    'Next work item',
+    'Quota state',
+    'Unresolved assurance',
   ]) assert.match(content, new RegExp(label, 'u'));
-  const continuation = await readContinuationContext(root, {
-    run: () => ({ status: 0, stdout: ' M src/parser.mjs\n' }),
-  });
-  assert.match(continuation, /Complete the bounded parser change/u);
-  assert.match(continuation, /M src\/parser\.mjs/u);
+  assert.doesNotMatch(content, /Outcome|Files that need not be reread/u);
+  const continuation = await readContinuationContext(root);
+  assert.match(continuation, /Root should integrate the focused diff/u);
+  assert.doesNotMatch(continuation, /git status|M src\/parser\.mjs/u);
   assert.ok(Buffer.byteLength(continuation) < 8 * 1024);
 });
 

@@ -2,12 +2,13 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import {
-  captureFlightContextFingerprint,
+  captureFlightAssuranceContext,
   evaluateFlightAssurance,
 } from './assurance.mjs';
 import { inspectFlightPlan } from './flight-plan.mjs';
 import { normalizeRecommendedLevel } from './worker-policy.mjs';
 import { skillReference } from './provider.mjs';
+import { skillTriggerInstructions } from './skill-trigger-policy.mjs';
 import { captureWorkspaceFingerprint } from './supervisor.mjs';
 import {
   activateGoalSession,
@@ -28,6 +29,7 @@ const CLAUDE_HOST_INSTRUCTIONS = [
   'This Cruise session is running on Claude Code.',
   'Use Claude Code native permissions, task tracking, resumable sessions, skills, and subagents.',
   'Claude Code has a conversation-level /goal but exposes no documented Codex-style Goal lifecycle API or Goal object to plugins; do not invent Goal endpoints or stack native /goal automatically.',
+  skillTriggerInstructions(),
   'For executable Goal work, compile .cruise/FLIGHT.md v2 with core and relevant domain quality profiles as the first execution act; bind truthful evidence to the current context fingerprint, and keep status truthful through assured completion or a concrete blocker. Flight grants no permission.',
   'A session-scoped Stop-hook supervisor may inject continuation, assurance repair, or realignment instructions; respond by gathering discriminating evidence or reporting the blocker honestly, never by weakening gates or repeating the failed attempt.',
 ].join(' ');
@@ -202,10 +204,14 @@ export async function runClaudeSession({
         reason: 'Product workspace fingerprint is unavailable.',
       });
     }
-    let contextFingerprint;
+    let assuranceContext;
     try {
-      contextFingerprint = await captureFlightContextFingerprint(cwd, plan, {
+      assuranceContext = await captureFlightAssuranceContext(cwd, plan, {
         workspaceFingerprint,
+        surfaceFingerprintReader: (paths) => captureFingerprint(cwd, {
+          excludeFlightPlan: true,
+          paths,
+        }),
       });
     } catch (error) {
       return Object.freeze({
@@ -215,7 +221,7 @@ export async function runClaudeSession({
         reason: String(error?.message ?? error),
       });
     }
-    const assurance = evaluateFlightAssurance(plan, contextFingerprint);
+    const assurance = evaluateFlightAssurance(plan, assuranceContext);
     return Object.freeze({
       status: assurance.allowsCompletion ? 'complete' : 'unassured',
       exitCode: assurance.allowsCompletion ? 0 : 2,

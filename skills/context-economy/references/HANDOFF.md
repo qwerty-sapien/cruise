@@ -65,14 +65,9 @@ artifact_paths: []
 
 `.cruise/HANDOFF.md` must remain below 4 KB and contain:
 
-- original outcome in one sentence;
-- completed work;
-- changed paths;
-- current decisions and invariants;
-- exact tests and results;
-- active blocker or next micro-goal;
-- files that need not be reread;
-- pointers to detailed evidence;
-- token and quota status.
+- one compact handoff line covering completed state, changed paths, and protected invariants;
+- the next micro-goal or concrete blocker;
+- quota and context-pressure state;
+- unresolved assurance with compact test/evidence pointers.
 
-Remove dead ends, repeated explanations, and superseded hypotheses.
+Do not restate the original request, full Flight, prior plan, dead ends, or superseded hypotheses.

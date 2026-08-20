@@ -361,12 +361,24 @@ export async function writeSupervisorState(cwd, state) {
   await writeCruiseScratchJson(cwd, SUPERVISOR_STATE_FILE, state);
 }
 
-export async function captureWorkspaceFingerprint(cwd, { excludeFlightPlan = false } = {}) {
+export async function captureWorkspaceFingerprint(cwd, {
+  excludeFlightPlan = false,
+  paths = ['.'],
+} = {}) {
   try {
+    if (
+      !Array.isArray(paths) ||
+      paths.length === 0 ||
+      paths.some((path) => typeof path !== 'string' || !path.trim() || path.startsWith('/') || path.split('/').includes('..'))
+    ) {
+      throw new TypeError('fingerprint paths must be non-empty repository-relative paths or globs');
+    }
     const options = { cwd, encoding: 'utf8', maxBuffer: Infinity };
-    const pathspec = excludeFlightPlan
-      ? ['--', '.', ':(exclude).cruise/**']
-      : [];
+    const pathspec = [
+      '--',
+      ...paths,
+      ...(excludeFlightPlan ? [':(exclude).cruise/**'] : []),
+    ];
     const [head, status, diff, cached, untracked] = await Promise.all([
       execFileAsync('git', ['rev-parse', 'HEAD'], options)
         .catch(() => ({ stdout: 'unborn\n' })),
@@ -380,7 +392,7 @@ export async function captureWorkspaceFingerprint(cwd, { excludeFlightPlan = fal
           '--others',
           '--exclude-standard',
           '-z',
-          ...(excludeFlightPlan ? ['--', '.', ':(exclude).cruise/**'] : []),
+          ...pathspec,
         ],
         options,
       ),

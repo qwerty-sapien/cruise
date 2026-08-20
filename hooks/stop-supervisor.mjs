@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  captureFlightContextFingerprint,
+  captureFlightAssuranceContext,
   evaluateFlightAssurance,
 } from '../scripts/lib/assurance.mjs';
 import {
@@ -203,8 +203,8 @@ async function writeState(directory, state, filename = basename(STATE_FILE)) {
   await atomicWrite(join(directory, filename), `${JSON.stringify(state, null, 2)}\n`);
 }
 
-async function captureWorkspaceFingerprint(cwd) {
-  return captureProductFingerprint(cwd, { excludeFlightPlan: true });
+async function captureWorkspaceFingerprint(cwd, options = {}) {
+  return captureProductFingerprint(cwd, { excludeFlightPlan: true, ...options });
 }
 
 function failureSignature(text) {
@@ -446,10 +446,12 @@ export async function runStopSupervisor(input, {
   let contextError = null;
   if (flight.version >= 2 && workspaceFingerprint) {
     try {
-      contextFingerprint = await captureFlightContextFingerprint(cwd, flight, {
+      const assuranceContext = await captureFlightAssuranceContext(cwd, flight, {
         workspaceFingerprint,
+        surfaceFingerprintReader: (paths) => captureWorkspaceFingerprint(cwd, { paths }),
       });
-      assessment = evaluateFlightAssurance(flight, contextFingerprint);
+      contextFingerprint = assuranceContext.contextFingerprint;
+      assessment = evaluateFlightAssurance(flight, assuranceContext);
     } catch (error) {
       contextError = cleanMessage(error?.message);
       assessment = evaluateFlightAssurance(flight, null);
