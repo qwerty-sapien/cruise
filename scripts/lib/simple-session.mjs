@@ -1035,7 +1035,10 @@ export class SimpleCruiseSession extends EventEmitter {
         ...(reasoningEffort
           ? { reasoning_effort: reasoningEffort }
           : {}),
-        developer_instructions: AUTONOMOUS_GOAL_INSTRUCTIONS,
+        developer_instructions: [
+          COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
+          AUTONOMOUS_GOAL_INSTRUCTIONS,
+        ].join(' '),
       };
     }
     return {

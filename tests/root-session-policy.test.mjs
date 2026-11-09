@@ -104,6 +104,7 @@ test('Goal requests and persists a non-default root effort before compact contin
   for (const value of settings) {
     assert.equal(value.model, 'gpt-5.6-sol');
     assert.equal(value.reasoning_effort, 'xhigh');
+    assert.match(value.developer_instructions, /git log HEAD\.\.<incoming-ref>/u);
   }
   const continuation = client.calls.find(({ method }) => method === 'turn/start').params.input[0].text;
   assert.match(continuation, /Resume from compact handoff/u);
