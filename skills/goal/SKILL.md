@@ -5,6 +5,8 @@ description: "Autonomously complete consequential or multi-step work: plan just 
 
 # Cruise Goal
 
+Apply the shared [independent release default](../context-economy/references/INDEPENDENT_RELEASE.md) during planning, execution, review, and publication. Read it before deciding how a blocker affects the remaining work.
+
 Apply the shared [collaborative Git synchronization protocol](../context-economy/references/COLLABORATIVE_GIT_SYNC.md) before substantive repository work. The root coordinator performs it once; workers do not synchronize the checkout independently.
 
 For finite planned features and consequential work, inspect the repository and make a proportionate plan. Ask only questions whose answers materially alter implementation and cannot be resolved from repository evidence. Treat an explicit `cruise goal` invocation as authorization to carry the requested work through to completion within the normal workspace and permission boundaries. That authorization includes routine planning and phase transitions; never require a copied approval phrase, digest acknowledgement, or an `--auto-approve` incantation. Respect an explicit request to only plan, research, or prepare; remain read-only and finish with a repository-aware plan. Otherwise, a plan launches implementation and is never the endpoint.

@@ -370,9 +370,7 @@ test('malformed or schema-invalid frontmatter never activates supervision', () =
 test('the fenceless pilot artifact receives one bounded corrective intervention', async () => {
   const cwd = await fixture({ withFlight: false });
   try {
-    const pilot = await readFile(resolve(
-      'evals/results/2026-07-21/raw/claude-v302-y-r1/FLIGHT.md',
-    ), 'utf8');
+    const pilot = 'status: active\nstall:\n  quiet_turns: 3\n  same_failure: 3\n';
     await writeFile(join(cwd, '.cruise', 'FLIGHT.md'), pilot, 'utf8');
 
     const first = invoke(cwd);

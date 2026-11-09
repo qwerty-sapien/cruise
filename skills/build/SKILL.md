@@ -5,6 +5,8 @@ description: "Clarify a project with the user and compile it into an advisory qu
 
 # Cruise Build
 
+Apply the shared [independent release default](../context-economy/references/INDEPENDENT_RELEASE.md) during planning, execution, review, and publication. Read it before deciding how a blocker affects the remaining work.
+
 Apply the shared [collaborative Git synchronization protocol](../context-economy/references/COLLABORATIVE_GIT_SYNC.md) before substantive repository work. The root coordinator performs it once; workers do not synchronize the checkout independently.
 
 Build is the bowling setup for a whole project: clarify the vision once, inspect the repository, and decompose the work into a sequence of independently verifiable Goal runs. Do not implement the milestones in this conversation. Execution belongs to `cruise queue run` or an explicit Goal invocation.

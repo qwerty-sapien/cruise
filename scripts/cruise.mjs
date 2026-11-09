@@ -619,6 +619,44 @@ function queueMilestoneContract(milestone) {
   });
 }
 
+function queueMilestoneCheckpoint(queue) {
+  const rawMilestones = Array.isArray(queue.raw?.milestones) ? queue.raw.milestones : [];
+  return queue.milestones.map((milestone) => {
+    const rawMilestone = rawMilestones.find((candidate) => (
+      candidate && typeof candidate === 'object' && !Array.isArray(candidate) &&
+      candidate.id === milestone.id
+    ));
+    return {
+      id: milestone.id,
+      contract: queueMilestoneContract(milestone),
+      status: milestone.status,
+      stopScope: milestone.stop_scope,
+      serialized: structuredClone(rawMilestone ?? milestone),
+    };
+  });
+}
+
+function restoreQueueMilestoneCheckpoint(queue, checkpoint, activeMilestoneId) {
+  const checkpointById = new Map(checkpoint.map((entry) => [entry.id, entry]));
+  const currentById = new Map(queue.milestones.map((candidate) => [candidate.id, candidate]));
+  const additions = queue.milestones.filter(({ id }) => !checkpointById.has(id));
+
+  // Restore the pre-run membership and ordering without discarding new advisory work.
+  // A missing entry uses its raw serialized checkpoint so unknown metadata survives.
+  queue.milestones = checkpoint.map((entry) =>
+    currentById.get(entry.id) ?? structuredClone(entry.serialized));
+  queue.milestones.push(...additions);
+
+  for (const entry of checkpoint) {
+    const candidate = queue.milestones.find(({ id }) => id === entry.id);
+    Object.assign(candidate, JSON.parse(entry.contract));
+    if (entry.id !== activeMilestoneId) {
+      candidate.status = entry.status;
+      candidate.stop_scope = entry.stopScope ?? null;
+    }
+  }
+}
+
 function queueControlledFlightContract(flight) {
   return JSON.stringify({
     version: flight.version,
@@ -680,15 +718,17 @@ export async function runQueue(options, {
   const cwd = await validateWorkingDirectory(options.cwd);
   for (;;) {
     let queue = await requireQueue(cwd, queueReader);
-    const priorStop = queue.milestones.find(({ status }) => ['active', 'blocked', 'stalled'].includes(status));
+    const priorStop = queue.milestones.find(({ status, stop_scope }) =>
+      status === 'active' || stop_scope === 'global' ||
+      (['blocked', 'stalled'].includes(status) && stop_scope !== 'local'));
     if (priorStop) {
-      output.write(`Queue cannot advance past ${priorStop.id} (${priorStop.status}); edit the advisory queue before resuming.\n`);
+      output.write(`Queue cannot advance past ${priorStop.id} (${priorStop.status}); reconcile the controlling condition and its advisory queue stop_scope/status before resuming.\n`);
       writeQueueStatus(queue, output);
       return priorStop.status === 'stalled' ? 3 : 2;
     }
 
     const pending = queue.milestones.filter(({ status }) => status === 'pending');
-    if (!pending.length) {
+    if (!pending.length && queue.milestones.every(({ status }) => status === 'complete')) {
       writeQueueStatus(queue, output);
       return 0;
     }
@@ -697,19 +737,19 @@ export async function runQueue(options, {
       warn(message) { output.write(`Queue warning: ${message}\n`); },
     });
     if (!milestone) {
-      output.write('Queue has pending milestones but none have complete dependencies.\n');
+      output.write('Queue remains incomplete; no pending milestone has complete dependencies.\n');
       writeQueueStatus(queue, output);
-      return 2;
+      return queue.milestones.some(({ status }) => status === 'stalled') ? 3 : 2;
     }
 
     milestone.status = 'active';
+    milestone.stop_scope = null;
     queue = await queueWriter(cwd, queue);
-    const activeContract = queueMilestoneContract(
-      queue.milestones.find(({ id }) => id === milestone.id),
-    );
+    const milestoneCheckpoint = queueMilestoneCheckpoint(queue);
+    const contractSnapshot = new Map(milestoneCheckpoint.map(({ id, contract }) => [id, contract]));
     const inheritedQueueBody = queue.body;
-    const statusSnapshot = new Map(queue.milestones.map(({ id, status }) => [id, status]));
-    const milestoneIds = queue.milestones.map(({ id }) => id);
+    const statusSnapshot = new Map(milestoneCheckpoint.map(({ id, status }) => [id, status]));
+    const stopScopeSnapshot = new Map(milestoneCheckpoint.map(({ id, stopScope }) => [id, stopScope]));
     const prompt = [
       milestone.outcome,
       `This is queue milestone ${milestone.id}. Reconcile and execute the active plan in .cruise/FLIGHT.md, then keep its status truthful.`,
@@ -727,35 +767,56 @@ export async function runQueue(options, {
       rawResult = { status: 'failed', reason: displayError(error?.message) };
     }
     let result = normalizedQueueResult(rawResult);
+    // Runtime/transport/quota failures and integrity violations stop the run.
+    // Only reported milestone blockers can leave unrelated units runnable.
+    let localBlocker = ['blocked', 'stalled'].includes(
+      typeof rawResult === 'string' ? rawResult : rawResult?.status,
+    ) && rawResult?.stop_scope !== 'global';
 
     queue = await requireQueue(cwd, queueReader);
-    const current = queue.milestones.find(({ id }) => id === milestone.id);
-    if (!current) throw new Error(`Queue milestone ${milestone.id} disappeared while it was running.`);
-    const currentMilestoneIds = queue.milestones.map(({ id }) => id);
-    const milestoneSetChanged =
-      currentMilestoneIds.length !== milestoneIds.length ||
-      currentMilestoneIds.some((id) => !statusSnapshot.has(id));
-    const mutatedStatuses = queue.milestones.filter(({ id, status }) =>
-      id !== milestone.id && statusSnapshot.get(id) !== status);
-    const activeContractChanged = queueMilestoneContract(current) !== activeContract;
+    const currentMilestoneIds = new Set(queue.milestones.map(({ id }) => id));
+    const missingMilestones = milestoneCheckpoint.filter(({ id }) => !currentMilestoneIds.has(id));
+    const addedMilestones = queue.milestones.filter(({ id }) => !contractSnapshot.has(id));
+    const milestoneSetChanged = missingMilestones.length > 0 || addedMilestones.length > 0;
+    const mutatedStatuses = queue.milestones.filter(({ id, status, stop_scope }) =>
+      id !== milestone.id && statusSnapshot.has(id) && (statusSnapshot.get(id) !== status ||
+        stopScopeSnapshot.get(id) !== stop_scope));
+    const mutatedContracts = queue.milestones.filter((candidate) =>
+      contractSnapshot.has(candidate.id) &&
+      queueMilestoneContract(candidate) !== contractSnapshot.get(candidate.id));
+    const activeContractChanged = mutatedContracts.some(({ id }) => id === milestone.id);
+    const unexecutedContractChanges = mutatedContracts.filter(({ id }) => id !== milestone.id);
     const inheritedContextChanged = queue.body !== inheritedQueueBody;
     if (
-      activeContractChanged ||
+      mutatedContracts.length ||
       inheritedContextChanged ||
       milestoneSetChanged ||
       mutatedStatuses.length
     ) {
-      for (const candidate of queue.milestones) {
-        if (candidate.id !== milestone.id && statusSnapshot.has(candidate.id)) {
-          candidate.status = statusSnapshot.get(candidate.id);
-        }
-      }
+      localBlocker = false;
+      // Keep the original dependency closure and assurance obligations on disk.
+      // Advisory fields are intentionally outside the controlled contract.
+      restoreQueueMilestoneCheckpoint(queue, milestoneCheckpoint, milestone.id);
+      const activeMilestoneMissing = missingMilestones.some(({ id }) => id === milestone.id);
+      const missingUnexecutedMilestones = missingMilestones.filter(({ id }) => id !== milestone.id);
       result = {
         status: 'blocked',
         reason: [
+          activeMilestoneMissing
+            ? `the active milestone was deleted or renamed and its pre-run contract was restored: ${milestone.id}`
+            : null,
+          missingUnexecutedMilestones.length
+            ? `unexecuted milestone contract deleted or renamed and restored: ${missingUnexecutedMilestones.map(({ id }) => id).join(', ')}`
+            : null,
           activeContractChanged ? 'the active milestone contract changed while it was running' : null,
+          unexecutedContractChanges.length
+            ? `unexecuted milestone contract changed: ${unexecutedContractChanges.map(({ id }) => id).join(', ')}`
+            : null,
           inheritedContextChanged ? 'the inherited queue obligations changed while it was running' : null,
           milestoneSetChanged ? 'the queue milestone set changed while a milestone was running' : null,
+          addedMilestones.length
+            ? `new milestone entries retained for explicit reconciliation: ${addedMilestones.map(({ id }) => id).join(', ')}`
+            : null,
           mutatedStatuses.length
             ? `unexecuted milestone status changed: ${mutatedStatuses.map(({ id }) => id).join(', ')}`
             : null,
@@ -764,7 +825,10 @@ export async function runQueue(options, {
     } else if (result.status === 'complete') {
       result = await assessQueueFlightCompletion(cwd, expectedFlightContract);
     }
+    const current = queue.milestones.find(({ id }) => id === milestone.id);
     current.status = result.status;
+    // Persist provenance: rerunning the command cannot clear a global stop.
+    current.stop_scope = result.status === 'complete' ? null : localBlocker ? 'local' : 'global';
     await queueWriter(cwd, queue);
 
     if (result.status === 'complete') {
@@ -772,6 +836,10 @@ export async function runQueue(options, {
       continue;
     }
     output.write(`Queue stopped at ${milestone.id} (${result.status}): ${result.reason}.\n`);
+    if (localBlocker && nextReadyMilestone(queue, { warn() {} })) {
+      output.write('Continuing independent queue milestones; blocked dependencies remain pending.\n');
+      continue;
+    }
     return result.status === 'stalled' ? 3 : 2;
   }
 }

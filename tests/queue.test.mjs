@@ -257,7 +257,7 @@ test('queue CLI parsing and status output require an explicit queue action', asy
   }
 });
 
-test('queue run preserves mid-queue edits and stops honestly on a stalled milestone', async () => {
+test('queue run preserves advisory edits and stops honestly on a stalled milestone', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-run-stall-'));
   try {
     await prepareAssuredQueueWorkspace(cwd);
@@ -273,12 +273,12 @@ test('queue run preserves mid-queue edits and stops honestly on a stalled milest
         assert.equal(flight.outcome, input.milestone.outcome);
         if (input.milestone.id === 'M1') {
           const edited = await readQueue(cwd);
-          edited.milestones[1].outcome = 'Migrate the edited callers';
+          edited.raw.milestones[1].reviewer = 'owner-review';
           await writeQueue(cwd, edited);
           await completeCurrentFlight(cwd);
           return { status: 'complete' };
         }
-        assert.equal(input.milestone.outcome, 'Migrate the edited callers');
+        assert.equal((await readQueue(cwd)).raw.milestones[1].reviewer, 'owner-review');
         assert.match(flight.body, /Inherited cross-milestone detail remains in `.cruise\/QUEUE\.md`/u);
         return { status: 'stalled', reason: 'no new workspace evidence' };
       },
@@ -286,7 +286,7 @@ test('queue run preserves mid-queue edits and stops honestly on a stalled milest
 
     assert.equal(exitCode, 3);
     assert.deepEqual(calls.map(({ id }) => id), ['M1', 'M2']);
-    assert.match(calls[1].prompt, /Migrate the edited callers/u);
+    assert.match(calls[1].prompt, /Migrate callers/u);
     const queue = await readQueue(cwd);
     assert.deepEqual(queue.milestones.map(({ status }) => status), ['complete', 'stalled']);
     assert.match(output, /Completed queue milestone M1/u);
@@ -419,7 +419,7 @@ test('queue execution rejects terminal Flight substitution', async () => {
   }
 });
 
-test('queue execution rejects deletion of an unexecuted milestone', async () => {
+test('queue execution restores deletion of an unexecuted milestone', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-milestone-deletion-'));
   try {
     await writeQueue(cwd, projectQueue());
@@ -434,7 +434,10 @@ test('queue execution rejects deletion of an unexecuted milestone', async () => 
       },
     });
     assert.equal(exitCode, 2);
-    assert.deepEqual((await readQueue(cwd)).milestones.map(({ status }) => status), ['blocked']);
+    const stopped = await readQueue(cwd);
+    assert.deepEqual(stopped.milestones.map(({ status }) => status), ['blocked', 'pending']);
+    assert.equal(stopped.milestones[0].stop_scope, 'global');
+    assert.match(output, /deleted or renamed and restored/u);
     assert.match(output, /milestone set changed/u);
   } finally {
     await rm(cwd, { recursive: true, force: true });
@@ -453,4 +456,295 @@ test('terminal or interrupted queues never masquerade as successful completion',
       await rm(cwd, { recursive: true, force: true });
     }
   }
+});
+
+for (const blockerStatus of ['blocked', 'stalled']) {
+  test(`queue continues independent work after ${blockerStatus} and retains dependent work`, async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-independent-'));
+    try {
+      await prepareAssuredQueueWorkspace(cwd);
+      const queue = projectQueue();
+      queue.milestones.push({ ...queue.milestones[0], id: 'M3', outcome: 'Publish independent notice', depends: [] });
+      await writeQueue(cwd, queue);
+      const calls = [];
+      const exitCode = await runQueue({ cwd, provider: 'codex' }, {
+        output: { write() {} },
+        async milestoneRunner({ milestone }) {
+          calls.push(milestone.id);
+          if (milestone.id === 'M1') return { status: blockerStatus, reason: 'feature unavailable' };
+          await completeCurrentFlight(cwd);
+          return { status: 'complete' };
+        },
+      });
+      assert.deepEqual(calls, ['M1', 'M3']);
+      assert.equal(exitCode, blockerStatus === 'stalled' ? 3 : 2);
+      assert.deepEqual((await readQueue(cwd)).milestones.map(({ status }) => status), [blockerStatus, 'pending', 'complete']);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+}
+
+test('queue resumes independent work with an existing blocker without declaring total completion', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-resume-independent-'));
+  try {
+    await prepareAssuredQueueWorkspace(cwd);
+    const queue = projectQueue();
+    await writeQueue(cwd, queue);
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+      output: { write() {} },
+      async milestoneRunner() { return { status: 'blocked', reason: 'local feature unavailable' }; },
+    }), 2);
+    const stopped = await readQueue(cwd);
+    assert.equal(stopped.milestones[0].stop_scope, 'local');
+    // A new independent unit can resume while the dependent unit stays pending.
+    queue.milestones = stopped.milestones;
+    queue.milestones.push({ ...queue.milestones[1], id: 'M3', depends: [] });
+    await writeQueue(cwd, queue);
+    const calls = [];
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+      output: { write() {} },
+      async milestoneRunner({ milestone }) {
+        calls.push(milestone.id);
+        await completeCurrentFlight(cwd);
+        return { status: 'complete' };
+      },
+    }), 2);
+    assert.deepEqual(calls, ['M3']);
+    assert.deepEqual((await readQueue(cwd)).milestones.map(({ status }) => status), ['blocked', 'pending', 'complete']);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+for (const failure of ['budget-paused', 'failed', 'interrupted', 'contract-mutation', 'unassured']) {
+  test(`queue stops independent work on ${failure}`, async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-global-stop-'));
+    try {
+      const queue = projectQueue();
+      queue.milestones[1].depends = [];
+      await writeQueue(cwd, queue);
+      const calls = [];
+      assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+        output: { write() {} },
+        async milestoneRunner({ milestone }) {
+          calls.push(milestone.id);
+          if (failure === 'contract-mutation') {
+            const edited = await readQueue(cwd);
+            edited.body += '\nChanged obligations';
+            await writeQueue(cwd, edited);
+            return { status: 'blocked' };
+          }
+          return { status: failure === 'unassured' ? 'complete' : failure };
+        },
+      }), 2);
+      assert.deepEqual(calls, ['M1']);
+      assert.deepEqual((await readQueue(cwd)).milestones.map(({ status }) => status), ['blocked', 'pending']);
+      assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+        output: { write() {} },
+        async milestoneRunner({ milestone }) { calls.push(milestone.id); return { status: 'blocked' }; },
+      }), 2);
+      assert.deepEqual(calls, ['M1'], 'resume must retain the global stop');
+      assert.equal((await readQueue(cwd)).milestones[0].stop_scope, 'global');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const status of ['blocked', 'stalled']) {
+  test(`historical ${status} without local provenance stops independent work`, async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-unknown-stop-'));
+    try {
+      const queue = projectQueue();
+      queue.milestones[0].status = status;
+      queue.milestones[1].depends = [];
+      await writeQueue(cwd, queue);
+      const calls = [];
+      assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+        output: { write() {} },
+        async milestoneRunner({ milestone }) { calls.push(milestone.id); return { status: 'blocked' }; },
+      }), status === 'stalled' ? 3 : 2);
+      assert.deepEqual(calls, []);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test('global stop survives status-only edits until explicit reconciliation', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-reconcile-stop-'));
+  try {
+    await prepareAssuredQueueWorkspace(cwd);
+    const queue = projectQueue();
+    await writeQueue(cwd, queue);
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+      output: { write() {} },
+      async milestoneRunner() { return { status: 'budget-paused' }; },
+    }), 2);
+    const stopped = await readQueue(cwd);
+    stopped.milestones[0].status = 'pending';
+    await writeQueue(cwd, stopped);
+    const calls = [];
+    const runner = {
+      output: { write() {} },
+      async milestoneRunner({ milestone }) {
+        calls.push(milestone.id);
+        await completeCurrentFlight(cwd);
+        return { status: 'complete' };
+      },
+    };
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, runner), 2);
+    assert.deepEqual(calls, []);
+    // Normal advisory reconciliation explicitly clears the stop after resolution.
+    stopped.milestones[0].stop_scope = null;
+    await writeQueue(cwd, stopped);
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, runner), 0);
+    assert.deepEqual(calls, ['M1', 'M2']);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+for (const field of ['depends', 'verify', 'invariants']) {
+  test(`non-active ${field} weakening restores contracts and persists a global stop`, async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-contract-stop-'));
+    try {
+      const queue = projectQueue();
+      queue.milestones[1].verify = ['npm test', 'npm run integration'];
+      queue.milestones[1].invariants = ['Preserve authorization'];
+      // An otherwise independent unit must also wait for integrity reconciliation.
+      queue.milestones.push({ ...queue.milestones[1], id: 'M3', depends: [] });
+      await writeQueue(cwd, queue);
+      const original = await readQueue(cwd);
+      const calls = [];
+      let output = '';
+      const runner = {
+        output: { write(text) { output += text; } },
+        async milestoneRunner({ milestone }) {
+          calls.push(milestone.id);
+          const edited = await readQueue(cwd);
+          edited.milestones[1][field] = field === 'verify' ? ['npm test'] : [];
+          await writeQueue(cwd, edited);
+          return { status: 'blocked', reason: 'local feature unavailable' };
+        },
+      };
+      assert.equal(await runQueue({ cwd, provider: 'codex' }, runner), 2);
+      assert.deepEqual(calls, ['M1']);
+      const stopped = await readQueue(cwd);
+      assert.equal(stopped.milestones[0].stop_scope, 'global');
+      assert.deepEqual(stopped.milestones.slice(1),
+        original.milestones.slice(1).map((entry) => ({ ...entry, stop_scope: null })));
+      assert.match(output, /unexecuted milestone contract changed: M2/u);
+      assert.equal(await runQueue({ cwd, provider: 'codex' }, runner), 2);
+      assert.deepEqual(calls, ['M1'], 'resume must not run dependent or independent work');
+      assert.equal((await readQueue(cwd)).milestones[0].stop_scope, 'global');
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+for (const targetId of ['M1', 'M2']) {
+  for (const mutation of ['deletion', 'rename']) {
+    test(`${mutation} of ${targetId} restores its checkpoint and persists a global stop`, async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-checkpoint-recovery-'));
+      try {
+        await prepareAssuredQueueWorkspace(cwd);
+        const queue = projectQueue();
+        queue.milestones.find(({ id }) => id === targetId).checkpoint_note = 'preserve original advisory metadata';
+        queue.milestones.push({
+          ...queue.milestones[1],
+          id: 'M3',
+          outcome: 'Publish independent notice',
+          depends: [],
+        });
+        await writeQueue(cwd, queue);
+        const original = await readQueue(cwd);
+        const calls = [];
+        let output = '';
+        const firstRunner = {
+          output: { write(text) { output += text; } },
+          async milestoneRunner({ milestone }) {
+            calls.push(milestone.id);
+            const edited = await readQueue(cwd);
+            const targetIndex = edited.milestones.findIndex(({ id }) => id === targetId);
+            if (mutation === 'deletion') {
+              edited.milestones.splice(targetIndex, 1);
+            } else {
+              edited.milestones[targetIndex] = {
+                ...edited.milestones[targetIndex],
+                id: `${targetId}-renamed`,
+                rename_note: 'retain attempted owner rename for reconciliation',
+              };
+            }
+            edited.milestones.find(({ id }) => id === 'M3').owner_note = 'preserve concurrent advisory edit';
+            await writeQueue(cwd, edited);
+            return { status: 'blocked', reason: 'local feature unavailable' };
+          },
+        };
+
+        assert.equal(await runQueue({ cwd, provider: 'codex' }, firstRunner), 2);
+        assert.deepEqual(calls, ['M1']);
+        const stopped = await readQueue(cwd);
+        assert.deepEqual(
+          stopped.milestones.slice(0, 3).map(({ id }) => id),
+          ['M1', 'M2', 'M3'],
+        );
+        const active = stopped.milestones.find(({ id }) => id === 'M1');
+        assert.equal(active.status, 'blocked');
+        assert.equal(active.stop_scope, 'global');
+        const contractView = ({ id, outcome, verify, depends, touchpoints, nonGoals, invariants }) => ({
+          id, outcome, verify, depends, touchpoints, nonGoals, invariants,
+        });
+        assert.deepEqual(
+          contractView(stopped.milestones.find(({ id }) => id === targetId)),
+          contractView(original.milestones.find(({ id }) => id === targetId)),
+        );
+        const rawById = new Map(stopped.raw.milestones.map((entry) => [entry.id, entry]));
+        assert.equal(rawById.get(targetId).checkpoint_note, 'preserve original advisory metadata');
+        assert.equal(rawById.get('M3').owner_note, 'preserve concurrent advisory edit');
+        if (mutation === 'rename') {
+          assert.deepEqual(stopped.milestones.map(({ id }) => id),
+            ['M1', 'M2', 'M3', `${targetId}-renamed`]);
+          assert.equal(rawById.get(`${targetId}-renamed`).rename_note,
+            'retain attempted owner rename for reconciliation');
+          assert.match(output, /new milestone entries retained for explicit reconciliation/u);
+        }
+        assert.match(output, /pre-run contract|deleted or renamed and restored/u);
+        assert.match(output, /milestone set changed/u);
+
+        assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+          output: { write() {} },
+          async milestoneRunner({ milestone }) { calls.push(milestone.id); return { status: 'complete' }; },
+        }), 2);
+        assert.deepEqual(calls, ['M1'], 'resume must retain the recovered global stop');
+      } finally { await rm(cwd, { recursive: true, force: true }); }
+    });
+  }
+}
+
+test('deleting the only active milestone restores it before returning and across resume', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-queue-only-checkpoint-recovery-'));
+  try {
+    const queue = projectQueue();
+    queue.milestones = [queue.milestones[0]];
+    queue.milestones[0].checkpoint_note = 'only milestone metadata';
+    await writeQueue(cwd, queue);
+    const calls = [];
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+      output: { write() {} },
+      async milestoneRunner({ milestone }) {
+        calls.push(milestone.id);
+        const edited = await readQueue(cwd);
+        edited.milestones = [];
+        await writeQueue(cwd, edited);
+        return { status: 'complete' };
+      },
+    }), 2);
+    const stopped = await readQueue(cwd);
+    assert.deepEqual(stopped.milestones.map(({ id, status, stop_scope }) => ({ id, status, stop_scope })), [
+      { id: 'M1', status: 'blocked', stop_scope: 'global' },
+    ]);
+    assert.equal(stopped.raw.milestones[0].checkpoint_note, 'only milestone metadata');
+    assert.equal(await runQueue({ cwd, provider: 'codex' }, {
+      output: { write() {} },
+      async milestoneRunner({ milestone }) { calls.push(milestone.id); return { status: 'complete' }; },
+    }), 2);
+    assert.deepEqual(calls, ['M1']);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
 });

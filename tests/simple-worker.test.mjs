@@ -1,3 +1,4 @@
+import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
@@ -125,6 +126,7 @@ test('model selection is untouched without an explicit level', async () => {
   assert.deepEqual(client.requests.map(({ method }) => method), ['thread/start', 'turn/start']);
   const thread = client.requests[0].params;
   const turn = client.requests[1].params;
+  assert.ok(thread.developerInstructions.includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
   assert.equal(Object.hasOwn(thread, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'effort'), false);

@@ -1,3 +1,4 @@
+import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
 import { AppServerClient } from './app-server-client.mjs';
 import { normalizeRecommendedLevel, resolveWorkerPolicy } from './worker-policy.mjs';
 
@@ -151,7 +152,7 @@ async function oneAttempt({
         : {}),
       serviceName: 'cruise_worker',
       ephemeral: true,
-      developerInstructions: 'Execute the requested bounded task. Use normal Codex approvals. Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Do not create Cruise reports, packets, archives, or workflow state.',
+      developerInstructions: INDEPENDENT_RELEASE_INSTRUCTIONS + ' Execute the requested bounded task. Use normal Codex approvals. Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Do not create Cruise reports, packets, archives, or workflow state.',
     });
     threadId = started.thread.id;
     const turn = await client.request('turn/start', {

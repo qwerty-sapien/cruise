@@ -1,3 +1,4 @@
+import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -186,6 +187,7 @@ test('Goal auto-advances each completed active turn until native completion', as
   const continuation = client.calls.find(({ method }) => method === 'turn/start').params.input;
   const objective = client.calls.find(({ method }) => method === 'thread/goal/set').params.objective;
   const developerInstructions = client.calls.find(({ method }) => method === 'thread/start').params.developerInstructions;
+  assert.ok(developerInstructions.includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
   assert.match(developerInstructions, /Goal work may also maintain.*\.cruise\/FLIGHT\.md/u);
   assert.match(developerInstructions, /seeking-alpha only for an explicit novelty/u);
   assert.match(objective, /sole read-only Plan-mode bootstrap/u);
@@ -702,9 +704,7 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
   const root = await mkdtemp(join(tmpdir(), 'cruise-invalid-flight-goal-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, '.cruise'));
-  const pilot = await readFile(resolve(
-    'evals/results/2026-07-21/raw/claude-v302-y-r1/FLIGHT.md',
-  ), 'utf8');
+  const pilot = 'status: active\nstall:\n  quiet_turns: 3\n  same_failure: 3\n';
   await writeFile(join(root, '.cruise', 'FLIGHT.md'), pilot, 'utf8');
 
   class InvalidFlightGoalClient extends EventEmitter {

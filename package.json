@@ -37,6 +37,7 @@
     "scripts/lib/origin-note.mjs",
     "scripts/lib/picker.mjs",
     "scripts/lib/provider.mjs",
+    "scripts/lib/release-policy.mjs",
     "scripts/lib/queue.mjs",
     "scripts/lib/quota-guard.mjs",
     "scripts/lib/root-policy.mjs",

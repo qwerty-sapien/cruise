@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "cruise",
+  "displayName": "Cruise",
+  "version": "0.4.0",
+  "description": "Evidence-attested Goal workflows and adaptive quality profiles for Claude Code.",
+  "author": {
+    "name": "qwerty-sapien"
+  },
+  "homepage": "https://github.com/qwerty-sapien/cruise",
+  "repository": "https://github.com/qwerty-sapien/cruise",
+  "hooks": "./hooks/claude-hooks.json",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "coding-agent",
+    "debugging",
+    "planning",
+    "verification"
+  ]
+}

@@ -10,6 +10,7 @@ const QUEUE_KEYS = new Set(['version', 'milestones']);
 const MILESTONE_KEYS = new Set([
   'id',
   'status',
+  'stop_scope',
   'outcome',
   'verify',
   'depends',
@@ -191,6 +192,12 @@ function normalizeMilestone(raw, index, version = 1) {
     nonGoals: stringList(raw.non_goals ?? raw.nonGoals ?? [], `milestones[${index}].non_goals`),
     invariants: stringList(raw.invariants ?? [], `milestones[${index}].invariants`),
   };
+  if (raw.stop_scope !== undefined) {
+    if (![null, 'local', 'global'].includes(raw.stop_scope)) {
+      throw new TypeError(`milestones[${index}].stop_scope is invalid`);
+    }
+    milestone.stop_scope = raw.stop_scope;
+  }
   if (version >= 2) {
     const risk = raw.risk ?? 'medium';
     if (!RISKS.has(risk)) throw new TypeError(`milestones[${index}].risk is invalid`);
@@ -315,6 +322,7 @@ function serializableQueue(queue) {
     return {
       id: normalized.id,
       status: normalized.status,
+      ...(normalized.stop_scope !== undefined ? { stop_scope: normalized.stop_scope } : {}),
       outcome: normalized.outcome,
       verify: normalized.verify,
       depends: normalized.depends,

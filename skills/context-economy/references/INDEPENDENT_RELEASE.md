@@ -1,0 +1,13 @@
+# Continue and publish unaffected work
+
+Apply this default across planning, execution, review, and publication in Build, Goal, Quick, Debug, queues, and workers. When an item is blocked, isolate the blocker and its dependency closure. Continue independently complete work and, once its applicable checks pass, push and deploy it to authorized existing destinations. Do not wait for unrelated blocked items or add a fresh permission ceremony for already authorized publication.
+
+Plan reviewable release units with explicit dependencies and release checks. During execution, preserve blocked requirements and owner deferrals; never remove a dependency to manufacture readiness. Review the actual release boundary, including shared data, migrations, contracts, and runtime dependencies. Publish only units that work without the blocked capability and satisfy their own required assurance checks. Workers deliver their scoped changes and evidence to the owner/root and coordinate publication through that root when the workflow requires it; worker authority never expands.
+
+When a blocked or explicitly deferred feature would otherwise mislead users, provide accurate temporary unavailable feedback appropriate to the product. Do not simulate success, invent a working integration, or promise a delivery date. Record an owner's deferral explicitly; a temporary notice does not implement the deferred feature.
+
+Report what was completed, verified, pushed, and deployed separately, with evidence and the exact remaining blocker or owner deferral. Track completion against the current owner-approved scope and explicit scope changes. Retain unresolved work for resumption.
+
+Preserve explicit research-only, preparation-only, and deployment limits; native host approvals; financial and authorization invariants; cost and quota containment; dependency integrity; and required review and release gates. This default grants no new destination or external-action authority and never bypasses a denial. A global quota, authorization, integrity, or technical blocker can affect every unit: pause the affected scope truthfully and resume only when its controlling condition permits.
+
+Queue resume retains stop provenance in milestone `stop_scope`: `local` permits independent continuation; `global` stops the queue across invocations. Runtime, quota, interruption, assurance, and contract-integrity stops remain global until their controlling condition is reconciled through the normal workflow and the advisory queue stop scope and status are explicitly updated. Historical blocked or stalled milestones without local provenance stop the queue; rerunning alone never establishes resolution. Preserve dependency edges and owner deferrals during reconciliation.

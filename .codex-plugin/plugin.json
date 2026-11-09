@@ -1,0 +1,37 @@
+{
+  "name": "cruise",
+  "version": "0.4.0",
+  "description": "Evidence-attested Goal execution with adaptive quality profiles.",
+  "author": {
+    "name": "qwerty-sapien"
+  },
+  "homepage": "https://github.com/qwerty-sapien/cruise",
+  "repository": "https://github.com/qwerty-sapien/cruise",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "origin",
+    "debugging",
+    "goals",
+    "planning",
+    "verification"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Cruise",
+    "shortDescription": "Supervised coding workflows",
+    "longDescription": "Cruise compiles intent into evidence-bound quality Flights and milestone queues, then supervises native Goal progress without replacing Codex permissions or approvals.",
+    "developerName": "qwerty-sapien",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use $cruise:build to plan a new project or major milestone.",
+      "Use $cruise:goal to plan and carry out a finite feature or larger migration.",
+      "Use $cruise:goal for a read-only repository-aware plan when planning only is explicit."
+    ]
+  }
+}

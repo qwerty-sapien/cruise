@@ -335,7 +335,7 @@ test('Claude start uses the native Claude adapter and preserves the ORIGIN note'
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cwd, await realpath(root));
   assert.equal(calls[0].skill, 'goal');
-  assert.match(calls[0].pluginRoot, /cruise$/u);
+  assert.equal(calls[0].pluginRoot, await realpath(new URL('..', import.meta.url)));
 });
 
 test('Claude resume preserves the original request and does not reinvoke the Goal skill', async (t) => {

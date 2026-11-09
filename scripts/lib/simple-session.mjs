@@ -1,3 +1,4 @@
+import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 
@@ -473,6 +474,7 @@ export class SimpleCruiseSession extends EventEmitter {
             }
           : {}),
         developerInstructions: [
+          INDEPENDENT_RELEASE_INSTRUCTIONS,
           COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
           'Work directly with the user request and the repository.',
           'Cruise keeps .cruise/ORIGIN.md as a verbatim request note; Goal work may also maintain the user-editable advisory .cruise/FLIGHT.md.',

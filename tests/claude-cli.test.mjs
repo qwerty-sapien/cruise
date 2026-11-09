@@ -1,3 +1,4 @@
+import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.mjs';
 import assert from 'node:assert/strict';
 import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from '../scripts/lib/git-sync-policy.mjs';
 import { EventEmitter } from 'node:events';
@@ -27,6 +28,7 @@ test('Claude sessions load the plugin and invoke the slash-command skill nativel
   assert.equal(args.at(-1), '/cruise:goal Complete the migration.');
   assert.equal(args.includes('--permission-mode'), false);
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /no documented Codex-style Goal lifecycle API/u);
+  assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
   assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(COLLABORATIVE_GIT_SYNC_INSTRUCTIONS));
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /\.cruise\/FLIGHT\.md/u);
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /Stop-hook supervisor/u);
