@@ -188,6 +188,12 @@ test('Goal auto-advances each completed active turn until native completion', as
   const objective = client.calls.find(({ method }) => method === 'thread/goal/set').params.objective;
   const developerInstructions = client.calls.find(({ method }) => method === 'thread/start').params.developerInstructions;
   assert.ok(developerInstructions.includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
+  assert.match(developerInstructions, /functionally distinct before publication\s+using bounded source and contract inspection and verification evidence/u);
+  assert.match(developerInstructions, /public routes, navigation, buttons, APIs,\s+and indirect entry points through their transitive dependencies/u);
+  assert.match(developerInstructions, /Propagate each blocker to every functionally connected or dependent unit/u);
+  assert.match(developerInstructions, /Establish the readiness of mocked prerequisites\s+separately before treating an outcome as ready/u);
+  assert.match(developerInstructions, /payment channel B requires booking endpoint C,\s+a broken C blocks B and C and every publicly exposed flow or entry point/u);
+  assert.match(developerInstructions, /An explicitly owner-authorized bounded fallback[\s\S]*Apply the same dependency, exposure, and readiness checks/u);
   assert.match(developerInstructions, /Goal work may also maintain.*\.cruise\/FLIGHT\.md/u);
   assert.match(developerInstructions, /seeking-alpha only for an explicit novelty/u);
   assert.match(objective, /sole read-only Plan-mode bootstrap/u);

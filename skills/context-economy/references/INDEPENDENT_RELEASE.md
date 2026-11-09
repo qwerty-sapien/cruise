@@ -2,9 +2,36 @@
 
 Apply this default across planning, execution, review, and publication in Build, Goal, Quick, Debug, queues, and workers. When an item is blocked, isolate the blocker and its dependency closure. Continue independently complete work and, once its applicable checks pass, push and deploy it to authorized existing destinations. Do not wait for unrelated blocked items or add a fresh permission ceremony for already authorized publication.
 
-Plan reviewable release units with explicit dependencies and release checks. During execution, preserve blocked requirements and owner deferrals; never remove a dependency to manufacture readiness. Review the actual release boundary, including shared data, migrations, contracts, and runtime dependencies. Publish only units that work without the blocked capability and satisfy their own required assurance checks. Workers deliver their scoped changes and evidence to the owner/root and coordinate publication through that root when the workflow requires it; worker authority never expands.
+Plan reviewable release units with explicit dependencies and release checks. During execution, preserve blocked requirements and owner deferrals; never remove a dependency to manufacture readiness.
 
-When a blocked or explicitly deferred feature would otherwise mislead users, provide accurate temporary unavailable feedback appropriate to the product. Do not simulate success, invent a working integration, or promise a delivery date. Record an owner's deferral explicitly; a temporary notice does not implement the deferred feature.
+Demonstrate that each release outcome is functionally distinct before publication
+using bounded source and contract inspection and verification evidence. Separate
+labels, files, repositories, or declared `depends` arrays alone are insufficient
+evidence. Trace actual user journeys from public routes, navigation, buttons, APIs,
+and indirect entry points through their transitive dependencies, including required
+services, contracts, shared data and state, schemas, transactions, and migrations.
+Verify the complete release path and required endpoint contracts with appropriate
+integration and readiness checks. Establish the readiness of mocked prerequisites
+separately before treating an outcome as ready.
+Propagate each blocker to every functionally connected or dependent unit. Hold each unit from
+publication until its separation is established. Publish only complete, working
+outcomes that are demonstrably separate, cannot expose the blocked capability, and
+pass their own required assurance checks.
+
+If A, B, and C are requested and payment channel B requires booking endpoint C,
+a broken C blocks B and C and every publicly exposed flow or entry point leading
+to the broken capability. Publish A only after establishing its separation and
+verifying that it works.
+
+Workers deliver their scoped changes and evidence to the owner/root and coordinate publication through that root when the workflow requires it; worker authority never expands.
+
+An explicitly owner-authorized bounded fallback may be assessed as its own outcome.
+Apply the same dependency, exposure, and readiness checks and prevent users from
+invoking unsupported actions. A notice or placeholder alone supplies no evidence
+of independence or readiness. Use accurate unavailable wording for that approved
+outcome. Do not simulate success, invent a working integration, or promise a delivery
+date. Record any owner deferral explicitly and retain the
+full deferred feature for resumption.
 
 Report what was completed, verified, pushed, and deployed separately, with evidence and the exact remaining blocker or owner deferral. Track completion against the current owner-approved scope and explicit scope changes. Retain unresolved work for resumption.
 
