@@ -5,6 +5,8 @@ description: "Diagnose evidenced software failures, vague or intermittent buggy 
 
 # Cruise Debug
 
+Apply the shared [collaborative Git synchronization protocol](../context-economy/references/COLLABORATIVE_GIT_SYNC.md) before substantive repository work. The root coordinator performs it once; workers do not synchronize the checkout independently.
+
 Determine the requested outcome and mutation authority first. If the user asks for diagnosis, an audit, quality-control findings, or bug tickets, remain read-only. If the user asks for a repair, implement the smallest justified causal fix and verify it. Use the host's native permissions and explain evidence directly to the user.
 
 ## Select one of two debug modes

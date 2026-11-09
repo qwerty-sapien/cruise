@@ -1,6 +1,8 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
+import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
+
 import {
   captureFlightAssuranceContext,
   evaluateFlightAssurance,
@@ -26,6 +28,7 @@ export const CLAUDE_WORKER_LEVEL_POLICY = Object.freeze({
 });
 
 const CLAUDE_HOST_INSTRUCTIONS = [
+  COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
   'This Cruise session is running on Claude Code.',
   'Use Claude Code native permissions, task tracking, resumable sessions, skills, and subagents.',
   'Claude Code has a conversation-level /goal but exposes no documented Codex-style Goal lifecycle API or Goal object to plugins; do not invent Goal endpoints or stack native /goal automatically.',

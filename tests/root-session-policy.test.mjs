@@ -94,6 +94,9 @@ test('Goal requests and persists a non-default root effort before compact contin
   assert.deepEqual(started.config, { model_reasoning_effort: 'xhigh' });
   assert.match(started.developerInstructions, /coordinator, integrator, and final reviewer/u);
   assert.match(started.developerInstructions, /cruise worker --managed/u);
+  assert.match(started.developerInstructions, /git log HEAD\.\.<incoming-ref>/u);
+  assert.match(started.developerInstructions, /git diff HEAD\.\.\.<incoming-ref>/u);
+  assert.match(started.developerInstructions, /fast-forward-only/u);
 
   const settings = client.calls
     .filter(({ method }) => method === 'thread/settings/update')

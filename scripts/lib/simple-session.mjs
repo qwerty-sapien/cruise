@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 
+import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
+
 import {
   DEFAULT_STALL,
   flightPlanTemplate,
@@ -471,6 +473,7 @@ export class SimpleCruiseSession extends EventEmitter {
             }
           : {}),
         developerInstructions: [
+          COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
           'Work directly with the user request and the repository.',
           'Cruise keeps .cruise/ORIGIN.md as a verbatim request note; Goal work may also maintain the user-editable advisory .cruise/FLIGHT.md.',
           'Do not create Cruise run-control files, approval digests, archives, or YAML workflow state. FLIGHT.md frontmatter is an advisory note, not workflow authority.',

@@ -18,6 +18,7 @@ Read only the reference needed for the current action:
 - `references/USAGE_ACCOUNTING.md` for token, credit, compaction, and quota rules.
 - `references/HANDOFF.md` when creating or consuming a worker capsule.
 - `references/SKILL_TRIGGERS.md` when deciding whether a broad scientific, DAG, environment, release, novelty, or privacy skill applies.
+- `references/COLLABORATIVE_GIT_SYNC.md` before substantive repository work; the root coordinator runs its collaborator-triggered fetch, preview, and integration protocol.
 
 ## Non-negotiable invariants
 

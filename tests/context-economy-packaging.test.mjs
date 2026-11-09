@@ -10,6 +10,7 @@ const POLICY_FILE_HARD_CAP_BYTES = 16 * 1024;
 const POLICY_FILES = [
   'AGENTS.md',
   'skills/context-economy/SKILL.md',
+  'skills/context-economy/references/COLLABORATIVE_GIT_SYNC.md',
   'skills/context-economy/references/HANDOFF.md',
   'skills/context-economy/references/RETRIEVAL.md',
   'skills/context-economy/references/ROUTING.md',
@@ -27,6 +28,7 @@ const RUNTIME_FILES = [
   'scripts/validate-context-economy-audit.mjs',
   'scripts/lib/compaction-controller.mjs',
   'scripts/lib/context-capsule.mjs',
+  'scripts/lib/git-sync-policy.mjs',
   'scripts/lib/quota-guard.mjs',
   'scripts/lib/root-policy.mjs',
   'scripts/lib/skill-trigger-policy.mjs',

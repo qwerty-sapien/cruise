@@ -5,6 +5,8 @@ description: "Clarify a project with the user and compile it into an advisory qu
 
 # Cruise Build
 
+Apply the shared [collaborative Git synchronization protocol](../context-economy/references/COLLABORATIVE_GIT_SYNC.md) before substantive repository work. The root coordinator performs it once; workers do not synchronize the checkout independently.
+
 Build is the bowling setup for a whole project: clarify the vision once, inspect the repository, and decompose the work into a sequence of independently verifiable Goal runs. Do not implement the milestones in this conversation. Execution belongs to `cruise queue run` or an explicit Goal invocation.
 
 Inspect the repository before asking questions. Ask only material questions whose answers change the decomposition: product intent, hard constraints, compatibility obligations, required migrations, and what must never break. Resolve ordinary implementation details from repository evidence. Do not demand approval phrases, plan digests, or ceremonial checkpoints.
