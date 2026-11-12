@@ -196,6 +196,7 @@ export class QuotaGuard {
     strictBudget = false,
     safetyMargin = DEFAULT_BUDGET_SAFETY_MARGIN_PERCENT,
     baseDirectory = join(homedir(), '.cruise', 'quota'),
+    budgetPolicyPath = join(baseDirectory, '..', 'budget-policy.json'),
     pid = process.pid,
     host = hostname(),
     now = () => new Date(),
@@ -212,6 +213,8 @@ export class QuotaGuard {
     this.strictBudget = parseStrict(strictBudget);
     this.safetyMargin = parsePercent(safetyMargin, DEFAULT_BUDGET_SAFETY_MARGIN_PERCENT, 'budget safety margin');
     this.baseDirectory = baseDirectory;
+    this.budgetPolicyPath = budgetPolicyPath;
+    this.budgetPolicyPromise = null;
     this.pid = pid;
     this.host = host;
     this.now = now;
@@ -228,6 +231,26 @@ export class QuotaGuard {
       if (message?.method !== 'account/rateLimits/updated') return;
       this.snapshot = mergeSparseRateLimits(this.snapshot, message.params);
     };
+  }
+
+  async campaignBudgetEnabled() {
+    if (!this.budgetPolicyPromise) {
+      this.budgetPolicyPromise = readFile(this.budgetPolicyPath, 'utf8').then((text) => {
+        const policy = JSON.parse(text);
+        if (policy?.schema_version !== 1 || typeof policy.campaign_budget_enabled !== 'boolean') {
+          throw new TypeError('budget policy requires schema_version 1 and boolean campaign_budget_enabled');
+        }
+        return policy.campaign_budget_enabled;
+      }).catch((error) => {
+        if (error?.code === 'ENOENT') return true;
+        throw error;
+      });
+    }
+    return this.budgetPolicyPromise;
+  }
+
+  disabledBudgetState() {
+    return { metered: false, campaignBudgetEnabled: false, reason: 'Cruise campaign budget disabled by explicit user policy; provider limits still apply' };
   }
 
   ledgerPath() {
@@ -361,6 +384,7 @@ export class QuotaGuard {
 
   async start({ client, goalId = randomUUID(), reservationPercent = this.goalReservation } = {}) {
     this.client = client;
+    if (!await this.campaignBudgetEnabled()) return this.disabledBudgetState();
     client.on?.('notification', this.onNotification);
     let window;
     try {
@@ -400,6 +424,7 @@ export class QuotaGuard {
   }
 
   async check() {
+    if (!await this.campaignBudgetEnabled()) return this.disabledBudgetState();
     await this.pendingNotification;
     let response;
     try {
@@ -429,6 +454,7 @@ export class QuotaGuard {
   }
 
   async status(client) {
+    if (!await this.campaignBudgetEnabled()) return this.disabledBudgetState();
     let window;
     try {
       window = await this.readAuthority(client);
