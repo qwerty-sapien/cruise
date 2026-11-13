@@ -37,6 +37,7 @@ import {
   SimpleCruiseSession,
 } from './lib/simple-session.mjs';
 import { runSimpleWorker } from './lib/simple-worker.mjs';
+import { createStagedHandoff } from './lib/staged-handoff.mjs';
 import {
   buildContextCapsule,
   parseWorkerHandoff,
@@ -96,6 +97,14 @@ Cruise has no approval authority, archive, run-control YAML, digest, or retry
 ledger. The selected host's native permissions remain the authority for work
 and effects. Codex is the default; CRUISE_PROVIDER may set a request-scoped
 default to codex or claude.
+
+Startup options (Codex Goal):
+  --bootstrap-timeout-ms <ms>   Optional native first-turn deadline; 0/off disables (default)
+  --staged-handoff <file.json>  Await fresh parent state before activating the Goal
+  --ready-file <file.json>      Exclusive readiness marker outside the workspace
+Environment: CRUISE_GOAL_BOOTSTRAP_TIMEOUT_MS and CRUISE_INITIALIZE_TIMEOUT_MS (0 disables).
+Staged readiness confirms transport/thread setup, not model inference. The parent must
+finish its current edits and relinquish overlapping ownership before supplying the capsule.
 
 Exit codes: 0 contract-ready/complete/assured, 2 blocked/failed/unassured, 3 stalled, 4 Goal bootstrap timeout,
 5 transport inactivity, 6 budget pause, 130 interrupted.
@@ -212,6 +221,20 @@ export function parseArgs(argv, { env = process.env } = {}) {
       if (command !== 'goal') throw new Error('--cheaper-diagnostic is supported only by cruise goal.');
       options.cheaperDiagnostic = true;
     }
+    else if (['--bootstrap-timeout-ms', '--staged-handoff', '--ready-file'].includes(arg)) {
+      if (command !== 'goal' || provider !== 'codex') {
+        throw new Error(`${arg} is supported only by cruise --codex goal.`);
+      }
+      const value = args[++index];
+      if (value === undefined || value.startsWith('--')) throw new Error(`${arg} requires a value.`);
+      if (arg === '--bootstrap-timeout-ms') {
+        const milliseconds = value === 'off' ? 0 : /^\d+$/u.test(value) ? Number(value) : NaN;
+        if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > 2_147_483_647) {
+          throw new Error('--bootstrap-timeout-ms requires 0/off or an integer <= 2147483647.');
+        }
+        options.firstTurnDeadlineMs = milliseconds;
+      } else options[arg === '--staged-handoff' ? 'stagedHandoff' : 'readyFile'] = value;
+    }
     else if (arg === '--plan') {
       if (command !== 'goal') throw new Error('--plan is supported only by cruise goal.');
       options.planOnly = true;
@@ -316,6 +339,9 @@ export function parseArgs(argv, { env = process.env } = {}) {
   }
   if (options.resumeSessionId && prompt) {
     throw new Error('--resume preserves the original Goal and does not accept a replacement request.');
+  }
+  if ((options.stagedHandoff == null) !== (options.readyFile == null)) {
+    throw new Error('--staged-handoff and --ready-file must be supplied together.');
   }
   if ((options.rootModel == null) !== (options.rootEffort == null)) {
     throw new Error('--root-model and --root-effort must be supplied together.');
@@ -435,6 +461,8 @@ async function runHostedSession(
     pickOne,
     readLine: readLineOnce,
     requireAssurance: true,
+    beforeGoalActivation: options.beforeGoalActivation ?? null,
+    firstTurnDeadlineMs: options.firstTurnDeadlineMs,
     planOnly: Boolean(options.planOnly),
     rootOverride: options.rootModel
       ? { model: options.rootModel, reasoning_effort: options.rootEffort }
@@ -452,6 +480,7 @@ async function runHostedSession(
   });
   const onSigint = () => void session.interrupt();
   process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigint);
   try {
     const result = await session.run();
     return {
@@ -479,6 +508,7 @@ async function runHostedSession(
     throw error;
   } finally {
     process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigint);
     stopSurfacingStderr();
   }
 }
@@ -487,20 +517,41 @@ export async function runStart(options, dependencies = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const goalSessionId = options.resumeSessionId ?? randomUUID();
   const executableGoal = options.skill === 'goal';
+  if (options.stagedHandoff && (!executableGoal || resolveProvider(options.provider) !== 'codex')) {
+    throw new Error('Staged handoff is supported only by cruise --codex goal.');
+  }
   const reservation = { cwd, session_id: goalSessionId };
-  if (executableGoal) await activateGoalSession(reservation);
-  else await reserveCruiseWorkspace(reservation);
+  const staged = options.stagedHandoff ? createStagedHandoff({
+    handoffFile: options.stagedHandoff,
+    readyFile: options.readyFile,
+    sessionId: goalSessionId,
+    onHeartbeat: (message) => process.stderr.write(`Cruise: ${message}\n`),
+  }) : null;
+  let ownershipAcquired = false;
+  const beginOwnership = async () => {
+    if (executableGoal) await activateGoalSession(reservation);
+    else await reserveCruiseWorkspace(reservation);
+    ownershipAcquired = true;
+    if (!options.resumeSessionId && !options.planOnly) await writeOriginPrompt(cwd, options.prompt);
+  };
   try {
-    if (!options.resumeSessionId && !options.planOnly) {
-      await writeOriginPrompt(cwd, options.prompt);
-    }
+    if (!staged) await beginOwnership();
     return (await runHostedSession({
       ...options,
       goalSessionId,
+      ...(staged ? { beforeGoalActivation: async (context) => {
+        const handoff = await staged.wait(context);
+        context.signal.throwIfAborted();
+        await beginOwnership();
+        return handoff;
+      } } : {}),
     }, cwd, dependencies)).exitCode;
   } finally {
-    if (executableGoal) await deactivateGoalSession(reservation);
-    else await releaseCruiseWorkspace(reservation);
+    await staged?.cleanup();
+    if (ownershipAcquired) {
+      if (executableGoal) await deactivateGoalSession(reservation);
+      else await releaseCruiseWorkspace(reservation);
+    }
   }
 }
 

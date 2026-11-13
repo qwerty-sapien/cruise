@@ -94,7 +94,7 @@ export class AppServerClient extends EventEmitter {
     onNotification = null,
     onError = null,
     inactivityTimeoutMs,
-    initializeTimeoutMs = DEFAULT_INITIALIZE_TIMEOUT_MS,
+    initializeTimeoutMs,
     stderrTailBytes = DEFAULT_STDERR_TAIL_BYTES,
     terminationTimeoutMs = DEFAULT_TERMINATION_TIMEOUT_MS,
     env = process.env,
@@ -122,10 +122,10 @@ export class AppServerClient extends EventEmitter {
         : inactivityTimeoutMs,
       DEFAULT_INACTIVITY_TIMEOUT_MS,
     );
-    this.initializeTimeoutMs = positiveIntegerOrDefault(
-      initializeTimeoutMs,
-      DEFAULT_INITIALIZE_TIMEOUT_MS,
-    );
+    const initializeOverride = initializeTimeoutMs ?? env?.CRUISE_INITIALIZE_TIMEOUT_MS;
+    this.initializeTimeoutMs = initializeOverride === 0 || initializeOverride === '0'
+      ? 0
+      : positiveIntegerOrDefault(initializeOverride, DEFAULT_INITIALIZE_TIMEOUT_MS);
     this.stderrTailBytes = positiveIntegerOrDefault(
       stderrTailBytes,
       DEFAULT_STDERR_TAIL_BYTES,
@@ -701,6 +701,7 @@ function waitFor(promise, timeoutMs) {
 }
 
 function waitWithin(promise, timeoutMs, timeoutError) {
+  if (timeoutMs === 0) return Promise.resolve(promise);
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (callback, value) => {

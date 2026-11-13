@@ -82,7 +82,17 @@ const CONTEXT_STATE_FILES = Object.freeze([
   'BUDGET-PAUSE.json',
   'artifacts/',
 ]);
-export const DEFAULT_FIRST_TURN_DEADLINE_MS = 120_000;
+// Slow/queued native startup is not evidence of failure. Operators may opt in
+// to a finite deadline; process exit, cancellation and quota checks still apply.
+export const DEFAULT_FIRST_TURN_DEADLINE_MS = 0;
+export function resolveFirstTurnDeadlineMs(value = process.env.CRUISE_GOAL_BOOTSTRAP_TIMEOUT_MS) {
+  if (value === undefined || value === null || value === 'off') return DEFAULT_FIRST_TURN_DEADLINE_MS;
+  const milliseconds = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > 2_147_483_647) {
+    throw new TypeError('Goal bootstrap timeout must be an integer from 0 through 2147483647 milliseconds (0 disables it).');
+  }
+  return milliseconds;
+}
 const DEFAULT_FIRST_TURN_CLEANUP_DEADLINE_MS = 2_000;
 
 function formatDuration(milliseconds) {
@@ -360,7 +370,9 @@ export class SimpleCruiseSession extends EventEmitter {
     planOnly = false,
     captureFingerprint = captureWorkspaceFingerprint,
     readPlan = inspectFlightPlan,
-    firstTurnDeadlineMs = DEFAULT_FIRST_TURN_DEADLINE_MS,
+    firstTurnDeadlineMs = undefined,
+    startupHeartbeatMs = 120_000,
+    beforeGoalActivation = null,
     firstTurnCleanupDeadlineMs = DEFAULT_FIRST_TURN_CLEANUP_DEADLINE_MS,
     locateTrace = locateRollout,
     traceHome = codexHome(),
@@ -394,7 +406,12 @@ export class SimpleCruiseSession extends EventEmitter {
     this.captureFingerprint = captureFingerprint;
     this.readPlan = readPlan;
     this.supervisorFlightHash = 'absent';
-    this.firstTurnDeadlineMs = firstTurnDeadlineMs;
+    this.firstTurnDeadlineMs = resolveFirstTurnDeadlineMs(firstTurnDeadlineMs);
+    this.startupHeartbeatMs = startupHeartbeatMs;
+    this.beforeGoalActivation = beforeGoalActivation;
+    this.startupAbortController = new AbortController();
+    this.workspaceActivated = beforeGoalActivation === null;
+    this.bootstrapHandoff = '';
     this.firstTurnCleanupDeadlineMs = firstTurnCleanupDeadlineMs;
     this.locateTrace = locateTrace;
     this.traceHome = traceHome;
@@ -419,6 +436,8 @@ export class SimpleCruiseSession extends EventEmitter {
     this.pending = null;
     this.earlyTurnResults = new Map();
     this.nativeGoalTurnDeadline = null;
+    this.nativeGoalTurnHeartbeat = null;
+    this.nativeGoalWatchdogPaused = false;
     this.nativeGoalTurnWaiting = false;
     this.nativeGoalTurnStarted = false;
     this.nativeGoalTurnTimedOut = false;
@@ -449,15 +468,15 @@ export class SimpleCruiseSession extends EventEmitter {
     this.client.on('notification', this.onNotification);
     this.client.on('exit', this.onExit);
     try {
-      await this.client.start();
-      if (this.quotaGuard) {
+      await this.waitForStartup(this.client.start());
+      if (this.quotaGuard && !this.beforeGoalActivation) {
         await this.quotaGuard.start({
           client: this.client,
           goalId: `cruise-${this.skill}`,
         });
       }
       if (this.skill === 'goal') this.errorOutput.write('Cruise: app-server started.\n');
-      const started = await this.client.request('thread/start', {
+      const started = await this.waitForStartup(this.client.request('thread/start', {
         cwd: this.cwd,
         runtimeWorkspaceRoots: [],
         approvalPolicy: 'on-request',
@@ -488,7 +507,7 @@ export class SimpleCruiseSession extends EventEmitter {
             : []),
           ...(this.skill === 'goal' ? [AUTONOMOUS_GOAL_INSTRUCTIONS] : []),
         ].join(' '),
-      });
+      }));
       this.threadId = started.thread.id;
       this.threadModel = started.model ?? this.rootRequest?.model ?? null;
       this.threadReasoningEffort = started.reasoningEffort ?? this.rootRequest?.reasoning_effort ?? null;
@@ -501,6 +520,27 @@ export class SimpleCruiseSession extends EventEmitter {
           );
           error.code = 'CRUISE_ROOT_POLICY_UNAVAILABLE';
           throw error;
+        }
+      }
+      if (this.beforeGoalActivation) {
+        // Warm transport/thread without taking mutation ownership. The parent
+        // supplies its latest state only after relinquishing overlapping work.
+        this.client.pauseInactivityWatchdog?.();
+        try {
+          this.bootstrapHandoff = await this.beforeGoalActivation({
+            threadId: this.threadId,
+            cwd: this.cwd,
+            signal: this.startupAbortController.signal,
+            session: this,
+          });
+        } finally {
+          this.client.resumeInactivityWatchdog?.();
+        }
+        if (this.interrupted) throw new SimpleCruiseInterruptedError();
+        if (this.startupAbortController.signal.aborted) throw this.startupAbortController.signal.reason;
+        this.workspaceActivated = true;
+        if (this.quotaGuard) {
+          await this.quotaGuard.start({ client: this.client, goalId: this.runtimeDirectory ?? `cruise-${this.skill}` });
         }
       }
       await this.initializeTraceSignpost();
@@ -518,7 +558,7 @@ export class SimpleCruiseSession extends EventEmitter {
         const goalActivated = deferred();
         const nativeTurn = this.waitForNativeGoalTurn(goalActivated.promise);
         try {
-          await this.activateGoal();
+          await this.waitForStartup(this.activateGoal());
         } catch (error) {
           goalActivated.resolve();
           this.pending?.reject(error);
@@ -677,7 +717,7 @@ export class SimpleCruiseSession extends EventEmitter {
       this.client.off?.('exit', this.onExit);
       await this.traceLookup.catch(() => {});
       await this.usagePersistence.catch(() => {});
-      if (this.threadId) {
+      if (this.threadId && this.workspaceActivated) {
         await this.persistRunPointer({
           finalStatus: this.runFinalStatus,
           endedAt: this.timestamp(),
@@ -732,6 +772,7 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   async persistUsageNow() {
+    if (!this.workspaceActivated) return;
     this.usageMeter.setCompaction(this.compactionController.summary());
     await this.usageMeter.persist(this.cwd);
   }
@@ -877,12 +918,17 @@ export class SimpleCruiseSession extends EventEmitter {
     if (current?.goal) {
       throw new Error(`Cruise cannot replace the existing native Goal (${current.goal.status}).`);
     }
-    const objective = [
+    const fullObjective = [
       `Autonomously complete the user's Cruise Goal: ${this.prompt}`,
       GOAL_BOOTSTRAP_INSTRUCTIONS,
       'Use each codebase-aware plan to launch the next ready micro-goal, then implement, verify, realign, and continue without routine phase approvals.',
     ].join(' ');
+    // Native Goal objectives are capped at 4000 characters. Full scope and
+    // the fresh capsule are supplied through collaboration-mode instructions.
+    const objective = fullObjective.length <= 4000 ? fullObjective
+      : 'Complete the original user request provided in the collaboration-mode instructions. Reconcile the latest parent handoff, then plan, implement and verify within that exact scope.';
     const activated = await this.client.request('thread/goal/set', {
+      origin: 'user',
       threadId: this.threadId,
       objective,
       status: 'active',
@@ -905,6 +951,7 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async completePreparedGoal(goal) {
     const completed = await this.client.request('thread/goal/set', {
+      origin: 'automatic',
       threadId: this.threadId,
       objective: goal.objective,
       status: 'complete',
@@ -921,6 +968,7 @@ export class SimpleCruiseSession extends EventEmitter {
     const nativeTurn = this.waitForNativeGoalTurn(activated.promise);
     try {
       const result = await this.client.request('thread/goal/set', {
+      origin: 'automatic',
         threadId: this.threadId,
         objective: `${goal.objective}\n\nCompletion correction:\n${instructions}`,
         status: 'active',
@@ -1040,6 +1088,8 @@ export class SimpleCruiseSession extends EventEmitter {
         developer_instructions: [
           COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
           AUTONOMOUS_GOAL_INSTRUCTIONS,
+          `Original user request (scope source):\n${this.prompt}`,
+          ...(this.bootstrapHandoff ? [this.bootstrapHandoff] : []),
         ].join(' '),
       };
     }
@@ -1053,11 +1103,27 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async updateGoalMode(mode) {
     const settings = this.goalTurnSettings(mode);
-    await this.client.request('thread/settings/update', {
+    await this.waitForStartup(this.client.request('thread/settings/update', {
       threadId: this.threadId,
       cwd: this.cwd,
       approvalPolicy: 'on-request',
       ...settings,
+    }));
+  }
+
+  waitForStartup(promise) {
+    const signal = this.startupAbortController.signal;
+    return new Promise((resolve, reject) => {
+      const finish = (callback, value) => {
+        signal.removeEventListener('abort', cancel);
+        callback(value);
+      };
+      const cancel = () => finish(reject, signal.reason);
+      signal.addEventListener('abort', cancel, { once: true });
+      Promise.resolve(promise).then(
+        value => finish(resolve, value), error => finish(reject, error),
+      );
+      if (signal.aborted) cancel();
     });
   }
 
@@ -1093,6 +1159,14 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   clearNativeGoalTurnDeadline() {
+    if (this.nativeGoalTurnHeartbeat !== null) {
+      clearInterval(this.nativeGoalTurnHeartbeat);
+      this.nativeGoalTurnHeartbeat = null;
+    }
+    if (this.nativeGoalWatchdogPaused) {
+      this.nativeGoalWatchdogPaused = false;
+      this.client.resumeInactivityWatchdog?.();
+    }
     if (this.nativeGoalTurnDeadline !== null) {
       clearTimeout(this.nativeGoalTurnDeadline);
       this.nativeGoalTurnDeadline = null;
@@ -1181,9 +1255,12 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async waitForNativeGoalTurn(goalActivated = Promise.resolve()) {
     const completion = deferred();
+    completion.promise.catch(() => {});
     this.turnId = null;
     this.pending = completion;
     this.nativeGoalTurnWaiting = true;
+    this.nativeGoalWatchdogPaused = true;
+    this.client.pauseInactivityWatchdog?.();
     this.nativeGoalTurnStarted = false;
     this.nativeGoalTurnTimedOut = false;
     this.nativeGoalCleanupCancelled = null;
@@ -1191,10 +1268,18 @@ export class SimpleCruiseSession extends EventEmitter {
       await goalActivated;
       if (!this.nativeGoalTurnStarted && this.pending === completion) {
         const startedAt = Date.now();
-        this.nativeGoalTurnDeadline = setTimeout(() => {
-          this.nativeGoalTurnDeadline = null;
-          void this.expireNativeGoalTurnDeadline(completion, startedAt);
-        }, this.firstTurnDeadlineMs);
+        if (this.startupHeartbeatMs > 0) {
+          this.nativeGoalTurnHeartbeat = setInterval(() => {
+            this.errorOutput.write(`Cruise: still waiting for native Goal startup; elapsed=${formatDuration(Date.now() - startedAt)}, thread=${this.threadId}. No duplicate execution will be started; awaiting the native turn.\n`);
+          }, this.startupHeartbeatMs);
+          this.nativeGoalTurnHeartbeat.unref?.();
+        }
+        if (this.firstTurnDeadlineMs > 0) {
+          this.nativeGoalTurnDeadline = setTimeout(() => {
+            this.nativeGoalTurnDeadline = null;
+            void this.expireNativeGoalTurnDeadline(completion, startedAt);
+          }, this.firstTurnDeadlineMs);
+        }
       }
       return await completion.promise;
     } finally {
@@ -1234,17 +1319,32 @@ export class SimpleCruiseSession extends EventEmitter {
     this.interrupted = true;
     this.clearNativeGoalTurnDeadline();
     const interruption = new SimpleCruiseInterruptedError();
+    this.startupAbortController.abort(interruption);
     this.cancelNativeGoalCleanup(interruption);
     this.pending?.reject(interruption);
     this.client.interrupt?.();
     this.lineReader?.cancel?.('ctrl-c');
-    if (this.threadId && this.turnId) {
-      await this.client.request('turn/interrupt', {
-        threadId: this.threadId,
-        turnId: this.turnId,
-      }).catch(() => {});
+    const controls = (async () => {
+      if (this.threadId && this.turnId) {
+        await this.client.request('turn/interrupt', {
+          threadId: this.threadId,
+          turnId: this.turnId,
+        }).catch(() => {});
+      }
+      await this.pauseActiveGoal().catch(() => {});
+    })();
+    let cleanupTimer;
+    try {
+      await Promise.race([
+        controls,
+        new Promise(resolve => { cleanupTimer = setTimeout(resolve, this.firstTurnCleanupDeadlineMs); }),
+      ]);
+    } finally {
+      clearTimeout(cleanupTimer);
+      // Cancellation must also break initialize/activation/control RPCs that
+      // never reply. Stopping this task's transport is idempotent and bounded.
+      await this.client.stop().catch(() => {});
     }
-    await this.pauseActiveGoal().catch(() => {});
   }
 
   async pauseActiveGoal() {
@@ -1254,6 +1354,7 @@ export class SimpleCruiseSession extends EventEmitter {
     })).goal;
     if (current?.status !== 'active') return;
     const paused = await this.client.request('thread/goal/set', {
+      origin: 'automatic',
       threadId: this.threadId,
       objective: current.objective,
       status: 'paused',
@@ -1410,6 +1511,7 @@ export class SimpleCruiseSession extends EventEmitter {
     if (!this.stopping) {
       const error = info.error ?? new Error(`Codex app-server exited (${info.code ?? 'unknown'}).`);
       this.clearNativeGoalTurnDeadline();
+      this.startupAbortController.abort(error);
       this.cancelNativeGoalCleanup(error);
       this.pending?.reject(error);
     }
