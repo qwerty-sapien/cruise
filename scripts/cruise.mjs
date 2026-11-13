@@ -1152,8 +1152,17 @@ async function awaitHumanInput(client, callback) {
   }
 }
 
-function command(command, args) {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 10_000 });
+export function doctorProbeTimeoutMs(value = process.env.CRUISE_DOCTOR_PROBE_TIMEOUT_MS) {
+  if (value === undefined) return 60_000;
+  const parsed = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 2_147_483_647) {
+    throw new TypeError('CRUISE_DOCTOR_PROBE_TIMEOUT_MS must be an integer from 0 through 2147483647 (0 disables the deadline).');
+  }
+  return parsed;
+}
+
+export function runDoctorCommand(command, args, { timeoutMs = doctorProbeTimeoutMs() } = {}) {
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout: timeoutMs });
   return {
     status: result.status,
     output: String(result.stdout ?? '').trim(),
@@ -1162,7 +1171,7 @@ function command(command, args) {
 }
 
 export function localDoctorReport(
-  run = command,
+  run = runDoctorCommand,
   { provider = 'codex', pluginRoot = PACKAGE_ROOT } = {},
 ) {
   const definition = providerDefinition(provider);

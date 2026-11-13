@@ -89,3 +89,9 @@ disabled with 0. This does not disable the normal transport/process watchdog.
 Shutdown escalation waits remain short so cancellation does not leak a child.
 Tool polling waits such as five seconds are observation intervals, not these
 startup deadlines.
+
+Doctor command probes use a separate 60-second default rather than ten seconds,
+because installed-plugin discovery may also contact the remote catalogue. Set
+`CRUISE_DOCTOR_PROBE_TIMEOUT_MS` to a larger millisecond value or 0 to disable
+that diagnostic deadline. A selected finite limit still reports a timeout for
+an unresponsive probe; this setting does not govern task/model execution.
