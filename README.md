@@ -220,7 +220,7 @@ model/effort pair for that worker only.
 | The launcher cannot start | Run `cruise --codex doctor` or `cruise --claude doctor`. |
 | The wrong host opens | Remove conflicting selectors and inspect `CRUISE_PROVIDER`; Codex is the fallback. |
 | Goal exited `3` (stalled) | Read the stall report and last failure, adjust the advisory flight if its scope or tuning is stale, supply the missing decision/evidence, then resume explicitly. |
-| Goal exited `4` (bootstrap timeout) | Codex did not start the native Goal turn within 120 seconds. Read the reported thread, model, Goal status, and elapsed-time diagnostics; Cruise attempts to pause the active Goal before exiting. |
+| Goal exited `4` (bootstrap timeout) | An explicitly configured native first-turn deadline elapsed. Startup has no hard cutoff by default; use `--bootstrap-timeout-ms 0` to disable a selected limit. For parallel startup with fresh parent state, see [staged handoff](docs/STAGED_HANDOFF.md). |
 | The Claude Stop hook keeps continuing my session | Run `cruise attest --json`, resolve the listed gates, or record a concrete `status: blocked`. The hook is scoped to the active Goal skill session and has a hard continuation cap. |
 | A Claude Goal cannot be paused as an object | Claude has resumable sessions, not Codex's Goal lifecycle; use `Ctrl-C` and `/resume` or `--resume`. |
 

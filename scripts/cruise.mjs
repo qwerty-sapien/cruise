@@ -1161,7 +1161,8 @@ export function doctorProbeTimeoutMs(value = process.env.CRUISE_DOCTOR_PROBE_TIM
   return parsed;
 }
 
-export function runDoctorCommand(command, args, { timeoutMs = doctorProbeTimeoutMs() } = {}) {
+export { command as runDoctorCommand };
+function command(command, args, { timeoutMs = doctorProbeTimeoutMs() } = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', timeout: timeoutMs });
   return {
     status: result.status,
@@ -1171,7 +1172,7 @@ export function runDoctorCommand(command, args, { timeoutMs = doctorProbeTimeout
 }
 
 export function localDoctorReport(
-  run = runDoctorCommand,
+  run = command,
   { provider = 'codex', pluginRoot = PACKAGE_ROOT } = {},
 ) {
   const definition = providerDefinition(provider);
