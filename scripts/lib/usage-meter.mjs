@@ -67,6 +67,7 @@ function validateBreakdown(value) {
 
 export function usageModelFamily(model) {
   const normalized = String(model ?? '').toLowerCase();
+  if (normalized.includes('astra')) return 'astra';
   if (normalized.includes('sol')) return 'sol';
   if (normalized.includes('terra')) return 'terra';
   if (normalized.includes('luna')) return 'luna';

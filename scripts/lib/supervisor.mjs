@@ -5,11 +5,14 @@ import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { DEFAULT_STALL } from './flight-plan.mjs';
+import { writeRuntimeJson } from './runtime-state.mjs';
+import { USER_ONLY_MARKDOWN_PATHSPEC } from './user-reference.mjs';
+import { isSensitivePath, SENSITIVE_GIT_PATHSPECS } from './sensitive-path.mjs';
 
 const execFileAsync = promisify(execFile);
 const FAILURE_LINE = /\b(?:error|fail(?:ed|ure)?|exception|panic|traceback)\b/iu;
 export const MAX_SUPERVISOR_HISTORY = 32;
-export const SUPERVISOR_STATE_FILE = '.supervisor.json';
+export const SUPERVISOR_STATE_FILE = 'supervisor.json';
 let atomicSequence = 0;
 
 function digest(value) {
@@ -325,7 +328,7 @@ export async function atomicWriteText(path, text, {
   }
 }
 
-export async function ensureCruiseScratch(cwd, entries = [SUPERVISOR_STATE_FILE]) {
+export async function ensureCruiseScratch(cwd, entries = ['LAST-RUN.json']) {
   const directory = join(cwd, '.cruise');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const metadata = await lstat(directory);
@@ -339,26 +342,20 @@ export async function ensureCruiseScratch(cwd, entries = [SUPERVISOR_STATE_FILE]
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
-  const lines = existing.split(/\r?\n/u);
-  const missing = entries.filter((entry) => !lines.includes(entry));
-  if (missing.length) {
-    const prefix = `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}`;
-    await atomicWriteText(ignorePath, `${prefix}${missing.join('\n')}\n`);
-  }
+  const expected = `${entries.join('\n')}\n`;
+  if (existing !== expected) await atomicWriteText(ignorePath, expected);
   return directory;
 }
 
 export async function writeCruiseScratchJson(cwd, filename, value) {
-  if (!/^\.[A-Za-z0-9-]+\.json$/u.test(filename) && filename !== 'LAST-RUN.json') {
-    throw new TypeError('unsupported scratch JSON basename');
-  }
+  if (filename !== 'LAST-RUN.json') throw new TypeError('only LAST-RUN.json persists in .cruise');
   const directory = await ensureCruiseScratch(cwd, [filename]);
   await atomicWriteText(join(directory, filename), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export async function writeSupervisorState(cwd, state) {
+export async function writeSupervisorState(runtimeDirectory, state) {
   if (!validSupervisorState(state)) throw new TypeError('supervisor scratch state is malformed');
-  await writeCruiseScratchJson(cwd, SUPERVISOR_STATE_FILE, state);
+  await writeRuntimeJson(runtimeDirectory, SUPERVISOR_STATE_FILE, state);
 }
 
 export async function captureWorkspaceFingerprint(cwd, {
@@ -377,6 +374,8 @@ export async function captureWorkspaceFingerprint(cwd, {
     const pathspec = [
       '--',
       ...paths,
+      USER_ONLY_MARKDOWN_PATHSPEC,
+      ...SENSITIVE_GIT_PATHSPECS,
       ...(excludeFlightPlan ? [':(exclude).cruise/**'] : []),
     ];
     const [head, status, diff, cached, untracked] = await Promise.all([
@@ -402,6 +401,7 @@ export async function captureWorkspaceFingerprint(cwd, {
     const untrackedEvidence = [];
     for (const path of untrackedFiles) {
       if (path.startsWith('/') || path.split('/').includes('..')) return null;
+      if (isSensitivePath(path)) continue;
       const metadata = await lstat(join(cwd, path));
       if (metadata.isSymbolicLink()) {
         untrackedEvidence.push(`${path}\u0000symlink\u0000${await readlink(join(cwd, path))}`);

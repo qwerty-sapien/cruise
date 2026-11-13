@@ -1,8 +1,7 @@
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
+import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
-
-import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
 
 import {
   DEFAULT_STALL,
@@ -22,9 +21,28 @@ import {
   writeCruiseScratchJson,
   writeSupervisorState,
 } from './supervisor.mjs';
+import { writeRuntimeJson } from './runtime-state.mjs';
 import { UsageMeter } from './usage-meter.mjs';
 import { CompactionController } from './compaction-controller.mjs';
 import { readContinuationContext } from './context-capsule.mjs';
+import {
+  AUTHORIZATION_ACTION,
+  AUTHORIZATION_POLICY_INSTRUCTIONS,
+  automaticDelegationAuthorization,
+  BOUNDED_WORKER_PROCEED_ANSWER,
+  classifyCruiseAuthorization,
+  DECOMPOSE_SCOPE_ANSWER,
+  CRUISE_INTEGRITY_DRIFT_ANSWER,
+  CRUISE_INTEGRITY_DRIFT_RECOVERY_INSTRUCTIONS,
+  MINIMUM_INSPECTION_ANSWER,
+  PREAUTHORIZED_PROCEED_ANSWER,
+  SENSITIVE_PATH_SKIP_ANSWER,
+  WHOLE_TABLE_NO_READ_ANSWER,
+  ROUTINE_DELEGATION_ANSWER,
+  isSpeculativeWorkerAuthorizationPause,
+  isCruiseIntegrityDriftAuthorizationPause,
+  WORKER_AUTHORIZATION_RECOVERY_INSTRUCTIONS,
+} from './authorization-policy.mjs';
 import { skillTriggerInstructions } from './skill-trigger-policy.mjs';
 import { selectRootRequest } from './root-policy.mjs';
 import {
@@ -45,12 +63,13 @@ const ROUTINE_GOAL_ADVANCE_QUESTION = /^(?:(?:[ptm]-?\d+|phase\s*\d+|subtask\s*\
 const ROUTINE_GOAL_ADVANCE_OPTION = /^\s*(?:approve\s+(?:[ptm]-?\d+|phase\s*\d+|subtask\s*\d+|task\s*\d+|micro[-\s]?goal)(?:\s+only)?|(?:proceed|continue|advance|resume|start|implement|execute)\s+(?:the\s+)?(?:next\s+)?(?:ready\s+)?(?:[ptm]-?\d+|phase\s*\d+|subtask\s*\d+|task\s*\d+|micro[-\s]?goal))\b/iu;
 const PREPARATION_ONLY_GOAL_PROMPT = /\b(?:only\s+(?:plan|research|prepare|design)|(?:plan|research|prepare|design)\s+only|do\s+not\s+(?:implement|edit|write(?:\s+code)?|execute)|do\s+not\s+make\s+(?:code\s+)?changes|without\s+implementation)\b/iu;
 const GOAL_AUTHORIZATION_CONTEXT = /\b(?:plan(?:\s+and\s+goal)?|goal|cruise|contract|phase|micro[-\s]?goal|next\s+(?:step|phase|micro[-\s]?goal))\b/iu;
-const GOAL_AUTHORIZATION_OPTION = /^\s*(?:approve(?:\s+(?:both|the\s+(?:plan|goal|contract)|[a-z]+-?\d+\s+contract))?|start\s+cruise|continue|proceed|execute|implement)\b/iu;
-const HIGH_RISK_GOAL_AUTHORIZATION = /\b(?:credential|secret|password|token|authentication|login|payment|purchase|production|deploy|publish|release|delete|remove|reset|rewrite|force|sudo|sensitive|private\s+data)\b/iu;
+const GOAL_AUTHORIZATION_OPTION = /^\s*(?:allow|approve(?:\s+(?:both|the\s+(?:plan|goal|contract)|[a-z]+-?\d+\s+contract))?|authorize|continue|delegate|execute|implement|inspect|launch|proceed|read|run|send|start\s+cruise)\b/iu;
+const HOST_RISK_GOAL_AUTHORIZATION = /\b(?:payment|purchase|publish|release|sudo)\b|\bdeploy(?:ment)?\s+to\s+production\b|\bproduction\s+(?:database|migration|sql)\b|\bauthorize-production\b|\bforce[- ]push\b/iu;
 const MATERIAL_GOAL_DECISION = /\b(?:not\s+requested|out(?:side)?\s+(?:the\s+)?scope|scope\s+(?:change|expansion)|which\s+(?:option|approach)|user\s+preference)\b/iu;
 
 const AUTONOMOUS_GOAL_INSTRUCTIONS = [
   'The user explicitly invoked Cruise Goal, which authorizes autonomous end-to-end progress within the normal Codex workspace and permission boundaries.',
+  AUTHORIZATION_POLICY_INSTRUCTIONS,
   'Use the first read-only Plan turn only to inspect the repository, resolve the outcome, touchpoints, non-goals, invariants, acceptance commands, and stall tuning, and form a strongly aligned plan for the first ready micro-goal. Unless the user explicitly requested planning or research only, that plan is not an endpoint: the following native Goal turn must immediately implement it and write the advisory .cruise/FLIGHT.md as its first execution act.',
   'For every micro-goal, use the compact Flight digest and unresolved-gate summary; reopen detailed receipts only for stale surfaces. Realign before work outside touchpoints or inside non-goals; re-verify affected invariants; implement the next ready slice; run focused verification; remediate in-scope failures; then continue.',
   'When changed behavior has meaningful concurrency, lifecycle, migration, public-contract, security, integration, or edge-case risk, use available independent reviewers or a bounded agent swarm to try to break it. Give them non-overlapping probes, reproduce credible findings, and refine before advancing. Skip this for simple low-risk work and never claim independent coverage that did not run.',
@@ -220,7 +239,8 @@ export function automaticRoutineGoalAdvance(params = {}) {
  * contract transition. The host still asks about actual external, destructive,
  * or otherwise high-risk effects through its normal approval protocol.
  */
-export function automaticGoalAuthorization(params = {}) {
+export function automaticGoalAuthorization(params = {}, { nativeApprovalDenied = false } = {}) {
+  if (nativeApprovalDenied) return null;
   const questions = Array.isArray(params.questions) ? params.questions : [];
   if (questions.length === 0) return null;
 
@@ -232,25 +252,61 @@ export function automaticGoalAuthorization(params = {}) {
       question?.question ?? '',
       ...options.map(optionLabel),
     ].join(' ');
+    const boundary = classifyCruiseAuthorization(visible);
     if (
       typeof question?.id !== 'string' ||
       question.id.length === 0 ||
-      !GOAL_AUTHORIZATION_CONTEXT.test(visible) ||
-      HIGH_RISK_GOAL_AUTHORIZATION.test(visible) ||
-      MATERIAL_GOAL_DECISION.test(visible)
+      MATERIAL_GOAL_DECISION.test(visible) ||
+      boundary.action === AUTHORIZATION_ACTION.requestUser ||
+      (
+        boundary.action === AUTHORIZATION_ACTION.nativePermissions &&
+        (
+          !GOAL_AUTHORIZATION_CONTEXT.test(visible) ||
+          HOST_RISK_GOAL_AUTHORIZATION.test(visible)
+        )
+      )
     ) {
       return null;
     }
+    if (boundary.action === AUTHORIZATION_ACTION.inspectMinimum) {
+      answers[question.id] = { answers: [MINIMUM_INSPECTION_ANSWER] };
+      continue;
+    }
+    if (boundary.action === AUTHORIZATION_ACTION.decompose) {
+      answers[question.id] = { answers: [DECOMPOSE_SCOPE_ANSWER] };
+      continue;
+    }
+    if (boundary.action === AUTHORIZATION_ACTION.respectNoRead) {
+      answers[question.id] = { answers: [WHOLE_TABLE_NO_READ_ANSWER] };
+      continue;
+    }
+    if (boundary.action === AUTHORIZATION_ACTION.skipSensitive) {
+      answers[question.id] = { answers: [SENSITIVE_PATH_SKIP_ANSWER] };
+      continue;
+    }
+    if (boundary.reason === 'cruise-integrity-drift-recovery') {
+      answers[question.id] = { answers: [CRUISE_INTEGRITY_DRIFT_ANSWER] };
+      continue;
+    }
+    if (boundary.reason === 'bounded-codex-worker-context' || boundary.reason === 'routine-delegation') {
+      answers[question.id] = { answers: [boundary.reason === 'routine-delegation'
+        ? ROUTINE_DELEGATION_ANSWER : BOUNDED_WORKER_PROCEED_ANSWER] };
+      continue;
+    }
     const choice = options.find((option) => GOAL_AUTHORIZATION_OPTION.test(optionLabel(option)));
-    const value = optionValue(choice);
+    const value = optionValue(choice) ?? (
+      boundary.action === AUTHORIZATION_ACTION.proceed
+        ? PREAUTHORIZED_PROCEED_ANSWER
+        : null
+    );
     if (value === null) return null;
     answers[question.id] = { answers: [String(value)] };
   }
   return { answers };
 }
 
-export function automaticGoalProgress(params = {}) {
-  return automaticRoutineGoalAdvance(params) ?? automaticGoalAuthorization(params);
+export function automaticGoalProgress(params = {}, authorizationEvidence = {}) {
+  return automaticRoutineGoalAdvance(params) ?? automaticGoalAuthorization(params, authorizationEvidence);
 }
 
 async function answerUserInput(params, { pickOne, readLine, input, output, lineReader }) {
@@ -293,6 +349,22 @@ async function answerApproval(params, { pickOne, input, output, lineReader }) {
     lineReader,
   });
   return selectionValue(selection) ?? 'decline';
+}
+
+/**
+ * The dedicated migration CLI is its own fail-closed policy boundary. Let the
+ * host run only that exact command family without surfacing a redundant native
+ * approval. Raw database, Supabase, shell, and digest-authorized production
+ * commands remain native decisions.
+ */
+export function automaticMigrationCommandApproval(params = {}) {
+  const command = typeof params.command === 'string' ? params.command.trim() : '';
+  if (!command || /[;&|<>`$()\n\r]/u.test(command)) return null;
+  if (/\s--(?:authorize-digest|db-url|password|include-seed|sandbox-first)(?:\s|=|$)/u.test(command)) return null;
+  const launcher = /^(?:cruise|(?:\.?\.?\/|\/)[^\s]*\/cruise|node\s+(?:\.?\.?\/|\/)?[^\s]*scripts\/cruise\.mjs)\s+migrate\s+(?:inspect|apply|query|status)\b/u;
+  if (!launcher.test(command)) return null;
+  const decisions = Array.isArray(params.availableDecisions) ? params.availableDecisions : ['accept', 'decline'];
+  return decisions.find((value) => /^accept(?:ForSession)?$/u.test(String(value))) ?? null;
 }
 
 export class SimpleCruiseInterruptedError extends Error {
@@ -377,6 +449,7 @@ export class SimpleCruiseSession extends EventEmitter {
     locateTrace = locateRollout,
     traceHome = codexHome(),
     clock = () => new Date(),
+    runtimeDirectory = null,
     usageMeter = new UsageMeter(),
     compactionController = null,
     quotaGuard = null,
@@ -416,6 +489,7 @@ export class SimpleCruiseSession extends EventEmitter {
     this.locateTrace = locateTrace;
     this.traceHome = traceHome;
     this.clock = clock;
+    this.runtimeDirectory = runtimeDirectory;
     this.usageMeter = usageMeter;
     this.quotaGuard = quotaGuard;
     this.rootRequest = skill === 'goal'
@@ -429,6 +503,8 @@ export class SimpleCruiseSession extends EventEmitter {
     this.traceLookup = Promise.resolve();
     this.traceRetryStarted = false;
     this.turnAgentText = '';
+    this.turnNativeApprovalDenied = false;
+    this.authorizationRecoveryAttempted = false;
     this.threadId = null;
     this.threadModel = null;
     this.threadReasoningEffort = null;
@@ -472,7 +548,7 @@ export class SimpleCruiseSession extends EventEmitter {
       if (this.quotaGuard && !this.beforeGoalActivation) {
         await this.quotaGuard.start({
           client: this.client,
-          goalId: `cruise-${this.skill}`,
+          goalId: this.runtimeDirectory ?? `cruise-${this.skill}`,
         });
       }
       if (this.skill === 'goal') this.errorOutput.write('Cruise: app-server started.\n');
@@ -496,9 +572,13 @@ export class SimpleCruiseSession extends EventEmitter {
           INDEPENDENT_RELEASE_INSTRUCTIONS,
           COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
           'Work directly with the user request and the repository.',
+          ...(this.skill === 'goal' ? [] : [AUTHORIZATION_POLICY_INSTRUCTIONS]),
           'Cruise keeps .cruise/ORIGIN.md as a verbatim request note; Goal work may also maintain the user-editable advisory .cruise/FLIGHT.md.',
+          'Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Cruise updates them only through deterministic runtime code.',
+          'This launcher records Goal user references automatically; do not run cruise reference from the hosted task.',
           'Do not create Cruise run-control files, approval digests, archives, or YAML workflow state. FLIGHT.md frontmatter is an advisory note, not workflow authority.',
           'Use normal Codex approvals and report failures factually.',
+          'Use Cruise context-view for repository retrieval so .env, credential, secret, and private-key exclusions are enforced before access.',
           skillTriggerInstructions(),
           ...(this.skill === 'goal'
             ? [
@@ -586,6 +666,30 @@ export class SimpleCruiseSession extends EventEmitter {
           throw new Error(`Cruise ${this.skill} ended with status ${result.status}.`);
         }
         const goal = await this.refreshGoal();
+        const authorizationRecoveryKind = !this.authorizationRecoveryAttempted && (
+          isCruiseIntegrityDriftAuthorizationPause(this.turnAgentText, {
+            nativeApprovalDenied: this.turnNativeApprovalDenied,
+          })
+            ? 'cruise-integrity-drift'
+            : isSpeculativeWorkerAuthorizationPause(this.turnAgentText, {
+              nativeApprovalDenied: this.turnNativeApprovalDenied,
+            }) ? 'worker-disclosure' : null
+        );
+        const authorizationRecoveryInstructions = authorizationRecoveryKind === 'cruise-integrity-drift'
+          ? CRUISE_INTEGRITY_DRIFT_RECOVERY_INSTRUCTIONS
+          : WORKER_AUTHORIZATION_RECOVERY_INSTRUCTIONS;
+        const authorizationRecoveryDiagnostic = authorizationRecoveryKind === 'cruise-integrity-drift'
+          ? 'Cruise: suppressed an unnecessary Cruise integrity-drift waiver; selectively reconciling and continuing.\n'
+          : 'Cruise: suppressed a speculative Codex-worker disclosure authorization pause; continuing with bounded safe context.\n';
+        if (authorizationRecoveryKind) this.authorizationRecoveryAttempted = true;
+        if (authorizationRecoveryKind && TERMINAL_GOAL_STATUSES.has(goal?.status)) {
+          this.errorOutput.write(authorizationRecoveryDiagnostic);
+          result = await this.reactivateCompletedGoal(goal, authorizationRecoveryInstructions);
+          await this.afterCompletedTurn(result);
+          goalExecutionMode = true;
+          continuationCompleted = true;
+          continue;
+        }
         if (TERMINAL_GOAL_STATUSES.has(goal?.status)) {
           if (goal.status === 'complete' && !this.goalPreparationOnly) {
             const assessment = await this.assessCompletion();
@@ -646,7 +750,12 @@ export class SimpleCruiseSession extends EventEmitter {
             goal: completed,
           });
         }
-        let continuationInstructions = GOAL_CONTINUATION_INSTRUCTIONS;
+        let continuationInstructions = authorizationRecoveryKind
+          ? authorizationRecoveryInstructions
+          : GOAL_CONTINUATION_INSTRUCTIONS;
+        if (authorizationRecoveryKind) {
+          this.errorOutput.write(authorizationRecoveryDiagnostic);
+        }
         if (continuationCompleted) {
           const verdict = await this.superviseGoalTurn(result?.id ?? null);
           if (verdict.level === 'stall') {
@@ -671,9 +780,11 @@ export class SimpleCruiseSession extends EventEmitter {
               goal: this.goal,
             });
           }
-          if (verdict.level === 'corrective') continuationInstructions = correctiveFlightInstructions(verdict.reason);
-          else if (verdict.level === 'realign') continuationInstructions = realignmentInstructions(verdict.reason);
-          else if (verdict.level === 'final-experiment') continuationInstructions = finalExperimentInstructions(verdict.reason);
+          if (!authorizationRecoveryKind) {
+            if (verdict.level === 'corrective') continuationInstructions = correctiveFlightInstructions(verdict.reason);
+            else if (verdict.level === 'realign') continuationInstructions = realignmentInstructions(verdict.reason);
+            else if (verdict.level === 'final-experiment') continuationInstructions = finalExperimentInstructions(verdict.reason);
+          }
         }
         if (!goalExecutionMode) {
           await this.updateGoalMode('default');
@@ -1062,16 +1173,18 @@ export class SimpleCruiseSession extends EventEmitter {
       contextFingerprint: assuranceContext.contextFingerprint,
       gateFingerprints: assuranceContext.gateFingerprints,
     };
-    await writeCruiseScratchJson(this.cwd, '.attestation.json', {
-      version: 2,
-      host: 'codex',
-      level: result.level,
-      context_fingerprint: assuranceContext.contextFingerprint,
-      gate_fingerprints: assuranceContext.gateFingerprints,
-      reasons: result.reasons,
-      metrics: result.metrics,
-      observed_at: Date.now(),
-    }).catch(() => {});
+    if (this.runtimeDirectory) {
+      await writeRuntimeJson(this.runtimeDirectory, 'attestation.json', {
+        version: 2,
+        host: 'codex',
+        level: result.level,
+        context_fingerprint: assuranceContext.contextFingerprint,
+        gate_fingerprints: assuranceContext.gateFingerprints,
+        reasons: result.reasons,
+        metrics: result.metrics,
+        observed_at: Date.now(),
+      }).catch(() => {});
+    }
     return result;
   }
 
@@ -1129,6 +1242,7 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async startTurn(input, { mode = null } = {}) {
     this.turnAgentText = '';
+    this.turnNativeApprovalDenied = false;
     const completion = deferred();
     completion.promise.catch(() => {});
     this.turnId = null;
@@ -1254,6 +1368,8 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   async waitForNativeGoalTurn(goalActivated = Promise.resolve()) {
+    this.turnAgentText = '';
+    this.turnNativeApprovalDenied = false;
     const completion = deferred();
     completion.promise.catch(() => {});
     this.turnId = null;
@@ -1396,8 +1512,9 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   async persistSupervisor({ finalReport = null, pauseOutcome = null } = {}) {
+    if (!this.runtimeDirectory) return;
     try {
-      await writeSupervisorState(this.cwd, this.supervisor.state({
+      await writeSupervisorState(this.runtimeDirectory, this.supervisor.state({
         flightHash: this.supervisorFlightHash,
         finalReport,
         pauseOutcome,
@@ -1417,27 +1534,47 @@ export class SimpleCruiseSession extends EventEmitter {
     if (this.stopping) return;
     let result;
     if (message.method === 'item/tool/requestUserInput') {
-      result = this.skill === 'goal' ? automaticGoalProgress(message.params) : null;
-      if (result === null) {
-        result = await this.awaitHumanInput(() => answerUserInput(message.params, {
+      const answers = {};
+      const unresolved = [];
+      const evidence = { nativeApprovalDenied: this.turnNativeApprovalDenied };
+      for (const question of message.params?.questions ?? []) {
+        const params = { questions: [question] };
+        const automatic = this.skill === 'goal'
+          ? automaticGoalProgress(params, evidence)
+          : automaticDelegationAuthorization(params, evidence);
+        if (automatic) Object.assign(answers, automatic.answers);
+        else unresolved.push(question);
+      }
+      if (unresolved.length) {
+        const requested = await this.awaitHumanInput(() => answerUserInput({ questions: unresolved }, {
           pickOne: this.pickOne,
           readLine: this.readLine,
           input: this.input,
           output: this.errorOutput,
           lineReader: this.lineReader,
         }));
+        Object.assign(answers, requested.answers);
       }
+      result = { answers };
     } else if ([
       'item/commandExecution/requestApproval',
       'item/fileChange/requestApproval',
       'item/permissions/requestApproval',
     ].includes(message.method)) {
-      const decision = await this.awaitHumanInput(() => answerApproval(message.params, {
-        pickOne: this.pickOne,
-        input: this.input,
-        output: this.errorOutput,
-        lineReader: this.lineReader,
-      }));
+      const automatic = message.method === 'item/commandExecution/requestApproval'
+        ? automaticMigrationCommandApproval(message.params)
+        : null;
+      const decision = automatic ?? await this.awaitHumanInput(() => answerApproval(message.params, {
+          pickOne: this.pickOne,
+          input: this.input,
+          output: this.errorOutput,
+          lineReader: this.lineReader,
+        }));
+      if (
+        (decision === 'decline' || decision === 'cancel')
+        && message.params?.threadId === this.threadId
+        && message.params?.turnId === this.turnId
+      ) this.turnNativeApprovalDenied = true;
       result = message.method === 'item/permissions/requestApproval'
         ? { permissions: decision === 'accept' ? message.params.permissions ?? {} : {}, scope: 'turn' }
         : { decision };
@@ -1475,7 +1612,18 @@ export class SimpleCruiseSession extends EventEmitter {
       return;
     }
     if (this.compactionController.handleNotification(message)) return;
-    if (message.method === 'item/agentMessage/delta') {
+    if (message.method === 'item/autoApprovalReview/completed') {
+      // Only host protocol evidence for this turn can suppress recovery. Replayed
+      // reviews from earlier turns and agent prose are not native decisions.
+      if (
+        params.threadId === this.threadId
+        && typeof params.turnId === 'string'
+        && params.turnId === this.turnId
+        && params.review?.status === 'denied'
+      ) {
+        this.turnNativeApprovalDenied = true;
+      }
+    } else if (message.method === 'item/agentMessage/delta') {
       const delta = String(params.delta ?? '');
       this.output.write(delta);
       if (this.skill === 'goal' && this.turnAgentText.length < MAX_TURN_AGENT_TEXT) {

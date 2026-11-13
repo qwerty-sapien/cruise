@@ -61,6 +61,49 @@ passed independent review. After the final product edit, use
 says `ready_for_completion: true`, then mark it complete and confirm
 `allows_completion: true`.
 
+## Repository profiles and migrations
+
+Cruise reads an optional `.cruise/config.toml`. An absent file selects the
+`relaxed` profile; repositories with customer-critical workflows can select
+`business-critical` and declare database domains, policy checks, automated
+checks, and computer-use flow paths. This file contains identifiers and command
+names only. Database URLs, passwords, tokens, dotenv contents, and private keys
+are rejected. Supabase's own `supabase/config.toml` remains separate.
+
+Both profiles keep routine execution internal: Cruise chooses workers, spawns
+subagents, shares approved task context, runs focused checks, and requests
+internal reviews without asking for permission or announcing agent allocation.
+`business-critical` adds verification for consequential changes. It does not
+make delegation a user decision. Questions concern a concrete potentially
+damaging change, material product choice, scope expansion, or sensitive data
+outside existing authorization. Workers inherit the task's scope and limits;
+a read-only review of a risky diff needs no additional permission.
+
+```sh
+cruise config validate -C /path/to/repo
+cruise migrate inspect --target sandbox --path supabase/migrations/040_change.sql
+cruise migrate apply --target sandbox --path supabase/migrations/040_change.sql
+cruise migrate query --target production --file queries/status.sql
+cruise migrate status
+```
+
+Verified sandbox targets auto-apply without a new authorization prompt.
+Production reads run only as one explicit-column `SELECT` wrapped in a
+server-enforced read-only transaction. Production migrations auto-apply only
+when every operation belongs to one allowlisted non-service-critical domain or
+is a nullable, default-free column addition with no material whole-row API,
+trigger, dependency, or configured data-policy effect. Everything destructive,
+dynamic, constrained, cross-domain, or uncertain yields four informed choices:
+authorize the exact digest for production, test in sandbox and auto-promote
+after checks, test in sandbox and wait for manual localhost confirmation, or
+cancel.
+
+Sandbox failures retain the sandbox and report failed checks and rollback
+guidance; production is untouched. Derived trust digests refresh automatically
+and never become authorization gates by themselves. See
+[`examples/cruise-config.business-critical.toml`](examples/cruise-config.business-critical.toml)
+and [`examples/cruise-config.relaxed.toml`](examples/cruise-config.relaxed.toml).
+
 ## Goal supervision
 
 The default flight-plan thresholds are three unchanged workspace observations
@@ -149,6 +192,13 @@ codex plugin add cruise@<marketplace-name>
 codex plugin list
 ```
 
+Editing or pulling the marketplace source does not change the copy already
+loaded by Codex. After every local Cruise update, run `codex plugin add` again,
+then run `node scripts/cruise.mjs doctor` from the updated source. Doctor
+compares critical cached bytes with the configured marketplace source, so a
+same-version stale cache fails visibly. Start a new task after the reinstall;
+an existing task can retain instructions loaded before the refresh.
+
 ### Claude Code
 
 Validate and load a checkout directly:
@@ -211,11 +261,23 @@ Worker level is request-scoped. Without `--level`, Cruise leaves the host's
 model selection untouched; an explicit level maps to a provider-specific
 model/effort pair for that worker only.
 
+For Codex workers, the current level catalog is: L1 GPT-5.6 Luna medium; L2
+GPT-5.6 Terra xhigh; L3 GPT-5.6 Terra ultra; L4 GPT-5.6 Sol xhigh; L5 GPT-6
+Astra high; L6 GPT-5.6 Sol ultra; L7 GPT-6 Astra xhigh for direct
+exceptional-consequence work, with Astra ultra reserved only for an evidenced
+L6 escalation. Express that transition only with a managed Codex worker using
+`--complexity repeated --level 7 --reasoning-escalation-evidence <text>` plus
+the exceptional consequence and rationale; ordinary `--evidence` remains
+capsule context and never selects ultra. Exact catalog resolution fails closed
+without provider fallback.
+Claude Code workers retain Claude's native model and session controls.
+
 ## Troubleshooting
 
 | Symptom | What to check |
 | --- | --- |
 | A skill is missing in Codex | Confirm `codex plugin list`, start a new task, and use `$cruise:<skill>`. |
+| Cruise source changed but behavior did not | Re-run `codex plugin add cruise@<marketplace-name>` and run Doctor from the updated source. New tasks load it normally; an active job treats detected instruction drift as exceptional internal recovery, selectively reworks only invalidated Cruise-owned code, and continues without a waiver or forced restart. A source checkout and an installed cache are distinct. |
 | A skill is missing in Claude | Run `claude plugin validate .`, launch with `--plugin-dir .`, and use `/cruise:<skill>`. |
 | The launcher cannot start | Run `cruise --codex doctor` or `cruise --claude doctor`. |
 | The wrong host opens | Remove conflicting selectors and inspect `CRUISE_PROVIDER`; Codex is the fallback. |
@@ -251,6 +313,29 @@ claude plugin validate .
 
 See `evals/README.md` for the paired live-host protocol and published pilot
 artifacts.
+
+### Publish a release with clean history
+
+Finish development with a first-parent commit whose subject begins with
+`vX.Y.Z` or `Cruise vX.Y.Z`, then run:
+
+```sh
+npm run release:push -- --dry-run origin main
+npm run release:push -- origin main
+```
+
+The wrapper collapses every commit between the previous and newest release
+commits into the newest release snapshot. Commits after the newest release,
+such as a README correction, are recreated and retained. Before changing the
+branch it requires a clean linear worktree, fetches the remote tip, verifies
+that no remote work would be discarded, and creates a timestamped local backup
+under `codex/history-backup-*`. It verifies that the final tree is unchanged
+and pushes with an exact `--force-with-lease`.
+
+This must be a wrapper command: Git determines which object it will push before
+running a `pre-push` hook, so a hook cannot safely rewrite that same push.
+Rewritten commits receive new IDs, and any signatures on them cannot be
+retained. Tags are not moved or pushed automatically.
 
 ## License
 

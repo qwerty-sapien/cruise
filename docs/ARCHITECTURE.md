@@ -109,8 +109,9 @@ Cruise launches the native interactive `claude` process with an explicit
 session ID and plugin directory. Prompt-expansion, prompt-submit, and Skill
 activation hooks arm only the matching Goal session; a session-keyed Stop hook
 covers launcher and direct `/cruise:goal` use without a
-process-global environment marker. Hook scratch is keyed by session and ignored
-under `.cruise/`.
+process-global environment marker. The launcher passes the exact registered
+runtime directory and session ID to the process and hooks; hooks never search
+the host temp directory for a "latest" run.
 
 Claude has a native conversation-level `/goal`, but no documented Codex-style
 Goal object. Cruise does not emulate one or stack native `/goal`
@@ -137,4 +138,135 @@ Cruise has no approval object, permission ledger, archive, workflow database,
 attempt authority, or emulated Claude Goal lifecycle. It enforces one active
 Cruise run per workspace so concurrent sessions cannot replace one another's
 ORIGIN or Flight contract. ORIGIN, QUEUE, FLIGHT, attestation, and supervisor
-files cannot grant capabilities or override host policy.
+state cannot grant capabilities or override host policy.
+
+## Migration policy boundary
+
+`.cruise/config.toml` selects either a relaxed default or a business-critical
+repository profile. The parser rejects embedded credentials, absolute or
+escaping paths, secret paths, symlinks, duplicate targets, and unverified
+production identities. A target observation must match both its declared
+environment and exact non-secret project identifier before execution.
+
+`migration-policy.mjs` masks comments and literals before classifying SQL. A
+verified sandbox bypasses production-risk classification. Production queries
+must be one explicit-column `SELECT`; the adapter wraps it in `BEGIN READ ONLY`,
+a statement timeout, a row cap, and `ROLLBACK`. Production DDL auto-applies only
+for one allowlisted noncritical domain or for a nullable, default-free,
+constraint-free column addition after bounded source and migration-history
+inspection proves that whole-row API and trigger behavior is unaffected.
+Unparseable and unclassified SQL is risky, not minor.
+
+`migration-controller.mjs` binds decisions and authorizations to the target and
+SQL SHA-256, serializes repeated applications, consumes exact production grants
+once, and keeps manual sandbox receipts in memory. Risky production work can be
+replayed into a verified sandbox; validation includes configured tests, policy
+checks, and main user flows. A failed check retains the sandbox and stops. An
+automatic route re-verifies target and digest before production promotion.
+
+Only the exact `cruise migrate` command family can suppress a redundant native
+command approval. Raw `supabase`, `psql`, shell composition, credential flags,
+seed flags, and digest-authorized production commands remain native host
+decisions. Session routing is stored only under the private runtime directory
+and is removed with that runtime.
+
+## Runtime state and promotion
+
+Cruise classifies persistence by artifact type and terminal status, never by a
+model judgment that content "looks important." Each launcher or worker run
+gets a private `mkdtemp` directory under
+`$TMPDIR/cruise-runs/<workspace-hash>/` with mode `0700`:
+
+```text
+<session-id-hash>-<random>/
+  manifest.json
+  supervisor.json
+  attestation.json
+  research/
+  workers/
+  drafts/
+  evidence/
+```
+
+The manifest binds the exact workspace and session ID and carries its recovery
+expiry. Supervisor state, attestation scratch, worker packets, retry details,
+previews, and intermediate research stay there. The exact path is passed to
+children; no hook scans temp storage. Normal exit, SIGINT, and SIGTERM run
+cleanup. A startup janitor removes expired, valid, owned sessions and refuses
+symlinks or unsafe ownership. An unclean crash leaves only the recovery-TTL
+capsule.
+
+User-requested deliverables are promoted to their intended repository paths by
+atomic rename on one filesystem or copy-to-temporary then rename across
+filesystems. Completion promotes requested deliverables and compact evidence,
+then removes scratch. Blocked or stalled work retains only the repository
+request/Flight/queue resume surface and the host trace pointer. Aborted,
+rejected, or not-started work retains no prompt or recommendation artifact;
+the user reference may contain only a content-free status tombstone.
+
+The persistent `.cruise` control surface is limited to the currently resumable
+`ORIGIN.md`, `FLIGHT.md`, unfinished `QUEUE.md`, and compact
+`LAST-RUN.json` trace pointer (plus its local ignore rule). Terminal completion
+removes ORIGIN and Flight; a completed queue also removes Queue. A fresh
+unrelated request clears stale ORIGIN/Flight and deterministically deletes
+known legacy `runs/`, `goal/`, retry, supervisor, and attestation scratch while
+leaving unknown user files untouched.
+
+## Write-only user documents
+
+Cruise reserves root Markdown basenames beginning with `_` as user-only
+references. Agents, workers, source discovery, and product fingerprints must
+not read, search, summarize, or use these documents as context. Production
+reference writers use append-only no-follow descriptors. The changelog writer
+may read its own bounded generated marker structure only to preserve immutable
+commit segments during a targeted update; those bytes are never exposed to a
+model or used as task context.
+
+Executable launcher Goals append one chronological entry to
+`_FOR_USER_REFERENCE.md`. Entries use the user statuses `completed`, `blocked`,
+`aborted`, `unfinished`, and `not_started`, and serialize only current runtime
+inputs plus the current parsed Flight. Direct plugin Goals perform the same
+deterministic write with `cruise reference --status <status>` after recording
+their truthful Flight state. Append uses a no-follow file descriptor and never
+parses or merges prior prose.
+
+Aborted and not-started entries are content-free tombstones: status, end time,
+and trace pointer only. They never serialize the rejected request, plan,
+recommendation, reason, or Flight.
+
+`_CHANGELOG.md` is commit-triggered rather than terminal-turn-triggered. The
+launcher snapshots HEAD when a Cruise run starts and polls it while the hosted
+session continues. Uncommitted edits and a run that creates no commit cause no
+changelog write. A fast-forward HEAD change is expanded chronologically, so
+each newly observed commit receives exactly one immutable section. A checkout,
+reset, or branch switch is not misreported as a new commit. A commit-producing
+non-fast-forward reflog action such as amend or rebase records the rewritten
+commit IDs; the first commit in an initially unborn repository is also
+observed.
+
+For each observed commit, Cruise launches a bounded provider-native worker in
+parallel with the main session. Deterministic code gives that worker only
+bounded script-diff evidence for immutable commit IDs; the worker runs
+read-only from the private runtime directory and is not given the repository
+as its working directory or any user-document body. The main hosted turn
+therefore does no changelog inference. Invalid, missing, or timed-out worker
+output falls back to the bounded changed-symbol summarizer without failing the
+product run.
+
+Direct native Goal invocations have no launcher parent to poll Git. Their Goal
+skill snapshots HEAD and, at reconciliation or immediately after a commit,
+delegates each newly observed OID to one sequential native parallel
+bookkeeping agent. That agent invokes `cruise changelog --commit <oid>`; the
+same deterministic preparation, bounded inference, and targeted writer are
+used. Launcher-managed Goals never start this additional agent.
+
+The changelog contains a replaceable `Since last push` region at the top and an
+additive commit history below it. A targeted update replaces only the generated
+top slice and inserts the latest unseen commit section, preserving all prior
+commit-section bytes. Each script point uses
+`<file>: patch|delete|new - <summary>` with a 500-character cap. Markdown, JSON,
+Cruise state, generated user documents, diffstats, line counts, and raw patches
+are never rendered. The writer validates unique balanced markers, regular
+no-follow ownership, a size bound, and unchanged file identity before an
+fsynced temporary-file rename. A push by itself does not rewrite the file; the
+next observed commit resolves the then-current pushed baseline.

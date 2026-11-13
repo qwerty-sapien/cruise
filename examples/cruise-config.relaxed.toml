@@ -1,0 +1,6 @@
+schema_version = 1
+profile = "relaxed"
+
+[workflow]
+auto_promote_after_checks = true
+allow_manual_localhost = true

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -35,7 +35,16 @@ async function fixture(t) {
   await writeFile(join(root, 'matches.mjs'), Array.from({ length: 25 }, (_, index) => `export const needle${index} = 'needle';`).join('\n'));
   await writeFile(join(root, 'oversized.txt'), `${'z'.repeat(17_000)}\nsecond line\n`);
   await writeFile(join(root, 'dist.bin'), 'excluded');
-  git(root, ['add', '-f', 'AGENTS.md', 'source.mjs', 'data.json', 'table.csv', 'run.log', 'matches.mjs', 'oversized.txt', 'dist.bin']);
+  await mkdir(join(root, 'config'));
+  await mkdir(join(root, 'secrets'));
+  await mkdir(join(root, 'notes'));
+  await writeFile(join(root, '.env'), 'API_KEY=MINIREPO_DOTENV_SENTINEL\n');
+  await writeFile(join(root, '.env.local'), 'TOKEN=MINIREPO_DOTENV_LOCAL_SENTINEL\n');
+  await writeFile(join(root, 'config', 'credentials.json'), '{"password":"MINIREPO_CREDENTIAL_SENTINEL"}\n');
+  await writeFile(join(root, 'config', 'credentials.csv'), 'key,value\npassword,MINIREPO_CREDENTIAL_CSV_SENTINEL\n');
+  await writeFile(join(root, 'secrets', 'runtime.log'), 'MINIREPO_SECRET_LOG_SENTINEL\n');
+  await writeFile(join(root, 'notes', 'internal.md'), 'MINIREPO_EXPLICIT_SECRET_SENTINEL\n');
+  git(root, ['add', '-f', 'AGENTS.md', 'source.mjs', 'data.json', 'table.csv', 'run.log', 'matches.mjs', 'oversized.txt', 'dist.bin', '.env', '.env.local', 'config/credentials.json', 'config/credentials.csv', 'secrets/runtime.log', 'notes/internal.md']);
   git(root, ['commit', '-qm', 'fixture']);
   return root;
 }
@@ -128,4 +137,64 @@ test('tracked-file cache invalidates by current Git blob hash', async (t) => {
   assert.equal(changed.cache_hit, false);
   assert.notEqual(changed.cache_key, first.cache_key);
   assert.match(changed.content, /beta/u);
+});
+
+test('mini-repository excludes dotenv and secret paths before every retrieval route', async (t) => {
+  const root = await fixture(t);
+  await chmod(join(root, '.env'), 0o000);
+  t.after(() => chmod(join(root, '.env'), 0o600).catch(() => {}));
+
+  const explicitSensitivePaths = ['notes/internal.md'];
+  const mapped = await runContextView({ cwd: root, command: 'map', explicitSensitivePaths });
+  const searched = await runContextView({
+    cwd: root,
+    command: 'search',
+    args: ['MINIREPO_'],
+    explicitSensitivePaths,
+  });
+  const changed = await runContextView({ cwd: root, command: 'changed', explicitSensitivePaths });
+  for (const result of [mapped, searched, changed]) {
+    assert.doesNotMatch(result.content, /\.env|credentials|secrets\/runtime|MINIREPO_.*SENTINEL/u);
+    assert.equal(result.sources.some((path) => /\.env|credentials|secrets\/runtime/u.test(path)), false);
+  }
+  assert.equal(searched.source_count, 0);
+
+  const artifactDirectory = join(root, '.cruise', 'artifacts');
+  const before = await readdir(artifactDirectory);
+  for (const [command, args] of [
+    ['map', ['.env']],
+    ['search', ['MINIREPO_', '.env']],
+    ['slice', ['.env']],
+    ['symbols', ['.env.local']],
+    ['json-summary', ['config/credentials.json']],
+    ['table-summary', ['config/credentials.csv']],
+    ['log-summary', ['secrets/runtime.log']],
+  ]) {
+    await assert.rejects(
+      runContextView({ cwd: root, command, args }),
+      (error) => error?.code === 'CRUISE_SENSITIVE_PATH',
+    );
+  }
+  await assert.rejects(
+    runContextView({
+      cwd: root,
+      command: 'slice',
+      args: ['notes/internal.md'],
+      explicitSensitivePaths: ['notes/internal.md'],
+    }),
+    (error) => error?.code === 'CRUISE_SENSITIVE_PATH',
+  );
+  assert.deepEqual(await readdir(artifactDirectory), before);
+
+  const explicit = await runContextView({
+    cwd: root,
+    command: 'search',
+    args: ['MINIREPO_'],
+    explicitSensitivePaths: ['notes/internal.md'],
+  });
+  assert.equal(explicit.source_count, 0);
+  for (const artifact of await readdir(artifactDirectory)) {
+    const content = await readFile(join(artifactDirectory, artifact), 'utf8');
+    assert.doesNotMatch(content, /MINIREPO_.*SENTINEL/u);
+  }
 });

@@ -1,0 +1,50 @@
+schema_version = 1
+profile = "business-critical"
+
+[workflow]
+auto_promote_after_checks = true
+allow_manual_localhost = true
+
+[security]
+explicit_sensitive_paths = []
+
+# Project refs are identifiers, not credentials. Replace these examples.
+[[migration.targets]]
+name = "sandbox"
+environment = "sandbox"
+execution = "linked"
+expected_project_ref = "sandbox-project-ref"
+workdir = "."
+
+[[migration.targets]]
+name = "production"
+environment = "production"
+execution = "linked"
+expected_project_ref = "production-project-ref"
+workdir = "."
+
+[[migration.domains]]
+name = "noncritical-reporting"
+tables = ["public.report_snapshots"]
+service_critical = false
+auto_apply = ["add-nullable-column", "create-index-concurrently"]
+
+[[migration.validation.commands]]
+name = "database-tests"
+command = ["npm", "run", "test:database"]
+
+[[migration.validation.flows]]
+name = "main-user-flow"
+path = "/"
+critical = true
+
+[[migration.policy_checks]]
+id = "data-policy"
+command = ["npm", "run", "compliance:check"]
+
+# A changed trust digest is refreshed automatically; its source change is what
+# the migration policy evaluates.
+[[migration.derived_artifacts]]
+name = "model-egress-trust"
+path = "compliance/model-egress-trust.json"
+command = ["npm", "run", "trust:update"]

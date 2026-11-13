@@ -1,13 +1,13 @@
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
+import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-
-import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
 
 import {
   captureFlightAssuranceContext,
   evaluateFlightAssurance,
 } from './assurance.mjs';
+import { AUTHORIZATION_POLICY_INSTRUCTIONS } from './authorization-policy.mjs';
 import { inspectFlightPlan } from './flight-plan.mjs';
 import { normalizeRecommendedLevel } from './worker-policy.mjs';
 import { skillReference } from './provider.mjs';
@@ -16,6 +16,7 @@ import { captureWorkspaceFingerprint } from './supervisor.mjs';
 import {
   activateGoalSession,
   deactivateGoalSession,
+  runtimeSessionDirectory as registeredRuntimeDirectory,
 } from '../../hooks/session-marker.mjs';
 
 export const CLAUDE_WORKER_LEVEL_POLICY = Object.freeze({
@@ -32,9 +33,12 @@ const CLAUDE_HOST_INSTRUCTIONS = [
   INDEPENDENT_RELEASE_INSTRUCTIONS,
   COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
   'This Cruise session is running on Claude Code.',
+  AUTHORIZATION_POLICY_INSTRUCTIONS,
   'Use Claude Code native permissions, task tracking, resumable sessions, skills, and subagents.',
   'Claude Code has a conversation-level /goal but exposes no documented Codex-style Goal lifecycle API or Goal object to plugins; do not invent Goal endpoints or stack native /goal automatically.',
   skillTriggerInstructions(),
+  'Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Cruise updates them only through deterministic runtime code.',
+  'This launcher records Goal user references automatically; do not run cruise reference from the hosted task.',
   'For executable Goal work, compile .cruise/FLIGHT.md v2 with core and relevant domain quality profiles as the first execution act; bind truthful evidence to the current context fingerprint, and keep status truthful through assured completion or a concrete blocker. Flight grants no permission.',
   'A session-scoped Stop-hook supervisor may inject continuation, assurance repair, or realignment instructions; respond by gathering discriminating evidence or reporting the blocker honestly, never by weakening gates or repeating the failed attempt.',
 ].join(' ');
@@ -82,6 +86,20 @@ export function claudeWorkerArgs({ task, level = null }) {
   return args;
 }
 
+export function claudeChangelogWorkerArgs({ task }) {
+  if (typeof task !== 'string' || !task.trim()) throw new TypeError('changelog task is required');
+  return [
+    '-p',
+    '--permission-mode',
+    'plan',
+    '--output-format',
+    'json',
+    '--append-system-prompt',
+    'Summarize only the immutable evidence supplied in the request. Never inspect a repository or root underscore Markdown document. Return the requested JSON and do not edit the workspace.',
+    task,
+  ];
+}
+
 export async function runClaudeCli({
   cwd,
   args,
@@ -93,9 +111,16 @@ export async function runClaudeCli({
   return new Promise((resolve, reject) => {
     const child = spawnFn('claude', args, { cwd, env, stdio: 'inherit' });
     let settled = false;
+    const forwardSignal = (signal) => child.kill?.(signal);
+    const onSigint = () => forwardSignal('SIGINT');
+    const onSigterm = () => forwardSignal('SIGTERM');
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
     const finish = (result, error = null) => {
       if (settled) return;
       settled = true;
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
       if (error) reject(error);
       else resolve(result);
     };
@@ -104,6 +129,73 @@ export async function runClaudeCli({
       code: Number.isInteger(code) ? code : signal === 'SIGINT' ? 130 : 1,
       signal: signal ?? null,
     }));
+  });
+}
+
+async function runClaudeCaptured({
+  cwd,
+  args,
+  spawnFn = nodeSpawn,
+  env = process.env,
+  timeoutMs = 120_000,
+}) {
+  return new Promise((resolve, reject) => {
+    const child = spawnFn('claude', args, {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (error, value = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const timeout = setTimeout(() => {
+      child.kill?.('SIGTERM');
+      finish(new Error(`Claude changelog worker exceeded its ${timeoutMs}ms execution bound`));
+    }, timeoutMs);
+    timeout.unref?.();
+    child.stdout?.setEncoding?.('utf8');
+    child.stderr?.setEncoding?.('utf8');
+    child.stdout?.on?.('data', (chunk) => { stdout += String(chunk); });
+    child.stderr?.on?.('data', (chunk) => { stderr += String(chunk); });
+    child.once('error', (error) => finish(error));
+    child.once('exit', (code, signal) => {
+      if (code !== 0) {
+        finish(new Error(`Claude changelog worker exited ${code ?? signal ?? 'unknown'}: ${stderr.trim() || 'no diagnostic'}`));
+        return;
+      }
+      try {
+        const envelope = JSON.parse(stdout);
+        finish(null, typeof envelope?.result === 'string' ? envelope.result : stdout);
+      } catch {
+        finish(null, stdout);
+      }
+    });
+  });
+}
+
+export async function runClaudeChangelogWorker({
+  cwd,
+  task,
+  spawnFn,
+  env = process.env,
+} = {}) {
+  if (typeof cwd !== 'string' || !cwd) throw new TypeError('Claude cwd is required');
+  const workerEnv = { ...env };
+  delete workerEnv.CRUISE_RUNTIME_DIR;
+  delete workerEnv.CRUISE_SESSION_ID;
+  delete workerEnv.CRUISE_CLAUDE_GOAL;
+  return runClaudeCaptured({
+    cwd,
+    args: claudeChangelogWorkerArgs({ task }),
+    spawnFn,
+    env: workerEnv,
   });
 }
 
@@ -119,14 +211,34 @@ export async function runClaudeSession({
   planOnly = false,
   inspectPlan = inspectFlightPlan,
   captureFingerprint = captureWorkspaceFingerprint,
+  runtimeDirectory = null,
 } = {}) {
   const effectiveSessionId = resumeSessionId ?? sessionId;
-  if (skill === 'goal') {
-    await activateGoalSession({ cwd, session_id: effectiveSessionId });
-  }
+  const externallyManagedRuntime = runtimeDirectory !== null;
+  let activated = false;
   try {
+    if (skill === 'goal') {
+      await activateGoalSession({ cwd, session_id: effectiveSessionId });
+      activated = true;
+      const registered = await registeredRuntimeDirectory({
+        cwd,
+        session_id: effectiveSessionId,
+      });
+      if (runtimeDirectory !== null && runtimeDirectory !== registered) {
+        throw new Error('Claude runtime directory does not match the registered Cruise session');
+      }
+      runtimeDirectory = registered;
+    }
     const sessionEnv = { ...env };
-    delete sessionEnv.CRUISE_CLAUDE_GOAL;
+    if (runtimeDirectory) {
+      sessionEnv.CRUISE_RUNTIME_DIR = runtimeDirectory;
+      sessionEnv.CRUISE_SESSION_ID = effectiveSessionId;
+    } else {
+      delete sessionEnv.CRUISE_RUNTIME_DIR;
+      delete sessionEnv.CRUISE_SESSION_ID;
+    }
+    if (skill === 'goal') sessionEnv.CRUISE_CLAUDE_GOAL = '1';
+    else delete sessionEnv.CRUISE_CLAUDE_GOAL;
     const result = await runClaudeCli({
       cwd,
       args: claudeSessionArgs({
@@ -235,17 +347,31 @@ export async function runClaudeSession({
       ...(!assurance.allowsCompletion ? { reason: assurance.reasons.join('; ') } : {}),
     });
   } finally {
-    if (skill === 'goal') {
+    if (activated && !externallyManagedRuntime) {
       await deactivateGoalSession({ cwd, session_id: effectiveSessionId });
     }
   }
 }
 
-export async function runClaudeWorker({ cwd, task, level = null, spawnFn } = {}) {
+export async function runClaudeWorker({
+  cwd,
+  task,
+  level = null,
+  spawnFn,
+  runtimeDirectory = null,
+  sessionId = null,
+} = {}) {
   const result = await runClaudeCli({
     cwd,
     args: claudeWorkerArgs({ task, level }),
     spawnFn,
+    env: runtimeDirectory
+      ? {
+          ...process.env,
+          CRUISE_RUNTIME_DIR: runtimeDirectory,
+          CRUISE_SESSION_ID: sessionId,
+        }
+      : process.env,
   });
   if (result.code !== 0) {
     throw new Error(`Claude Code worker exited with status ${result.code}`);

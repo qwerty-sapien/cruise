@@ -1,5 +1,7 @@
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
 import { AppServerClient } from './app-server-client.mjs';
+import { AUTHORIZATION_POLICY_INSTRUCTIONS } from './authorization-policy.mjs';
+import { assertNoSecretMaterial, assertNoSensitiveAccessRequest } from './sensitive-path.mjs';
 import { normalizeRecommendedLevel, resolveWorkerPolicy } from './worker-policy.mjs';
 
 const DNS_ERROR = /\b(?:EAI_AGAIN|EAI_NONAME|ENOTFOUND|DNS_PROBE_FINISHED_NXDOMAIN)\b|getaddrinfo/iu;
@@ -73,7 +75,9 @@ async function oneAttempt({
   readOnly,
   timeoutMs,
   exceptionalConsequence,
+  transition,
 }) {
+  let nativeApprovalDenied = false;
   const client = clientFactory({
     spawnOptions: {
       cwd,
@@ -88,7 +92,15 @@ async function oneAttempt({
         : {}),
     },
     clientInfo: { name: 'cruise-worker', title: 'Cruise Worker', version: '0.1.0' },
-    onServerRequest,
+    onServerRequest: typeof onServerRequest !== 'function' ? onServerRequest : async (message, rpcClient) => {
+      const result = await onServerRequest(message, rpcClient, { nativeApprovalDenied });
+      if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(message.method)) {
+        if (result?.decision === 'decline' || result?.decision === 'cancel'
+          || (message.method === 'item/permissions/requestApproval' && result?.permissions
+            && Object.keys(result.permissions).length === 0)) nativeApprovalDenied = true;
+      }
+      return result;
+    },
   });
   const completion = deferred();
   const timeout = timeoutMs === null
@@ -105,6 +117,9 @@ async function oneAttempt({
   const output = [];
   const notification = (message) => {
     const params = message.params ?? {};
+    if (params.threadId && threadId && params.threadId !== threadId) return;
+    if (message.method === 'item/autoApprovalReview/completed'
+      && params.threadId === threadId && params.review?.status === 'denied') nativeApprovalDenied = true;
     if (message.method === 'item/agentMessage/delta') {
       const delta = String(params.delta ?? '');
       output.push(delta);
@@ -134,6 +149,7 @@ async function oneAttempt({
         recommendedLevel: level,
         catalog,
         exceptionalConsequence,
+        transition,
       });
       if (policy.degraded || !policy.worker.resolved.model || !policy.worker.resolved.reasoning_effort) {
         throw new Error(`required worker pair is unavailable: ${policy.degradation_reasons.join('; ')}`);
@@ -152,7 +168,7 @@ async function oneAttempt({
         : {}),
       serviceName: 'cruise_worker',
       ephemeral: true,
-      developerInstructions: INDEPENDENT_RELEASE_INSTRUCTIONS + ' Execute the requested bounded task. Use normal Codex approvals. Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Do not create Cruise reports, packets, archives, or workflow state.',
+      developerInstructions: `${INDEPENDENT_RELEASE_INSTRUCTIONS} ${policy?.worker.role_brief ?? 'Execute the requested bounded task.'} ${AUTHORIZATION_POLICY_INSTRUCTIONS} Use normal Codex approvals. Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Use Cruise context-view for repository retrieval so never-read path exclusions are enforced before access. Do not create Cruise reports, packets, archives, or workflow state.`,
     });
     threadId = started.thread.id;
     const turn = await client.request('turn/start', {
@@ -216,9 +232,12 @@ export async function runSimpleWorker({
   readOnly = false,
   timeoutMs = null,
   exceptionalConsequence = null,
+  transition = null,
 } = {}) {
   if (typeof cwd !== 'string' || !cwd) throw new TypeError('worker cwd is required');
   if (typeof task !== 'string' || !task.trim()) throw new TypeError('worker task is required');
+  assertNoSensitiveAccessRequest(task, 'worker task');
+  assertNoSecretMaterial(task, 'worker task');
   if (level !== null) normalizeRecommendedLevel(level);
   if (typeof readOnly !== 'boolean') throw new TypeError('worker readOnly must be a boolean');
   if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)) {
@@ -238,6 +257,7 @@ export async function runSimpleWorker({
         readOnly,
         timeoutMs,
         exceptionalConsequence,
+        transition,
       });
     } catch (cause) {
       const failure = classifyWorkerFailure(cause);

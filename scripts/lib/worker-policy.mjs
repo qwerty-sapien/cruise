@@ -6,14 +6,16 @@ import { MODEL_IDS, resolveModelPolicy } from './model-policy.mjs';
  * worker phases. This table is the complete recommended-level mapping.
  */
 export const WORKER_LEVEL_POLICY = Object.freeze({
-  1: Object.freeze({ agent_type: 'cruise_l1', alias: 'luna-M', tier: 'luna', reasoning_effort: 'medium' }),
-  2: Object.freeze({ agent_type: 'cruise_l2', alias: 'terra-M', tier: 'terra', reasoning_effort: 'medium' }),
-  3: Object.freeze({ agent_type: 'cruise_l3', alias: 'terra-H', tier: 'terra', reasoning_effort: 'high' }),
-  4: Object.freeze({ agent_type: 'cruise_l4', alias: 'terra-X', tier: 'terra', reasoning_effort: 'xhigh' }),
-  5: Object.freeze({ agent_type: 'cruise_l5', alias: 'sol-H', tier: 'sol', reasoning_effort: 'high' }),
-  6: Object.freeze({ agent_type: 'cruise_l6', alias: 'sol-X', tier: 'sol', reasoning_effort: 'xhigh' }),
-  7: Object.freeze({ agent_type: 'cruise_l7', alias: 'sol-U', tier: 'sol', reasoning_effort: 'ultra' }),
+  1: Object.freeze({ agent_type: 'cruise_l1', alias: 'luna-M', tier: 'luna', reasoning_effort: 'medium', role_brief: 'Cruise L1 coordination support: perform naming, formatting, deterministic extraction, or read-only mapping; do not make behavioral changes.' }),
+  2: Object.freeze({ agent_type: 'cruise_l2', alias: 'terra-X', tier: 'terra', reasoning_effort: 'xhigh', role_brief: 'Cruise L2 bounded worker: complete one clear local component and its focused test.' }),
+  3: Object.freeze({ agent_type: 'cruise_l3', alias: 'terra-U', tier: 'terra', reasoning_effort: 'ultra', role_brief: 'Cruise L3 bounded worker: resolve bounded multi-file or local-API behavior with focused regression coverage.' }),
+  4: Object.freeze({ agent_type: 'cruise_l4', alias: 'sol-X', tier: 'sol', reasoning_effort: 'xhigh', role_brief: 'Cruise L4 integration worker: complete ordinary multistep or cross-module work with focused integration checks.' }),
+  5: Object.freeze({ agent_type: 'cruise_l5', alias: 'astra-H', tier: 'astra', reasoning_effort: 'high', role_brief: 'Cruise L5 consequential worker: preserve the scoped high-consequence invariants and verify the affected boundary.' }),
+  6: Object.freeze({ agent_type: 'cruise_l6', alias: 'sol-U', tier: 'sol', reasoning_effort: 'ultra', role_brief: 'Cruise L6 reasoning worker: resolve the evidenced contradiction in the narrow high-consequence item and add a discriminating check.' }),
+  7: Object.freeze({ agent_type: 'cruise_l7', alias: 'astra-X', tier: 'astra', reasoning_effort: 'xhigh', role_brief: 'Cruise L7 exceptional worker: resolve only the exceptional scoped architecture or blocker with adversarial verification.' }),
 });
+
+const ASTRA_ROLE_CONTROLS = 'Infer routine gaps and persist within the bounded capsule; ask only about material unresolved decisions; keep output compact; calibrate tests to affected risk.';
 
 export const WORKER_LEVELS = Object.freeze(
   Object.keys(WORKER_LEVEL_POLICY).map(Number),
@@ -87,17 +89,18 @@ export const WORKER_POLICY_RECORD_SCHEMA = Object.freeze({
     worker: {
       type: 'object',
       additionalProperties: false,
-      required: ['agent_type', 'alias', 'requested', 'resolved', 'resolution_source'],
+      required: ['agent_type', 'alias', 'role_brief', 'requested', 'resolved', 'resolution_source'],
       properties: {
         agent_type: { type: 'string', enum: WORKER_AGENTS },
         alias: { type: 'string', minLength: 1 },
+        role_brief: { type: 'string', minLength: 1 },
         requested: {
           type: 'object',
           additionalProperties: false,
           required: ['tier', 'model_id', 'reasoning_effort'],
           properties: {
-            tier: { type: 'string', enum: ['luna', 'terra', 'sol'] },
-            model_id: { type: 'string', enum: [MODEL_IDS.luna, MODEL_IDS.terra, MODEL_IDS.sol] },
+            tier: { type: 'string', enum: ['luna', 'terra', 'sol', 'astra'] },
+            model_id: { type: 'string', enum: [MODEL_IDS.luna, MODEL_IDS.terra, MODEL_IDS.sol, MODEL_IDS.astra] },
             reasoning_effort: { type: 'string', enum: ['medium', 'high', 'xhigh', 'ultra'] },
           },
         },
@@ -136,6 +139,8 @@ export const WORKER_POLICY_RECORD_SCHEMA = Object.freeze({
         kind: { type: 'string', enum: ['escalation', 'deescalation'] },
         work_item: { type: 'string', minLength: 1 },
         evidence: { type: 'string', minLength: 1 },
+        from_level: { type: 'integer', minimum: 1, maximum: 7 },
+        failure_category: { type: 'string', minLength: 1 },
         exceptional_consequence: {
           type: 'object',
           additionalProperties: false,
@@ -187,6 +192,25 @@ export function normalizeRecommendedLevel(value) {
 function nonEmpty(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${label} is required`);
   return value.trim();
+}
+
+function selectLevelPolicy(level, transition) {
+  const base = WORKER_LEVEL_POLICY[level];
+  const evidencedL6ReasoningEscalation = level === 7
+    && transition?.kind === 'escalation'
+    && transition?.from_level === 6
+    && transition?.failure_category === 'reasoning'
+    && typeof transition?.evidence === 'string'
+    && transition.evidence.trim();
+  const selected = evidencedL6ReasoningEscalation
+    ? { ...base, alias: 'astra-U', reasoning_effort: 'ultra' }
+    : base;
+  return Object.freeze({
+    ...selected,
+    role_brief: selected.tier === 'astra'
+      ? `${selected.role_brief} ${ASTRA_ROLE_CONTROLS}`
+      : selected.role_brief,
+  });
 }
 
 /** Classify a single work item from deterministic complexity labels and consequence evidence. */
@@ -268,7 +292,7 @@ export function resolveWorkerPolicy({
     throw new Error('the initial worker attempt has no escalation reason; every later attempt requires one');
   }
 
-  const selection = WORKER_LEVEL_POLICY[level];
+  const selection = selectLevelPolicy(level, transition);
   const resolution = resolveModelPolicy({
     stage: 'root_managed_worker_execution',
     catalog,
@@ -294,6 +318,7 @@ export function resolveWorkerPolicy({
     worker: {
       agent_type: selection.agent_type,
       alias: selection.alias,
+      role_brief: selection.role_brief,
       requested: {
         tier: resolution.requested.tier,
         model_id: resolution.requested.model_id,
@@ -317,8 +342,8 @@ export function resolveWorkerPolicy({
 
 /**
  * Create the next evidenced soft-failure attempt. The level increases by one
- * and is capped at 7, so selection remains monotonic even when a workflow's
- * reviewed stop conditions permit additional attempts at the strongest level.
+ * and is capped at 7 even though the model ladder is intentionally
+ * non-monotonic. Reviewed stop conditions may permit additional L7 attempts.
  */
 export function escalateWorkerPolicy(previous, {
   catalog = [],
@@ -336,6 +361,9 @@ export function escalateWorkerPolicy(previous, {
     throw new Error('worker escalation requires new discriminating evidence');
   }
   const normalizedFailure = failureCategory == null ? null : String(failureCategory).trim().toLowerCase();
+  if (failureCategory != null && !normalizedFailure) {
+    throw new TypeError('failureCategory must be null or a non-empty string');
+  }
   if (normalizedFailure && NON_ESCALATING_FAILURES.has(normalizedFailure)) {
     throw new Error(`${normalizedFailure} failure does not justify a model escalation`);
   }
@@ -358,6 +386,8 @@ export function escalateWorkerPolicy(previous, {
       kind: 'escalation',
       work_item: narrowWorkItem,
       evidence: discriminatingEvidence,
+      from_level: previous.recommended_level,
+      ...(normalizedFailure ? { failure_category: normalizedFailure } : {}),
       ...(exceptionalRecord ? { exceptional_consequence: exceptionalRecord } : {}),
     },
   });

@@ -4,6 +4,11 @@ import test from 'node:test';
 import { parseArgs } from '../scripts/cruise.mjs';
 
 import {
+  escalateModelPolicy,
+  MODEL_POLICY_DEFAULTS,
+  resolveModelPolicy,
+} from '../scripts/lib/model-policy.mjs';
+import {
   resolveRootPolicy,
   selectRootRequest,
 } from '../scripts/lib/root-policy.mjs';
@@ -33,7 +38,7 @@ function catalog() {
         hidden: false,
         isDefault: false,
         defaultReasoningEffort: 'medium',
-        supportedReasoningEfforts: ['medium', 'high', 'xhigh'],
+        supportedReasoningEfforts: ['medium', 'high', 'xhigh', 'ultra'],
       },
       {
         id: 'gpt-5.6-sol',
@@ -43,9 +48,79 @@ function catalog() {
         defaultReasoningEffort: 'high',
         supportedReasoningEfforts: ['high', 'xhigh', 'ultra', 'max'],
       },
+      {
+        id: 'gpt-6-astra',
+        model: 'gpt-6-astra',
+        hidden: false,
+        isDefault: false,
+        defaultReasoningEffort: 'high',
+        supportedReasoningEfforts: ['high', 'xhigh', 'ultra'],
+      },
     ],
   };
 }
+
+test('stage defaults preserve their semantic levels on the new ladder', () => {
+  const expected = {
+    initial_classification: ['luna', 'medium'],
+    bounded_repository_mapping: ['terra', 'xhigh'],
+    capability_inventory: ['terra', 'xhigh'],
+    quick_implementation: ['sol', 'xhigh'],
+    quick_verification: ['sol', 'xhigh'],
+    goal_clarification_and_planning: ['sol', 'xhigh'],
+    normal_planned_execution: ['sol', 'xhigh'],
+    independent_normal_verification: ['sol', 'xhigh'],
+    debug_hypothesis_generation: ['sol', 'xhigh'],
+    difficult_debug_or_failed_normal_execution: ['astra', 'high'],
+    architectural_or_consequential_implementation: ['astra', 'high'],
+    repeated_failure_or_exceptional_consequence: ['sol', 'ultra'],
+    research_retrieval_and_extraction: ['terra', 'xhigh'],
+    research_synthesis_and_recommendation: ['sol', 'xhigh'],
+    high_conflict_or_frontier_research: ['astra', 'high'],
+    routine_structured_scans: ['terra', 'xhigh'],
+  };
+  assert.deepEqual(Object.keys(MODEL_POLICY_DEFAULTS), Object.keys(expected));
+  for (const [stage, [tier, reasoningEffort]] of Object.entries(expected)) {
+    assert.deepEqual(MODEL_POLICY_DEFAULTS[stage], {
+      tier,
+      reasoning_effort: reasoningEffort,
+    });
+  }
+});
+
+test('generic evidenced escalation follows the non-monotonic ladder', () => {
+  let policy = resolveModelPolicy({ stage: 'initial_classification', catalog: catalog() });
+  const expected = [
+    ['terra', 'xhigh'],
+    ['terra', 'ultra'],
+    ['sol', 'xhigh'],
+    ['astra', 'high'],
+    ['sol', 'ultra'],
+  ];
+  for (const [tier, reasoningEffort] of expected) {
+    policy = escalateModelPolicy(policy, {
+      catalog: catalog(),
+      reason: `evidence requires ${tier} ${reasoningEffort}`,
+    });
+    assert.equal(policy.requested.tier, tier);
+    assert.equal(policy.requested.reasoning_effort, reasoningEffort);
+  }
+
+  const standardFinal = escalateModelPolicy(policy, {
+    catalog: catalog(),
+    reason: 'evidence requires the reviewed final ladder level',
+  });
+  assert.equal(standardFinal.requested.tier, 'astra');
+  assert.equal(standardFinal.requested.reasoning_effort, 'xhigh');
+
+  const exceptionalFinal = escalateModelPolicy(policy, {
+    catalog: catalog(),
+    reason: 'exceptional evidence requires the strongest Astra review',
+    reasoningEffort: 'ultra',
+  });
+  assert.equal(exceptionalFinal.requested.tier, 'astra');
+  assert.equal(exceptionalFinal.requested.reasoning_effort, 'ultra');
+});
 
 test('Goal root is explicitly Sol high and weaker overrides require a diagnostic record', () => {
   const policy = resolveRootPolicy({ catalog: catalog() });
@@ -105,12 +180,12 @@ test('Goal root is explicitly Sol high and weaker overrides require a diagnostic
 test('every L1 through L7 mapping is exact', () => {
   const expected = [
     [1, 'gpt-5.6-luna', 'medium'],
-    [2, 'gpt-5.6-terra', 'medium'],
-    [3, 'gpt-5.6-terra', 'high'],
-    [4, 'gpt-5.6-terra', 'xhigh'],
-    [5, 'gpt-5.6-sol', 'high'],
-    [6, 'gpt-5.6-sol', 'xhigh'],
-    [7, 'gpt-5.6-sol', 'ultra'],
+    [2, 'gpt-5.6-terra', 'xhigh'],
+    [3, 'gpt-5.6-terra', 'ultra'],
+    [4, 'gpt-5.6-sol', 'xhigh'],
+    [5, 'gpt-6-astra', 'high'],
+    [6, 'gpt-5.6-sol', 'ultra'],
+    [7, 'gpt-6-astra', 'xhigh'],
   ];
   for (const [level, model, effort] of expected) {
     const policy = resolveWorkerPolicy({
@@ -206,6 +281,14 @@ test('L7 requires an explicit exceptional-consequence record', () => {
   });
   assert.equal(routed.recommended_level, 7);
   assert.equal(routed.exceptional_consequence.consequence, 'irreversible cross-tenant production effect');
+  const directLevelSeven = resolveWorkerPolicy({
+    recommendedLevel: routed.recommended_level,
+    catalog: catalog(),
+    exceptionalConsequence: routed.exceptional_consequence,
+  });
+  assert.equal(directLevelSeven.worker.requested.model_id, 'gpt-6-astra');
+  assert.equal(directLevelSeven.worker.requested.reasoning_effort, 'xhigh');
+  assert.equal(directLevelSeven.transition, undefined);
 
   const levelSix = resolveWorkerPolicy({ recommendedLevel: 6, catalog: catalog() });
   assert.throws(() => escalateWorkerPolicy(levelSix, {
@@ -223,7 +306,12 @@ test('L7 requires an explicit exceptional-consequence record', () => {
       consequence: 'irreversible production effect',
       rationale: 'the focused trace proves there is no rollback path',
     },
+    failureCategory: 'reasoning',
   });
   assert.equal(levelSeven.recommended_level, 7);
+  assert.equal(levelSeven.worker.requested.model_id, 'gpt-6-astra');
+  assert.equal(levelSeven.worker.requested.reasoning_effort, 'ultra');
+  assert.equal(levelSeven.transition.from_level, 6);
+  assert.equal(levelSeven.transition.failure_category, 'reasoning');
   assert.equal(levelSeven.transition.exceptional_consequence.rationale, 'the focused trace proves there is no rollback path');
 });

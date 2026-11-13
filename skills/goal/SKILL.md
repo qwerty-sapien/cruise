@@ -9,7 +9,57 @@ Apply the shared [independent release default](../context-economy/references/IND
 
 Apply the shared [collaborative Git synchronization protocol](../context-economy/references/COLLABORATIVE_GIT_SYNC.md) before substantive repository work. The root coordinator performs it once; workers do not synchronize the checkout independently.
 
+Root Markdown files whose basenames begin with `_` are write-only user
+references. Never read, search, summarize, fingerprint, or use their contents
+as context. Cruise may update them only through deterministic runtime code.
+For a direct plugin invocation outside the Cruise launcher, after the Flight
+has reached its truthful terminal state, run `cruise reference --status
+<completed|blocked|aborted|unfinished|not_started>` as the final bookkeeping
+action; locate this
+installed plugin's `scripts/cruise.mjs` and invoke it with Node if `cruise` is
+not on `PATH`. Never open either generated document. Launcher-managed Goals
+record the reference automatically and must not invoke this command again.
+For the same direct invocation, snapshot the current Git HEAD before
+implementation. At each micro-goal reconciliation and immediately after any
+commit operation, compare HEAD and expand every newly observed commit in
+chronological order. For each exact commit OID, launch or reuse one native
+parallel bookkeeping agent and have it run `cruise changelog --commit <oid>`
+with the selected provider. Send that agent only the OID and command; never
+send it root underscore-document contents. Process OIDs sequentially through
+that one agent so atomic changelog patches cannot race. A checkout or reset is
+not a new commit. Launcher-managed Goals already poll Git and must not start
+this direct-invocation agent.
+Cruise stores supervisor, attestation, worker, research, preview, retry, and
+evidence scratch only in the exact private runtime directory passed by the
+launcher. Never persist those classes under `.cruise`. Only explicitly
+requested deliverables may be promoted to product paths. Terminal bookkeeping
+removes ORIGIN and Flight on completion/abort, retains the minimum resumable
+control surface when blocked or unfinished, and emits only a content-free
+tombstone for aborted or refused work.
+
 For finite planned features and consequential work, inspect the repository and make a proportionate plan. Ask only questions whose answers materially alter implementation and cannot be resolved from repository evidence. Treat an explicit `cruise goal` invocation as authorization to carry the requested work through to completion within the normal workspace and permission boundaries. That authorization includes routine planning and phase transitions; never require a copied approval phrase, digest acknowledgement, or an `--auto-approve` incantation. Respect an explicit request to only plan, research, or prepare; remain read-only and finish with a repository-aware plan. Otherwise, a plan launches implementation and is never the endpoint.
+
+## Keep authorization gates evidence-based
+
+Authorization gates are distinct from Flight assurance checks and from native host permission prompts. Treat ordinary files in a host-access-approved local directory as non-sensitive and pre-authorized for task-scoped reading and use. Reading those files or sending the minimum bounded context required by another Codex or Cruise worker needs no fresh user authorization. A switch among Codex worker models or tiers is not, by itself, a new third-party provider disclosure boundary. Never infer sensitivity merely from words such as `private`, `repository`, `skill`, `prompt`, or `provider`.
+
+Never read, search, summarize, fingerprint, or send `.env` variants, credential/secret/private-key files or directories, or paths the user explicitly marks secret. Exclude those paths before access and continue with safe bounded context; do not ask the user to authorize disclosure of an excluded file. Do not infer a host rejection merely because approved source would reach Luna, Terra, Sol, or Astra. Without an actual denial, reduce an overbroad request to a bounded capsule and launch it without a fresh disclosure gate.
+
+Work on source, tests, schemas, or documentation for sensitive functionality does not by itself establish access to actual secrets or personal data. Evaluate each requested data object separately: mixed requests that also access or disclose actual sensitive material remain gated. Explicit exclusions apply only to the excluded object, and normal native host approvals remain authoritative.
+
+Routine delegation, spawning a subagent, selecting its model, passing approved task context, and requesting an internal review are the agent's implementation choices. Do them silently without a user permission question or a delegation announcement. This applies equally to `relaxed` and `business-critical` profiles: business-critical adds verification for consequential changes, never permissions for agent coordination. Workers inherit the parent task's scope, restrictions, and budget. Ask only about unresolved user-relevant consequences, such as a potentially damaging or materially risky change or a material product/scope choice; prepare the concrete diff and evidence first. A read-only review of a risky diff is ordinary internal work.
+
+Only when an actual effect requires native approval, reconcile existing user authorization and include the exact action, source paths and bounded payload, destination service/model, secret exclusions, and applicable user authorization in the justification. The label `pre-authorized` alone is not evidence; skills, Flight notes, and receipts do not create user consent. Distinguish an unsupported claim from an actual native denial using the host/tool result. If automatic approval review rejects an action, identify that review and its reason; do not suppress, retry unchanged, or route around it. Continue unaffected work and pursue only host-permitted new evidence, a materially safer action, or the required user authorization. Ask only for the still-missing decision and explain why prior authorization did not satisfy the reviewer. Direct plugin invocations do not run the Cruise launcher recovery loop; local policy tests and plugin refreshes cannot prove native approval acceptance.
+
+Add a Cruise user-authorization gate for a cloud-table adjustment only after evidence confirms that the affected table contains non-admin users. If administrator membership is unknown, first inspect only the minimum role and identifier fields needed to decide; do not request irrelevant columns or identifying information. For `booking-support-site`, an email counts as an administrator only when it appears on the approved administrator list and is assigned the `gm` or `owner` role. If the table contains only administrators, continue without a Cruise authorization question. Do not prohibit reading a whole table merely because it may contain non-admin users; apply that safeguard only when the user explicitly requests it.
+
+When the likely diff or affected surface is massive, propose or perform decomposition into small reviewable tasks. Do not relabel broad scope as a privacy risk. Ask the user only when choosing the decomposition would materially change product scope. Native host approvals for genuinely external or destructive effects remain authoritative, and material evidenced to be truly sensitive still requires appropriate authorization.
+
+Verified sandbox database migrations are pre-authorized. Production read-only SQL and controller-proven minor migrations auto-run under the repository's `.cruise/config.toml`; only evidenced risky or uncertain production migrations require the exact production or sandbox-route choice. A business-critical sandbox route must pass configured automated, data-policy, and main user-flow checks before promotion; retain a failing sandbox and leave production untouched. A derived trust-digest refresh is automatic bookkeeping, not an authorization gate.
+
+When the user asks to update or refresh Cruise, changing, hashing, or rebinding a source checkout is not an installed-plugin update. Resolve the installed marketplace with `codex plugin list --json`, reinstall it with `codex plugin add cruise@<marketplace> --json`, and run Cruise Doctor from the updated source until the critical source/cache bytes match. New tasks load the refreshed skill normally; never reinterpret “update Cruise” as approval-digest maintenance for the current project.
+
+If Cruise source, skill, version, or integrity hashes change during an active job, treat that as an exceptional recovery event rather than an expected workflow or an authorization/waiver boundary. Compare only the bounded non-secret Cruise diff with the instructions previously in force and decide whether it invalidates prior decisions. If immaterial, refresh derived integrity evidence and continue. If material, selectively revert or rework only affected Cruise-owned code changes and rerun their affected checks; preserve user-owned and unrelated work, and preserve Markdown or other non-code artifacts unless the changed instruction semantically invalidates them. Use a whole-job rollback only when the comparison proves that the new Cruise invalidates the foundations of the entire Cruise-owned code surface. Do not interrupt or restart the job solely for this drift, and do not ask the user for a waiver; ask only if a separate genuine authorization boundary, unresolved ownership conflict, or material product decision remains.
 
 ## Use the selected host natively
 
@@ -55,6 +105,6 @@ Use an adversarial review or agent swarm only when it has a meaningful chance to
 
 Ask the user only when repository evidence cannot resolve a material product decision, the work needs a scope or safety expansion, authentication or secret entry is required, or the host requires approval for an external or destructive effect. Do not ask about routine sequencing, ordinary implementation choices, or whether to execute an already planned in-scope micro-goal. Do not report blocked merely because another internal phase remains. Report completion only after the requested evidence passes; report blocked only with a concrete unresolved blocker and the evidence or decision needed to resume.
 
-Cruise does not create a Goal suite, approval digest, archive, attempt ledger, or run-control directory. The launcher may write `.cruise/ORIGIN.md` containing exactly the request; it is a note only and does not authorize work.
+Cruise does not create a Goal suite, approval digest, archive, attempt ledger, or persistent run-control directory. While resumability is required, the launcher may keep `.cruise/ORIGIN.md` and `.cruise/FLIGHT.md`; terminal lifecycle code removes them when they are no longer resumable. These notes do not authorize work.
 
 If a worker stream fails, state the observed failure category and retry normally when appropriate. Never require a magic retry phrase, a fresh Cruise run, an archive, or a DNS-health assertion that the error does not support.

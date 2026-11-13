@@ -182,6 +182,24 @@ test('product fingerprints include HEAD and exact untracked contents', async (t)
     await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
     secondLink,
   );
+  await writeFile(join(cwd, '_FOR_USER_REFERENCE.md'), 'private user reference one\n', 'utf8');
+  const userReferenceExcluded = await captureWorkspaceFingerprint(cwd, {
+    excludeFlightPlan: true,
+  });
+  await writeFile(join(cwd, '_FOR_USER_REFERENCE.md'), 'private user reference two\n', 'utf8');
+  assert.equal(
+    await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
+    userReferenceExcluded,
+  );
+  await writeFile(join(cwd, '_PRIVATE.MD'), 'uppercase extension one\n', 'utf8');
+  const uppercaseUserDocumentExcluded = await captureWorkspaceFingerprint(cwd, {
+    excludeFlightPlan: true,
+  });
+  await writeFile(join(cwd, '_PRIVATE.MD'), 'uppercase extension two\n', 'utf8');
+  assert.equal(
+    await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
+    uppercaseUserDocumentExcluded,
+  );
 });
 
 test('surface fingerprints ignore edits outside their repository-relative paths', async (t) => {
@@ -198,6 +216,26 @@ test('surface fingerprints ignore edits outside their repository-relative paths'
   assert.equal(await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] }), baseline);
   await writeFile(join(cwd, 'src', 'owner.mjs'), 'export const value = 2;\n', 'utf8');
   assert.notEqual(await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] }), baseline);
+});
+
+test('workspace fingerprints exclude tracked and untracked secret files before content hashing', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-secret-exclusion-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(join(cwd, 'config'));
+  await writeFile(join(cwd, 'safe.txt'), 'safe one\n', 'utf8');
+  await writeFile(join(cwd, '.env'), 'API_KEY=MINIREPO_ONE\n', 'utf8');
+  await writeFile(join(cwd, 'config', 'credentials.json'), '{"token":"MINIREPO_TWO"}\n', 'utf8');
+  assert.equal(spawnSync('git', ['init', '--quiet'], { cwd }).status, 0);
+  assert.equal(spawnSync('git', ['add', '-f', 'safe.txt', '.env', 'config/credentials.json'], { cwd }).status, 0);
+  const baseline = await captureWorkspaceFingerprint(cwd);
+
+  await writeFile(join(cwd, '.env'), 'API_KEY=MINIREPO_CHANGED\n', 'utf8');
+  await writeFile(join(cwd, 'config', 'credentials.json'), '{"token":"MINIREPO_CHANGED"}\n', 'utf8');
+  await writeFile(join(cwd, 'local-secret.txt'), 'MINIREPO_UNTRACKED_CHANGED\n', 'utf8');
+  assert.equal(await captureWorkspaceFingerprint(cwd), baseline);
+
+  await writeFile(join(cwd, 'safe.txt'), 'safe two\n', 'utf8');
+  assert.notEqual(await captureWorkspaceFingerprint(cwd), baseline);
 });
 
 test('failure signatures ignore paths, line numbers, hex values, and whitespace', () => {

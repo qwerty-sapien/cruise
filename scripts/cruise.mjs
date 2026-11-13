@@ -1,18 +1,25 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { readFile, stat, realpath } from 'node:fs/promises';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdir, readFile, stat, realpath, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
-import { resolve } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   AppServerClient,
   AppServerInactivityError,
 } from './lib/app-server-client.mjs';
-import { runClaudeSession, runClaudeWorker } from './lib/claude-cli.mjs';
+import {
+  runClaudeChangelogWorker,
+  runClaudeSession,
+  runClaudeWorker,
+} from './lib/claude-cli.mjs';
+import { CommitChangelogObserver } from './lib/changelog-observer.mjs';
 import {
   inspectFlightPlan,
   readFlightPlan,
@@ -22,9 +29,9 @@ import {
   captureFlightAssuranceContext,
   evaluateFlightAssurance,
 } from './lib/assurance.mjs';
-import { writeOriginPrompt } from './lib/origin-note.mjs';
+import { readOriginPrompt, writeOriginPrompt } from './lib/origin-note.mjs';
 import { pickOne } from './lib/picker.mjs';
-import { providerDefinition, resolveProvider, skillReference } from './lib/provider.mjs';
+import { providerDefinition, resolveProvider } from './lib/provider.mjs';
 import {
   milestoneToFlightPlan,
   nextReadyMilestone,
@@ -37,6 +44,7 @@ import {
   SimpleCruiseSession,
 } from './lib/simple-session.mjs';
 import { runSimpleWorker } from './lib/simple-worker.mjs';
+import { automaticDelegationAuthorization } from './lib/authorization-policy.mjs';
 import { createStagedHandoff } from './lib/staged-handoff.mjs';
 import {
   buildContextCapsule,
@@ -54,11 +62,27 @@ import {
   resolveBudgetOptions,
 } from './lib/quota-guard.mjs';
 import {
+  cleanupRuntimeSession,
+  cleanupLegacyCruiseState,
+  createRuntimeSession,
+  finalizeCruiseControlState,
+  prepareCruiseControlState,
+} from './lib/runtime-state.mjs';
+import {
   activateGoalSession,
   deactivateGoalSession,
   releaseCruiseWorkspace,
   reserveCruiseWorkspace,
+  runtimeSessionDirectory,
 } from '../hooks/session-marker.mjs';
+import {
+  writeGoalUserDocuments,
+} from './lib/user-reference.mjs';
+import { loadCruiseConfig } from './lib/migration-config.mjs';
+import {
+  MigrationController,
+  SupabaseCliMigrationAdapter,
+} from './lib/migration-controller.mjs';
 
 const require = createRequire(import.meta.url);
 const packageMetadata = require('../package.json');
@@ -79,15 +103,25 @@ Usage:
   cruise --claude goal --resume <session-id> [-C <directory>]
   cruise [--codex|--claude] queue <status|run> [-C <directory>]
   cruise attest [-C <directory>] [--json]
+  cruise reference --status <completed|blocked|aborted|unfinished|not_started> [-C <directory>]
+  cruise [--codex|--claude] changelog --commit <oid> [-C <directory>]
   cruise [--codex|--claude] worker [--level <1-7>] [-C <directory>] <task...>
   cruise usage [-C <directory>] [--json]
   cruise budget [-C <directory>] [--json] [--strict-budget]
+  cruise config <show|validate> [-C <directory>] [--json]
+  cruise migrate <inspect|apply> --target <name> [--path <migration.sql>]... [--sandbox-first <auto|manual|off>] [--json]
+  cruise migrate query --target <name> --file <query.sql> [--json]
+  cruise migrate <status|route> [--sandbox-first <auto|manual>] [--json]
   cruise [--codex|--claude] doctor [--json]
 
 Budget options:
   --weekly-delta-cap <percent>   Campaign increase allowed within the weekly window (default 9.0)
   --goal-reservation <percent>  Reservation required before Goal or worker launch (default 2.25)
   --strict-budget               Pause when weekly account data is unavailable
+
+Worker L6-to-L7 reasoning escalation:
+  --reasoning-escalation-evidence <text>  With Codex --managed --complexity repeated --level 7
+                                          and an exceptional-consequence record, select Astra ultra
 
 Cruise records exact executable skill requests in .cruise/ORIGIN.md. Build may compile an
 advisory .cruise/QUEUE.md; queue run turns each ready milestone into an advisory
@@ -153,17 +187,26 @@ export function parseArgs(argv, { env = process.env } = {}) {
   if (args[0] === 'picker-demo') {
     throw new Error('picker-demo was removed; Cruise selectors are available only when the active host requests a real choice.');
   }
-  if (args[0] === 'config') {
-    throw new Error(`Cruise has no persistent config command. State worker-level or communication-style preferences in the current ${skillReference(provider, '<skill>')} request.`);
-  }
   if (args[0] === 'refine') {
     throw new Error('Cruise Refine was folded into Goal. Use `cruise goal "<request>"`; for read-only planning, say "plan only".');
   }
   let command = 'start';
-  if (['start', ...PUBLIC_SKILLS, 'queue', 'attest', 'worker', 'usage', 'budget', 'doctor', 'help'].includes(args[0])) {
+  if (['start', ...PUBLIC_SKILLS, 'queue', 'attest', 'reference', 'changelog', 'worker', 'usage', 'budget', 'config', 'migrate', 'doctor', 'help'].includes(args[0])) {
     command = args.shift();
   }
   let queueAction = null;
+  let configAction = null;
+  let migrationAction = null;
+  if (command === 'config') {
+    configAction = args.shift() ?? null;
+    if (!['show', 'validate'].includes(configAction)) throw new Error('cruise config requires show or validate.');
+  }
+  if (command === 'migrate') {
+    migrationAction = args.shift() ?? null;
+    if (!['inspect', 'apply', 'query', 'status', 'route'].includes(migrationAction)) {
+      throw new Error('cruise migrate requires inspect, apply, query, status, or route.');
+    }
+  }
   const options = {
     command,
     skill: PUBLIC_SKILLS.includes(command) ? command : 'goal',
@@ -173,7 +216,19 @@ export function parseArgs(argv, { env = process.env } = {}) {
     help: false,
     version: false,
     level: null,
+    userStatus: null,
+    commit: null,
     promptParts: [],
+    ...(command === 'config' ? { configAction } : {}),
+    ...(command === 'migrate' ? {
+      migrationAction,
+      targetName: null,
+      migrationPaths: [],
+      sqlFile: null,
+      sandboxFirst: null,
+      authorizationDigest: null,
+      runtimeDirectory: env.CRUISE_RUNTIME_DIR ?? null,
+    } : {}),
     ...resolveBudgetOptions({ env }),
   };
   for (let index = 0; index < args.length; index += 1) {
@@ -187,7 +242,44 @@ export function parseArgs(argv, { env = process.env } = {}) {
     }
     if (arg === '-h' || arg === '--help') options.help = true;
     else if (arg === '-V' || arg === '--version') options.version = true;
-    else if (arg === '--json' && ['doctor', 'attest', 'usage', 'budget'].includes(command)) options.json = true;
+    else if (arg === '--json' && ['doctor', 'attest', 'usage', 'budget', 'config', 'migrate'].includes(command)) options.json = true;
+    else if (arg === '--target') {
+      if (command !== 'migrate') throw new Error('--target is supported only by cruise migrate.');
+      const value = args[++index];
+      if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(value ?? '')) throw new Error('--target requires a configured target name.');
+      options.targetName = value;
+    }
+    else if (arg === '--path') {
+      if (command !== 'migrate' || !['inspect', 'apply'].includes(migrationAction)) {
+        throw new Error('--path is supported only by cruise migrate inspect or apply.');
+      }
+      const value = args[++index];
+      if (!value) throw new Error('--path requires a migration SQL file.');
+      options.migrationPaths.push(value);
+    }
+    else if (arg === '--file') {
+      if (command !== 'migrate' || migrationAction !== 'query') {
+        throw new Error('--file is supported only by cruise migrate query.');
+      }
+      const value = args[++index];
+      if (!value) throw new Error('--file requires a SQL file.');
+      options.sqlFile = value;
+    }
+    else if (arg === '--sandbox-first' || arg.startsWith('--sandbox-first=')) {
+      if (command !== 'migrate') throw new Error('--sandbox-first is supported only by cruise migrate.');
+      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++index];
+      if (!['auto', 'manual', 'off'].includes(value ?? '')) throw new Error('--sandbox-first requires auto, manual, or off.');
+      if (migrationAction === 'route' && value === 'off') throw new Error('cruise migrate route accepts only auto or manual.');
+      options.sandboxFirst = value;
+    }
+    else if (arg === '--authorize-digest') {
+      if (command !== 'migrate' || migrationAction !== 'apply') {
+        throw new Error('--authorize-digest is supported only by cruise migrate apply.');
+      }
+      const value = args[++index];
+      if (!/^[0-9a-f]{64}$/iu.test(value ?? '')) throw new Error('--authorize-digest requires a SHA-256 digest.');
+      options.authorizationDigest = value.toLowerCase();
+    }
     else if (arg === '--weekly-delta-cap') {
       const value = args[++index];
       if (value === undefined) throw new Error('--weekly-delta-cap requires a percent.');
@@ -220,6 +312,22 @@ export function parseArgs(argv, { env = process.env } = {}) {
     else if (arg === '--cheaper-diagnostic') {
       if (command !== 'goal') throw new Error('--cheaper-diagnostic is supported only by cruise goal.');
       options.cheaperDiagnostic = true;
+    }
+    else if (arg === '--status') {
+      if (command !== 'reference') throw new Error('--status is supported only by cruise reference.');
+      const value = args[++index];
+      if (!['completed', 'blocked', 'aborted', 'unfinished', 'not_started'].includes(value)) {
+        throw new Error('--status requires completed, blocked, aborted, unfinished, or not_started.');
+      }
+      options.userStatus = value;
+    }
+    else if (arg === '--commit') {
+      if (command !== 'changelog') throw new Error('--commit is supported only by cruise changelog.');
+      const value = args[++index];
+      if (!/^[0-9a-f]{4,64}$/iu.test(value ?? '')) {
+        throw new Error('--commit requires a hexadecimal Git object ID.');
+      }
+      options.commit = value;
     }
     else if (['--bootstrap-timeout-ms', '--staged-handoff', '--ready-file'].includes(arg)) {
       if (command !== 'goal' || provider !== 'codex') {
@@ -299,6 +407,15 @@ export function parseArgs(argv, { env = process.env } = {}) {
       if (!value) throw new Error('--expansion-evidence requires confirmed evidence.');
       options.expansionEvidence = value;
     }
+    else if (arg === '--reasoning-escalation-evidence') {
+      if (command !== 'worker') throw new Error('--reasoning-escalation-evidence is supported only by cruise worker.');
+      if (options.reasoningEscalationEvidence !== undefined) {
+        throw new Error('--reasoning-escalation-evidence may be supplied only once.');
+      }
+      const value = args[++index];
+      if (!value?.trim()) throw new Error('--reasoning-escalation-evidence requires non-empty reasoning evidence.');
+      options.reasoningEscalationEvidence = value;
+    }
     else if (arg === '--exceptional-consequence') {
       if (command !== 'worker') throw new Error('--exceptional-consequence is supported only by cruise worker.');
       const value = args[++index];
@@ -317,7 +434,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
       options.cwd = resolve(value);
     } else if (arg.startsWith('-')) {
       throw new Error(`${arg} is not supported by the prompt-only Cruise runtime.`);
-    } else if (['doctor', 'attest', 'usage', 'budget'].includes(command)) {
+    } else if (['doctor', 'attest', 'changelog', 'usage', 'budget', 'config', 'migrate'].includes(command)) {
       throw new Error(`Unexpected ${command} argument: ${arg}`);
     } else if (command === 'queue') {
       if (queueAction !== null || !['status', 'run'].includes(arg)) {
@@ -327,12 +444,29 @@ export function parseArgs(argv, { env = process.env } = {}) {
     } else options.promptParts.push(arg);
   }
   Object.assign(options, resolveBudgetOptions(options));
-  if (options.json && !['doctor', 'attest', 'usage', 'budget'].includes(command)) {
-    throw new Error('--json is supported only by cruise doctor, cruise attest, cruise usage, and cruise budget.');
+  if (options.json && !['doctor', 'attest', 'usage', 'budget', 'config', 'migrate'].includes(command)) {
+    throw new Error('--json is not supported by this Cruise command.');
   }
   const prompt = options.promptParts.join(' ');
+  if (command === 'reference' && prompt) {
+    throw new Error(`Unexpected reference argument: ${prompt}`);
+  }
+  if (!options.help && !options.version && command === 'changelog' && !options.commit) {
+    throw new Error('cruise changelog requires --commit <oid>.');
+  }
   if (!options.help && !options.version && command === 'queue' && queueAction === null) {
     throw new Error('cruise queue requires status or run.');
+  }
+  if (!options.help && !options.version && command === 'migrate') {
+    if (['inspect', 'apply', 'query'].includes(migrationAction) && !options.targetName) {
+      throw new Error(`cruise migrate ${migrationAction} requires --target <name>.`);
+    }
+    if (migrationAction === 'query' && !options.sqlFile) {
+      throw new Error('cruise migrate query requires --file <query.sql>.');
+    }
+    if (migrationAction === 'route' && !options.sandboxFirst) {
+      throw new Error('cruise migrate route requires --sandbox-first auto or manual.');
+    }
   }
   if (options.resumeSessionId && options.planOnly) {
     throw new Error('--resume continues the existing Claude Goal and cannot also start a new plan-only run.');
@@ -352,6 +486,22 @@ export function parseArgs(argv, { env = process.env } = {}) {
   if (options.expansionEvidence && !options.debugProbeKey) {
     throw new Error('--expansion-evidence requires --debug-probe.');
   }
+  if (
+    options.reasoningEscalationEvidence !== undefined &&
+    !(
+      provider === 'codex' &&
+      options.managedWorker === true &&
+      options.workerComplexity === 'repeated' &&
+      options.level === 7 &&
+      options.exceptionalConsequence &&
+      options.exceptionalRationale
+    )
+  ) {
+    throw new Error(
+      '--reasoning-escalation-evidence requires a managed Codex worker with --complexity repeated, '
+      + '--level 7, --exceptional-consequence, and --exceptional-rationale.',
+    );
+  }
   if (options.managedWorker) {
     for (const [key, flag] of [
       ['workerOwnership', '--owns'],
@@ -366,7 +516,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
     !options.help &&
     !options.version &&
     !options.resumeSessionId &&
-    !['doctor', 'help', 'queue', 'attest', 'usage', 'budget'].includes(command) &&
+    !['doctor', 'help', 'queue', 'attest', 'reference', 'changelog', 'usage', 'budget', 'config', 'migrate'].includes(command) &&
     !prompt
   ) {
     throw new Error('Cruise requires a request.');
@@ -416,6 +566,81 @@ async function validateWorkingDirectory(cwd) {
   return realpath(cwd);
 }
 
+export function createCommitChangelogObserver({
+  cwd,
+  provider,
+  runtimeDirectory,
+  sessionId,
+  codexWorker = runSimpleWorker,
+  claudeWorker = runClaudeChangelogWorker,
+  observerFactory = (input) => new CommitChangelogObserver(input),
+  pollIntervalMs,
+  now,
+  onWarning = (error) => {
+    process.stderr.write(`Cruise warning: changelog update failed: ${displayError(error?.message)}\n`);
+  },
+}) {
+  const resolvedProvider = resolveProvider(provider);
+  return observerFactory({
+    cwd,
+    ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
+    ...(now === undefined ? {} : { now }),
+    onWarning,
+    async inferSummaries({ task }) {
+      if (resolvedProvider === 'claude') {
+        return claudeWorker({
+          cwd: runtimeDirectory,
+          task,
+        });
+      }
+      const result = await codexWorker({
+        cwd: runtimeDirectory,
+        task,
+        level: null,
+        readOnly: true,
+        timeoutMs: 120_000,
+        sessionId: `${sessionId}-changelog`,
+      });
+      return result.output;
+    },
+  });
+}
+
+async function runWithCommitChangelogObserver({
+  cwd,
+  provider,
+  runtimeDirectory,
+  sessionId,
+  dependencies,
+  operation,
+}) {
+  const factory = dependencies.commitObserverFactory ?? createCommitChangelogObserver;
+  const observer = factory({
+    cwd,
+    provider,
+    runtimeDirectory,
+    sessionId,
+    codexWorker: dependencies.changelogCodexWorker,
+    claudeWorker: dependencies.changelogClaudeWorker,
+    observerFactory: dependencies.commitObserverImplementation,
+    pollIntervalMs: dependencies.commitPollIntervalMs,
+    now: dependencies.now,
+  });
+  try {
+    await observer.start();
+  } catch (error) {
+    process.stderr.write(`Cruise warning: commit observation was unavailable: ${displayError(error?.message)}\n`);
+    return operation();
+  }
+  try {
+    return await operation();
+  } finally {
+    await observer.stop().catch((error) => {
+      process.stderr.write(`Cruise warning: pending changelog updates were not completed: ${displayError(error?.message)}\n`);
+    });
+  }
+}
+
 async function runHostedSession(
   options,
   cwd,
@@ -436,16 +661,30 @@ async function runHostedSession(
       planOnly: Boolean(options.planOnly),
       resumeSessionId: options.resumeSessionId ?? null,
       ...(options.goalSessionId ? { sessionId: options.goalSessionId } : {}),
+      ...(options.runtimeDirectory ? { runtimeDirectory: options.runtimeDirectory } : {}),
     });
     return {
+      ...(options.includeRunMetadata ? result : {}),
       status: result.status ?? (result.exitCode === 0 ? 'complete' : result.exitCode === 3 ? 'stalled' : 'failed'),
       exitCode: result.exitCode,
+      ...(options.includeRunMetadata ? { started: result.started ?? true } : {}),
     };
   }
   const injectedClientFactory = clientFactory !== null;
   const createClient = clientFactory ?? ((input) => new AppServerClient(input));
   const client = createClient({
-    spawnOptions: { cwd },
+    spawnOptions: {
+      cwd,
+      ...(options.runtimeDirectory
+        ? {
+            env: {
+              ...process.env,
+              CRUISE_RUNTIME_DIR: options.runtimeDirectory,
+              CRUISE_SESSION_ID: options.goalSessionId,
+            },
+          }
+        : {}),
+    },
     clientInfo: { name: 'cruise', title: 'Cruise', version: CLI_VERSION },
     onError(error) {
       process.stderr.write(`Cruise warning: ${displayError(error.message)}\n`);
@@ -464,6 +703,7 @@ async function runHostedSession(
     beforeGoalActivation: options.beforeGoalActivation ?? null,
     firstTurnDeadlineMs: options.firstTurnDeadlineMs,
     planOnly: Boolean(options.planOnly),
+    runtimeDirectory: options.runtimeDirectory ?? null,
     rootOverride: options.rootModel
       ? { model: options.rootModel, reasoning_effort: options.rootEffort }
       : null,
@@ -478,37 +718,75 @@ async function runHostedSession(
         })
       : null,
   });
-  const onSigint = () => void session.interrupt();
-  process.on('SIGINT', onSigint);
-  process.on('SIGTERM', onSigint);
+  const onSignal = () => void session.interrupt();
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
   try {
     const result = await session.run();
     return {
+      ...(options.includeRunMetadata ? result : {}),
       status: result.status,
       exitCode: result.status === 'complete' ? 0 : result.status === 'stalled' ? 3 : 2,
+      ...(options.includeRunMetadata
+        ? {
+            started: true,
+            tracePointer: session.rolloutPath ?? null,
+            startedAt: session.runStartedAt ?? null,
+          }
+        : {}),
     };
   } catch (error) {
-    if (error instanceof SimpleCruiseInterruptedError) return { status: 'interrupted', exitCode: 130 };
+    if (error instanceof SimpleCruiseInterruptedError) {
+      return {
+        status: 'interrupted',
+        exitCode: 130,
+        ...(options.includeRunMetadata ? { started: true } : {}),
+      };
+    }
     if (error instanceof SimpleCruiseGoalBootstrapTimeoutError) {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
-      return { status: 'failed', exitCode: 4 };
+      return {
+        status: 'failed',
+        exitCode: 4,
+        ...(options.includeRunMetadata
+          ? { started: false, reason: displayError(error.message) }
+          : {}),
+      };
     }
     if (error instanceof AppServerInactivityError || error?.code === 'CRUISE_TRANSPORT_INACTIVITY') {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
-      return { status: 'failed', exitCode: 5 };
+      return {
+        status: 'failed',
+        exitCode: 5,
+        ...(options.includeRunMetadata
+          ? { started: true, reason: displayError(error.message) }
+          : {}),
+      };
     }
     if (error?.code === 'CRUISE_BUDGET_PAUSE') {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
-      return { status: 'budget-paused', exitCode: BUDGET_PAUSE_EXIT_CODE };
+      return {
+        status: 'budget-paused',
+        exitCode: BUDGET_PAUSE_EXIT_CODE,
+        ...(options.includeRunMetadata
+          ? { started: Boolean(session.threadId), reason: displayError(error.message) }
+          : {}),
+      };
     }
     if (error?.code === 'CRUISE_CONTEXT_PRESSURE_PAUSE') {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
-      return { status: 'blocked', exitCode: 2 };
+      return {
+        status: 'blocked',
+        exitCode: 2,
+        ...(options.includeRunMetadata
+          ? { started: true, reason: displayError(error.message) }
+          : {}),
+      };
     }
     throw error;
   } finally {
-    process.removeListener('SIGINT', onSigint);
-    process.removeListener('SIGTERM', onSigint);
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
     stopSurfacingStderr();
   }
 }
@@ -517,41 +795,146 @@ export async function runStart(options, dependencies = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const goalSessionId = options.resumeSessionId ?? randomUUID();
   const executableGoal = options.skill === 'goal';
+  const userDocumentWriter = dependencies.userDocumentWriter ?? writeGoalUserDocuments;
+  const now = dependencies.now ?? (() => new Date().toISOString());
+  const launchedAt = now();
   if (options.stagedHandoff && (!executableGoal || resolveProvider(options.provider) !== 'codex')) {
     throw new Error('Staged handoff is supported only by cruise --codex goal.');
   }
   const reservation = { cwd, session_id: goalSessionId };
   const staged = options.stagedHandoff ? createStagedHandoff({
-    handoffFile: options.stagedHandoff,
-    readyFile: options.readyFile,
-    sessionId: goalSessionId,
-    onHeartbeat: (message) => process.stderr.write(`Cruise: ${message}\n`),
+    handoffFile: options.stagedHandoff, readyFile: options.readyFile, sessionId: goalSessionId,
+    onHeartbeat: message => process.stderr.write(`Cruise: ${message}\n`),
   }) : null;
+  // Allocate only private scratch while the parent keeps workspace ownership.
+  // The already-spawned app-server and workers must inherit this same runtime.
+  const warmRuntimeDirectory = staged ? await createRuntimeSession({
+    cwd, sessionId: goalSessionId, kind: 'goal-warmup',
+  }) : null;
+  let runtimeDirectory = warmRuntimeDirectory;
+  let priorFlight = null;
   let ownershipAcquired = false;
+  let stagedObserver = null;
+  const acquireOwnership = async () => {
+    if (executableGoal) {
+      await activateGoalSession(reservation);
+      ownershipAcquired = true;
+      const reservedRuntime = await runtimeSessionDirectory(reservation);
+      runtimeDirectory = warmRuntimeDirectory ?? reservedRuntime;
+    } else {
+      runtimeDirectory = await reserveCruiseWorkspace(reservation);
+      ownershipAcquired = true;
+    }
+  };
   const beginOwnership = async () => {
-    if (executableGoal) await activateGoalSession(reservation);
-    else await reserveCruiseWorkspace(reservation);
-    ownershipAcquired = true;
+    // A staged executor must acquire the serial lock before touching shared notes.
+    if (staged) await acquireOwnership();
+    if (!options.resumeSessionId) {
+      await prepareCruiseControlState(cwd, { resetQueue: options.skill === 'build' });
+    } else await cleanupLegacyCruiseState(cwd);
+    priorFlight = executableGoal && !options.resumeSessionId
+      ? await inspectFlightPlan(cwd).catch(() => null) : null;
+    if (!staged) await acquireOwnership();
     if (!options.resumeSessionId && !options.planOnly) await writeOriginPrompt(cwd, options.prompt);
   };
+  const acceptHandoff = staged ? async context => {
+    const handoff = await staged.wait(context);
+    context.signal.throwIfAborted();
+    await beginOwnership();
+    context.session.runtimeDirectory = runtimeDirectory;
+    const factory = dependencies.commitObserverFactory ?? createCommitChangelogObserver;
+    stagedObserver = factory({
+      cwd, provider: options.provider, runtimeDirectory, sessionId: goalSessionId,
+      codexWorker: dependencies.changelogCodexWorker,
+      claudeWorker: dependencies.changelogClaudeWorker,
+      observerFactory: dependencies.commitObserverImplementation,
+      pollIntervalMs: dependencies.commitPollIntervalMs, now: dependencies.now,
+    });
+    try { await stagedObserver.start(); }
+    catch (error) { process.stderr.write(`Cruise warning: commit observation was unavailable: ${displayError(error?.message)}\n`); }
+    context.signal.throwIfAborted();
+    return handoff;
+  } : null;
   try {
     if (!staged) await beginOwnership();
-    return (await runHostedSession({
-      ...options,
-      goalSessionId,
-      ...(staged ? { beforeGoalActivation: async (context) => {
-        const handoff = await staged.wait(context);
-        context.signal.throwIfAborted();
-        await beginOwnership();
-        return handoff;
-      } } : {}),
-    }, cwd, dependencies)).exitCode;
+    let result;
+    try {
+      const operation = () => runHostedSession({
+        ...options, goalSessionId, runtimeDirectory, includeRunMetadata: true,
+        ...(staged ? { beforeGoalActivation: acceptHandoff } : {}),
+      }, cwd, dependencies);
+      result = staged ? await operation() : await runWithCommitChangelogObserver({
+        cwd, provider: options.provider, runtimeDirectory, sessionId: goalSessionId,
+        dependencies, operation,
+      });
+    } catch (error) {
+      if (executableGoal && ownershipAcquired) {
+        await userDocumentWriter({
+          cwd,
+          prompt: options.prompt ?? '',
+          provider: options.provider,
+          status: 'failed',
+          started: false,
+          startedAt: null,
+          endedAt: now(),
+          sessionId: goalSessionId,
+          reason: displayError(error?.message),
+          includeFlight: false,
+        }).catch((documentError) => {
+          process.stderr.write(`Cruise warning: user documents were not updated: ${displayError(documentError?.message)}\n`);
+        });
+      }
+      if (ownershipAcquired) await finalizeCruiseControlState(cwd, {
+        status: 'failed', started: false,
+      });
+      throw error;
+    }
+    if (executableGoal && ownershipAcquired) {
+      const prompt = options.prompt || await readOriginPrompt(cwd).catch(() => '');
+      const currentFlight = await inspectFlightPlan(cwd).catch(() => null);
+      const currentFlightBelongsToRun = Boolean(
+        options.resumeSessionId ||
+        (
+          currentFlight?.state === 'valid' &&
+          currentFlight.contentHash !== priorFlight?.contentHash
+        ),
+      );
+      await userDocumentWriter({
+        cwd,
+        prompt,
+        provider: options.provider,
+        status: result.status,
+        started: options.planOnly ? false : result.started !== false,
+        startedAt: result.startedAt ?? (options.planOnly || result.started === false ? null : launchedAt),
+        endedAt: now(),
+        sessionId: result.sessionId ?? result.threadId ?? goalSessionId,
+        tracePointer: result.tracePointer ?? null,
+        reason: result.reason ?? null,
+        includeFlight:
+          !options.planOnly &&
+          result.started !== false &&
+          currentFlightBelongsToRun,
+      }).catch((error) => {
+        process.stderr.write(`Cruise warning: user documents were not updated: ${displayError(error?.message)}\n`);
+      });
+    }
+    if (ownershipAcquired) await finalizeCruiseControlState(cwd, {
+      status: result.status,
+      started: options.planOnly ? false : result.started !== false,
+    });
+    return result.exitCode;
   } finally {
     await staged?.cleanup();
+    await stagedObserver?.stop().catch(error => {
+      process.stderr.write(`Cruise warning: pending changelog updates were not completed: ${displayError(error?.message)}\n`);
+    });
     if (ownershipAcquired) {
       if (executableGoal) await deactivateGoalSession(reservation);
       else await releaseCruiseWorkspace(reservation);
     }
+    if (warmRuntimeDirectory) await cleanupRuntimeSession(warmRuntimeDirectory, {
+      cwd, sessionId: goalSessionId,
+    });
   }
 }
 
@@ -560,15 +943,25 @@ export async function runStart(options, dependencies = {}) {
 export async function runOneGoal(options, dependencies = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const goalSessionId = randomUUID();
-  await activateGoalSession({ cwd, session_id: goalSessionId });
+  const reservation = { cwd, session_id: goalSessionId };
+  await activateGoalSession(reservation);
+  const runtimeDirectory = await runtimeSessionDirectory(reservation);
   try {
-    return await runHostedSession({
-      ...options,
-      skill: 'goal',
-      goalSessionId,
-    }, cwd, dependencies);
+    return await runWithCommitChangelogObserver({
+      cwd,
+      provider: options.provider,
+      runtimeDirectory,
+      sessionId: goalSessionId,
+      dependencies,
+      operation: () => runHostedSession({
+        ...options,
+        skill: 'goal',
+        goalSessionId,
+        runtimeDirectory,
+      }, cwd, dependencies),
+    });
   } finally {
-    await deactivateGoalSession({ cwd, session_id: goalSessionId });
+    await deactivateGoalSession(reservation);
   }
 }
 
@@ -764,6 +1157,7 @@ export async function runQueue(options, {
   queueWriter = writeQueue,
   flightWriter = writeFlightPlan,
   milestoneRunner = runQueueGoal,
+  userDocumentWriter = writeGoalUserDocuments,
   output = process.stdout,
 } = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
@@ -780,6 +1174,10 @@ export async function runQueue(options, {
 
     const pending = queue.milestones.filter(({ status }) => status === 'pending');
     if (!pending.length && queue.milestones.every(({ status }) => status === 'complete')) {
+      await finalizeCruiseControlState(cwd, {
+        status: 'complete',
+        queueComplete: true,
+      });
       writeQueueStatus(queue, output);
       return 0;
     }
@@ -808,11 +1206,13 @@ export async function runQueue(options, {
 
     let rawResult;
     let expectedFlightContract = null;
+    let goalStarted = false;
     try {
       const compiledFlight = milestoneToFlightPlan(milestone, queue.body);
       expectedFlightContract = queueControlledFlightContract(compiledFlight);
       await flightWriter(cwd, compiledFlight);
       output.write(`Running queue milestone ${milestone.id}: ${milestone.outcome}\n`);
+      goalStarted = true;
       rawResult = await milestoneRunner({ cwd, provider: options.provider, milestone, prompt });
     } catch (error) {
       rawResult = { status: 'failed', reason: displayError(error?.message) };
@@ -881,6 +1281,24 @@ export async function runQueue(options, {
     // Persist provenance: rerunning the command cannot clear a global stop.
     current.stop_scope = result.status === 'complete' ? null : localBlocker ? 'local' : 'global';
     await queueWriter(cwd, queue);
+    await userDocumentWriter({
+      cwd,
+      prompt,
+      provider: options.provider,
+      status: result.status,
+      started: goalStarted,
+      startedAt: null,
+      endedAt: new Date().toISOString(),
+      sessionId: `queue:${milestone.id}`,
+      reason: result.reason,
+      includeFlight: goalStarted,
+    }).catch((error) => {
+      output.write(`Queue warning: user documents were not updated: ${displayError(error?.message)}\n`);
+    });
+    await finalizeCruiseControlState(cwd, {
+      status: result.status,
+      keepOrigin: true,
+    });
 
     if (result.status === 'complete') {
       output.write(`Completed queue milestone ${milestone.id}.\n`);
@@ -913,6 +1331,26 @@ export async function runWorker(options, {
         rationale: options.exceptionalRationale,
       }
     : null;
+  if (
+    options.reasoningEscalationEvidence !== undefined &&
+    (typeof options.reasoningEscalationEvidence !== 'string' || !options.reasoningEscalationEvidence.trim())
+  ) {
+    throw new Error('reasoning escalation evidence must be non-empty text');
+  }
+  if (
+    options.reasoningEscalationEvidence !== undefined &&
+    !(
+      managed &&
+      options.workerComplexity === 'repeated' &&
+      options.level === 7 &&
+      exceptionalRecord
+    )
+  ) {
+    throw new Error(
+      'reasoning escalation evidence requires a managed Codex worker at explicit L7 with repeated complexity '
+      + 'and an exceptional-consequence record',
+    );
+  }
   const route = managed
     ? routeWorkerTask({
         task: options.prompt,
@@ -923,6 +1361,9 @@ export async function runWorker(options, {
   const selectedLevel = managed
     ? Math.max(options.level ?? 1, route.recommended_level)
     : options.level ?? null;
+  if (options.reasoningEscalationEvidence !== undefined && route.recommended_level !== 6) {
+    throw new Error('reasoning escalation evidence requires an L6 routed work item');
+  }
   if (selectedLevel === 7 && !exceptionalRecord) {
     throw new Error('L7 requires an explicit exceptional-consequence record');
   }
@@ -939,7 +1380,10 @@ export async function runWorker(options, {
   const capsule = managed ? buildContextCapsule({
     task: options.prompt,
     nonGoals: ['Do not expand beyond the single assigned work item.'],
-    evidence: options.workerEvidence,
+    evidence: [
+      ...options.workerEvidence,
+      ...(options.reasoningEscalationEvidence === undefined ? [] : [options.reasoningEscalationEvidence]),
+    ],
     relevantRanges: options.workerRanges,
     invariants: ['Preserve repository safety, privacy, assurance, and human-gate controls.'],
     ownership: options.workerOwnership,
@@ -948,8 +1392,21 @@ export async function runWorker(options, {
     stopConditions: ['Stop after the bounded work item and focused evidence are complete.'],
     escalationConditions: ['Escalate only with new discriminating evidence; never for tool or transport failure.'],
   }) : null;
+  let workerTransition = null;
+  if (options.reasoningEscalationEvidence !== undefined) {
+    workerTransition = Object.freeze({
+      kind: 'escalation',
+      work_item: route.task,
+      evidence: options.reasoningEscalationEvidence,
+      from_level: 6,
+      failure_category: 'reasoning',
+      exceptional_consequence: exceptionalRecord,
+    });
+  }
   if (capsule) await writeContextCapsule(cwd, capsule);
   const sessionId = randomUUID();
+  const reservation = { cwd, session_id: sessionId };
+  const runtimeDirectory = await reserveCruiseWorkspace(reservation);
   let budgetClient = null;
   let quotaGuard = null;
   let dispatchLease = null;
@@ -983,10 +1440,13 @@ export async function runWorker(options, {
       level: selectedLevel,
       readOnly: Boolean(options.workerReadOnly),
       exceptionalConsequence: exceptionalRecord,
+      transition: workerTransition,
+      runtimeDirectory,
+      sessionId,
       onOutput(delta) {
         process.stdout.write(delta);
       },
-      onServerRequest: (message, client) => answerWorkerRequest(message, { client }),
+      onServerRequest: (message, client, authorizationEvidence) => answerWorkerRequest(message, { client, authorizationEvidence }),
     });
     if (managed) {
       const handoff = parseWorkerHandoff(result.output);
@@ -1006,6 +1466,7 @@ export async function runWorker(options, {
       ['quota reservation release', () => quotaGuard?.release()],
       ['worker dispatch release', () => dispatchLease?.release()],
       ['budget client stop', () => budgetClient?.stop()],
+      ['workspace release', () => releaseCruiseWorkspace(reservation)],
     ]) {
       try {
         await action();
@@ -1099,15 +1560,80 @@ export async function runBudget(options, {
   }
 }
 
-async function answerWorkerRequest(message, { client = null } = {}) {
+export async function runReference(options, {
+  userDocumentWriter = writeGoalUserDocuments,
+  controlFinalizer = finalizeCruiseControlState,
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  if (!options.userStatus) throw new Error('cruise reference requires --status.');
+  const prompt = await readOriginPrompt(cwd).catch(() => '');
+  const result = await userDocumentWriter({
+    cwd,
+    prompt,
+    provider: options.provider,
+    status: options.userStatus,
+    started: options.userStatus !== 'not_started',
+    startedAt: null,
+    endedAt: new Date().toISOString(),
+    sessionId: 'direct-host',
+    includeFlight: options.userStatus !== 'not_started',
+  });
+  await controlFinalizer(cwd, {
+    status: options.userStatus === 'completed' ? 'complete' : options.userStatus,
+    started: options.userStatus !== 'not_started',
+  });
+  output.write(`Updated ${result.referencePath}.\n`);
+  return 0;
+}
+
+export async function runCommitChangelog(options, {
+  observerFactory = createCommitChangelogObserver,
+  runtimeFactory = createRuntimeSession,
+  runtimeCleanup = cleanupRuntimeSession,
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  const sessionId = `direct-changelog-${randomUUID()}`;
+  const runtimeDirectory = await runtimeFactory({
+    cwd,
+    sessionId,
+    kind: 'changelog',
+  });
+  try {
+    const observer = observerFactory({
+      cwd,
+      provider: options.provider,
+      runtimeDirectory,
+      sessionId,
+    });
+    await observer.processCommit(options.commit);
+    output.write(`Recorded commit ${options.commit} in the user changelog.\n`);
+    return 0;
+  } finally {
+    await runtimeCleanup(runtimeDirectory, { cwd, sessionId });
+  }
+}
+
+export async function answerWorkerRequest(message, {
+  client = null,
+  authorizationEvidence = {},
+  picker = pickOne,
+  readLine = readLineOnce,
+} = {}) {
   const params = message.params ?? {};
   if (message.method === 'item/tool/requestUserInput') {
-    return awaitHumanInput(client, async () => {
-      const answers = {};
-      for (const question of params.questions ?? []) {
+    const answers = {};
+    for (const question of params.questions ?? []) {
+      const automatic = automaticDelegationAuthorization({ questions: [question] }, authorizationEvidence);
+      if (automatic) {
+        Object.assign(answers, automatic.answers);
+        continue;
+      }
+      await awaitHumanInput(client, async () => {
         const options = Array.isArray(question.options) ? question.options : [];
         if (options.length > 0) {
-          const selection = await pickOne({
+          const selection = await picker({
             title: `${question.header ?? ''}: ${question.question ?? ''}`.replace(/^: /u, ''),
             options,
           });
@@ -1115,11 +1641,11 @@ async function answerWorkerRequest(message, { client = null } = {}) {
           if (value == null) throw new SimpleCruiseInterruptedError();
           answers[question.id] = { answers: [String(value)] };
         } else {
-          answers[question.id] = { answers: [await readLineOnce({ prompt: `${question.question}: ` })] };
+          answers[question.id] = { answers: [await readLine({ prompt: `${question.question}: ` })] };
         }
-      }
-      return { answers };
-    });
+      });
+    }
+    return { answers };
   }
   if ([
     'item/commandExecution/requestApproval',
@@ -1127,7 +1653,7 @@ async function answerWorkerRequest(message, { client = null } = {}) {
     'item/permissions/requestApproval',
   ].includes(message.method)) {
     return awaitHumanInput(client, async () => {
-      const selection = await pickOne({
+      const selection = await picker({
         title: params.reason ?? params.command ?? 'Approve this action?',
         options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
           label: String(value),
@@ -1171,9 +1697,76 @@ function command(command, args, { timeoutMs = doctorProbeTimeoutMs() } = {}) {
   };
 }
 
+export const CODEX_PLUGIN_FRESHNESS_PATHS = Object.freeze([
+  '.codex-plugin/plugin.json',
+  'skills/build/SKILL.md',
+  'skills/quick/SKILL.md',
+  'skills/goal/SKILL.md',
+  'skills/debug/SKILL.md',
+  'scripts/cruise.mjs',
+  'scripts/lib/simple-session.mjs',
+  'scripts/lib/authorization-policy.mjs',
+]);
+
+function criticalPluginDigest(root) {
+  const canonicalRoot = realpathSync(root);
+  const hash = createHash('sha256');
+  for (const relativePath of CODEX_PLUGIN_FRESHNESS_PATHS) {
+    const candidate = resolve(canonicalRoot, relativePath);
+    const metadata = lstatSync(candidate);
+    const canonicalCandidate = realpathSync(candidate);
+    if (
+      !metadata.isFile()
+      || metadata.isSymbolicLink()
+      || !canonicalCandidate.startsWith(`${canonicalRoot}${sep}`)
+    ) {
+      throw new Error(`unsafe critical plugin file: ${relativePath}`);
+    }
+    hash.update(relativePath);
+    hash.update('\0');
+    hash.update(readFileSync(canonicalCandidate));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+export function codexPluginContentFreshness(plugin, {
+  codexHomeDirectory = join(homedir(), '.codex'),
+  packageRoot = PACKAGE_ROOT,
+} = {}) {
+  const safeSegment = /^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/u;
+  const marketplace = plugin?.marketplaceName;
+  const name = plugin?.name;
+  const version = plugin?.version;
+  if (![marketplace, name, version].every((value) => typeof value === 'string' && safeSegment.test(value))) {
+    return { status: 'fail', detail: 'Codex plugin metadata cannot identify a safe cache path' };
+  }
+  const configuredSource = plugin?.source?.path;
+  const sourceRoot = typeof configuredSource === 'string' && isAbsolute(configuredSource)
+    ? configuredSource
+    : packageRoot;
+  const installedRoot = join(codexHomeDirectory, 'plugins', 'cache', marketplace, name, version);
+  try {
+    const sourceDigest = criticalPluginDigest(sourceRoot);
+    const installedDigest = criticalPluginDigest(installedRoot);
+    return sourceDigest === installedDigest
+      ? { status: 'pass', detail: `Cruise ${version} cache matches its configured source` }
+      : { status: 'fail', detail: `Cruise ${version} cache is stale; reinstall ${name}@${marketplace}; active jobs selectively reconcile instruction drift without a waiver or forced restart` };
+  } catch (error) {
+    return {
+      status: 'fail',
+      detail: `Cruise plugin content could not be verified: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 export function localDoctorReport(
   run = command,
-  { provider = 'codex', pluginRoot = PACKAGE_ROOT } = {},
+  {
+    provider = 'codex',
+    pluginRoot = PACKAGE_ROOT,
+    pluginFreshness = codexPluginContentFreshness,
+  } = {},
 ) {
   const definition = providerDefinition(provider);
   const version = run(definition.command, ['--version']);
@@ -1202,6 +1795,10 @@ export function localDoctorReport(
   const pluginList = run('codex', ['plugin', 'list', '--json']);
   let pluginDetail = pluginList.error || pluginList.output || 'Codex plugin status is unavailable';
   let pluginReady = false;
+  let contentCheck = {
+    status: 'fail',
+    detail: 'Cruise plugin content check requires a matching installed version',
+  };
   if (pluginList.status === 0) {
     try {
       const installed = JSON.parse(pluginList.output).installed ?? [];
@@ -1219,6 +1816,7 @@ export function localDoctorReport(
           : cruise.version !== CLI_VERSION
             ? `Codex has Cruise ${cruise.version}; this package is ${CLI_VERSION}`
             : `Cruise ${cruise.version} is installed and enabled`;
+      if (pluginReady) contentCheck = pluginFreshness(cruise, { packageRoot: pluginRoot });
     } catch {
       pluginDetail = 'Codex plugin list did not return valid JSON';
     }
@@ -1227,6 +1825,7 @@ export function localDoctorReport(
     { id: 'codex', status: version.status === 0 ? 'pass' : 'fail', detail: version.output || version.error || 'Codex is unavailable' },
     { id: 'app-server', status: appServer.status === 0 ? 'pass' : 'fail', detail: appServer.status === 0 ? 'app-server is available' : appServer.error || 'app-server is unavailable' },
     { id: 'codex-plugin', status: pluginReady ? 'pass' : 'fail', detail: pluginDetail },
+    { id: 'codex-plugin-content', ...contentCheck },
   ];
   return { provider: definition.id, ok: checks.every(({ status }) => status === 'pass'), checks };
 }
@@ -1294,6 +1893,136 @@ async function runDoctor({ json, provider }) {
   return report.ok ? 0 : 1;
 }
 
+function publicMigrationValue(value) {
+  if (Array.isArray(value)) return value.map(publicMigrationValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !['sql', 'statement'].includes(key))
+      .map(([key, item]) => [key, publicMigrationValue(item)]));
+  }
+  return value;
+}
+
+function writeStructuredResult(value, { json, output }) {
+  const safe = publicMigrationValue(value);
+  if (json) {
+    output.write(`${JSON.stringify(safe)}\n`);
+    return;
+  }
+  if (safe.state) output.write(`Cruise migration: ${safe.state}\n`);
+  if (safe.profile) output.write(`Repository profile: ${safe.profile}\n`);
+  if (safe.decision?.reason) output.write(`Decision: ${safe.decision.reason}\n`);
+  if (safe.decision?.digest) output.write(`SQL digest: ${safe.decision.digest}\n`);
+  if (safe.decision?.affectedTables?.length) output.write(`Affected tables: ${safe.decision.affectedTables.join(', ')}\n`);
+  if (safe.decision?.domains?.length) output.write(`Database domains: ${safe.decision.domains.join(', ')}\n`);
+  if (safe.decision?.riskFactors?.length) {
+    output.write('Risk evidence:\n');
+    for (const factor of safe.decision.riskFactors) output.write(`- ${factor}\n`);
+  }
+  if (safe.reason && safe.reason !== safe.decision?.reason) output.write(`Reason: ${safe.reason}\n`);
+  if (safe.failed?.length) for (const failure of safe.failed) output.write(`- ${failure}\n`);
+  if (safe.choices?.length) {
+    output.write('Available choices:\n');
+    for (const choice of safe.choices) output.write(`- ${choice.value}: ${choice.label}\n`);
+  }
+  if (!safe.state) output.write(`${JSON.stringify(safe, null, 2)}\n`);
+}
+
+export async function runConfigCommand(options, {
+  configLoader = loadCruiseConfig,
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  const config = await configLoader(cwd);
+  const report = {
+    state: 'valid',
+    source: config.source,
+    schemaVersion: config.schemaVersion,
+    profile: config.profile,
+    workflow: config.workflow,
+    targets: config.migration.targets,
+    domains: config.migration.domains,
+    validation: {
+      commands: config.migration.validation.commands.map(({ name }) => name),
+      flows: config.migration.validation.flows.map(({ name, path, critical }) => ({ name, path, critical })),
+      policyChecks: config.migration.policyChecks.map(({ name }) => name),
+    },
+  };
+  writeStructuredResult(report, { json: options.json, output });
+  return 0;
+}
+
+async function sessionMigrationRoute(runtimeDirectory) {
+  if (!runtimeDirectory) return null;
+  try {
+    const parsed = JSON.parse(await readFile(resolve(runtimeDirectory, 'migration-route.json'), 'utf8'));
+    return ['auto', 'manual'].includes(parsed?.sandboxFirst) ? parsed.sandboxFirst : null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function runMigrationCommand(options, {
+  configLoader = loadCruiseConfig,
+  adapterFactory = ({ cwd, config }) => new SupabaseCliMigrationAdapter({ cwd, config }),
+  controllerFactory = (input) => new MigrationController(input),
+  output = process.stdout,
+} = {}) {
+  const cwd = await validateWorkingDirectory(options.cwd);
+  if (options.migrationAction === 'route') {
+    if (!options.runtimeDirectory) throw new Error('cruise migrate route is session-only and requires an active Cruise runtime.');
+    const runtimeDirectory = resolve(options.runtimeDirectory);
+    await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(join(runtimeDirectory, 'migration-route.json'), `${JSON.stringify({
+      sandboxFirst: options.sandboxFirst,
+      setAt: Date.now(),
+    })}\n`, { mode: 0o600 });
+    writeStructuredResult({ state: 'route-set', sandboxFirst: options.sandboxFirst }, { json: options.json, output });
+    return 0;
+  }
+  const config = await configLoader(cwd);
+  const adapter = adapterFactory({ cwd, config });
+  const controller = controllerFactory({ cwd, config, adapter });
+  let response;
+  if (options.migrationAction === 'status') {
+    response = controller.status();
+  } else if (options.migrationAction === 'inspect') {
+    response = await controller.inspect({
+      targetName: options.targetName,
+      paths: options.migrationPaths,
+    });
+  } else if (options.migrationAction === 'query') {
+    response = await controller.apply({
+      targetName: options.targetName,
+      paths: [options.sqlFile],
+      mode: 'query',
+    });
+  } else {
+    const storedRoute = await sessionMigrationRoute(options.runtimeDirectory);
+    const route = options.sandboxFirst === 'off'
+      ? false
+      : options.sandboxFirst ?? storedRoute ?? null;
+    response = await controller.apply({
+      targetName: options.targetName,
+      paths: options.migrationPaths,
+      sandboxFirst: route,
+      authorization: options.authorizationDigest
+        ? { digest: options.authorizationDigest, target: options.targetName, environment: 'production' }
+        : null,
+    });
+  }
+  writeStructuredResult(response, { json: options.json, output });
+  return [
+    'valid',
+    'inspected',
+    'applied',
+    'already-applied',
+    'queried',
+    'promoted',
+  ].includes(response.state) || !response.state ? 0 : 2;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   let options;
   try {
@@ -1312,9 +2041,13 @@ export async function main(argv = process.argv.slice(2)) {
   }
   try {
     if (options.command === 'doctor') return await runDoctor(options);
+    if (options.command === 'config') return await runConfigCommand(options);
+    if (options.command === 'migrate') return await runMigrationCommand(options);
     if (options.command === 'attest') return await runAttest(options);
     if (options.command === 'usage') return await runUsage(options);
     if (options.command === 'budget') return await runBudget(options);
+    if (options.command === 'reference') return await runReference(options);
+    if (options.command === 'changelog') return await runCommitChangelog(options);
     if (options.command === 'worker') return await runWorker(options);
     if (options.command === 'queue') {
       return options.queueAction === 'status' ? await runQueueStatus(options) : await runQueue(options);

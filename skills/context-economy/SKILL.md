@@ -92,7 +92,7 @@ Use `references/ROUTING.md`. High consequence sets a minimum level. Complexity s
 
 ### 5. Dispatch a capsule
 
-For every ready Goal micro-goal, use `cruise worker --managed --complexity <class> --owns <path> --evidence <fact> --range <path:start-end> --verify <command> <task>`. Cruise applies consequence floors automatically. Pass `--level <1-7>` only as a stronger explicit override; it cannot lower the routed floor, and L7 also requires `--exceptional-consequence` plus `--exceptional-rationale`. The root writes the capsule before quota reservation, remains the integrator and final reviewer, and consumes the worker's schema-constrained `.cruise/HANDOFF.md`. A Goal may have at most three active workers. Debug begins with at most three evidence-distinct probes and needs confirmed evidence before another wave.
+For every ready Goal micro-goal, use `cruise worker --managed --complexity <class> --owns <path> --evidence <fact> --range <path:start-end> --verify <command> <task>`. Cruise applies consequence floors automatically. Pass `--level <1-7>` only as a stronger explicit override; it cannot lower the routed floor. L7 selects GPT-6 Astra xhigh for direct exceptional-consequence work and requires `--exceptional-consequence` plus `--exceptional-rationale`; Astra ultra is reserved for an evidenced escalation from L6. The root writes the capsule before quota reservation, remains the integrator and final reviewer, and consumes the worker's schema-constrained `.cruise/HANDOFF.md`. A Goal may have at most three active workers. Debug begins with at most three evidence-distinct probes and needs confirmed evidence before another wave.
 
 The capsule must be at most 8 KB and contain:
 

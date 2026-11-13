@@ -40,6 +40,7 @@ test('capsules and schema-constrained handoffs enforce byte caps', () => {
     ownership: ['src/parser.mjs'],
   });
   assert.ok(capsule.bytes <= MAX_CAPSULE_BYTES);
+  assert.match(capsule.serialized, /Never read, search, summarize, fingerprint/u);
   assert.equal(parseWorkerHandoff(JSON.stringify(handoff())).changed_files[0], 'src/parser.mjs');
   assert.throws(
     () => buildContextCapsule({ task: 'x'.repeat(MAX_CAPSULE_BYTES) }),
@@ -49,6 +50,34 @@ test('capsules and schema-constrained handoffs enforce byte caps', () => {
     () => parseWorkerHandoff(JSON.stringify(handoff({ outcome: 'x'.repeat(MAX_WORKER_HANDOFF_BYTES) }))),
     /exceeds/u,
   );
+});
+
+test('worker capsules fail closed before sensitive paths or credential material can be dispatched', () => {
+  assert.throws(
+    () => buildContextCapsule({
+      task: 'Inspect the bounded parser behavior without reading .env.',
+      relevantRanges: ['.env:1-4'],
+    }),
+    (error) => error?.code === 'CRUISE_SENSITIVE_PATH',
+  );
+  assert.throws(
+    () => buildContextCapsule({
+      task: 'Inspect one config branch.',
+      ownership: ['config/credentials.json'],
+    }),
+    (error) => error?.code === 'CRUISE_SENSITIVE_PATH',
+  );
+  assert.throws(
+    () => buildContextCapsule({
+      task: 'Use API_KEY=MINIREPO_REAL_LOOKING_VALUE in the worker.',
+    }),
+    (error) => error?.code === 'CRUISE_SECRET_MATERIAL',
+  );
+  const safe = buildContextCapsule({
+    task: 'Verify that .env is excluded; do not read it.',
+    relevantRanges: ['src/parser.mjs:1-40'],
+  });
+  assert.match(safe.serialized, /\.env is excluded/u);
 });
 
 test('root handoff retains only the compact continuation contract', async (t) => {

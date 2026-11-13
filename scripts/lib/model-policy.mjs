@@ -4,25 +4,26 @@ export const MODEL_IDS = Object.freeze({
   luna: 'gpt-5.6-luna',
   terra: 'gpt-5.6-terra',
   sol: 'gpt-5.6-sol',
+  astra: 'gpt-6-astra',
 });
 
 export const MODEL_POLICY_DEFAULTS = Object.freeze({
   initial_classification: Object.freeze({ tier: 'luna', reasoning_effort: 'medium' }),
-  bounded_repository_mapping: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  capability_inventory: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  quick_implementation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  quick_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  goal_clarification_and_planning: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  normal_planned_execution: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  independent_normal_verification: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  debug_hypothesis_generation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  difficult_debug_or_failed_normal_execution: Object.freeze({ tier: 'sol', reasoning_effort: 'high' }),
-  architectural_or_consequential_implementation: Object.freeze({ tier: 'sol', reasoning_effort: 'high' }),
-  repeated_failure_or_exceptional_consequence: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
-  research_retrieval_and_extraction: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
-  research_synthesis_and_recommendation: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
-  high_conflict_or_frontier_research: Object.freeze({ tier: 'sol', reasoning_effort: 'high' }),
-  routine_structured_scans: Object.freeze({ tier: 'terra', reasoning_effort: 'medium' }),
+  bounded_repository_mapping: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  capability_inventory: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  quick_implementation: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  quick_verification: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  goal_clarification_and_planning: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  normal_planned_execution: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  independent_normal_verification: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  debug_hypothesis_generation: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  difficult_debug_or_failed_normal_execution: Object.freeze({ tier: 'astra', reasoning_effort: 'high' }),
+  architectural_or_consequential_implementation: Object.freeze({ tier: 'astra', reasoning_effort: 'high' }),
+  repeated_failure_or_exceptional_consequence: Object.freeze({ tier: 'sol', reasoning_effort: 'ultra' }),
+  research_retrieval_and_extraction: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  research_synthesis_and_recommendation: Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  high_conflict_or_frontier_research: Object.freeze({ tier: 'astra', reasoning_effort: 'high' }),
+  routine_structured_scans: Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
 });
 
 const CATALOG_FIELDS = Object.freeze([
@@ -243,15 +244,48 @@ export function resolveModelPolicy({
   });
 }
 
-const NEXT_TIER = Object.freeze({ luna: 'terra', terra: 'sol', sol: 'sol' });
+const ESCALATION_LADDER = Object.freeze([
+  Object.freeze({ tier: 'luna', reasoning_effort: 'medium' }),
+  Object.freeze({ tier: 'terra', reasoning_effort: 'xhigh' }),
+  Object.freeze({ tier: 'terra', reasoning_effort: 'ultra' }),
+  Object.freeze({ tier: 'sol', reasoning_effort: 'xhigh' }),
+  Object.freeze({ tier: 'astra', reasoning_effort: 'high' }),
+  Object.freeze({ tier: 'sol', reasoning_effort: 'ultra' }),
+  Object.freeze({ tier: 'astra', reasoning_effort: 'xhigh' }),
+]);
+
+function nextEscalationPair(tier, reasoningEffort) {
+  const exactIndex = ESCALATION_LADDER.findIndex(
+    (entry) => entry.tier === tier && entry.reasoning_effort === reasoningEffort,
+  );
+  if (exactIndex >= 0 && exactIndex < ESCALATION_LADDER.length - 1) {
+    return ESCALATION_LADDER[exactIndex + 1];
+  }
+  if (exactIndex === ESCALATION_LADDER.length - 1) {
+    return ESCALATION_LADDER[exactIndex];
+  }
+
+  const effortIndex = EFFORT_ORDER.indexOf(reasoningEffort);
+  const nextKnownForTier = ESCALATION_LADDER.find(
+    (entry) => entry.tier === tier
+      && EFFORT_ORDER.indexOf(entry.reasoning_effort) > effortIndex,
+  );
+  if (nextKnownForTier) return nextKnownForTier;
+
+  const firstTierIndex = ESCALATION_LADDER.findIndex((entry) => entry.tier === tier);
+  if (firstTierIndex >= 0 && firstTierIndex < ESCALATION_LADDER.length - 1) {
+    return ESCALATION_LADDER[firstTierIndex + 1];
+  }
+  return Object.freeze({ tier, reasoning_effort: reasoningEffort });
+}
 
 /**
  * Create the next evidenced soft-failure attempt.
  *
  * Cruise deliberately does not impose a universal attempt count here. The
  * owning workflow supplies its reviewed stop conditions and resource policy;
- * this resolver only keeps model/effort escalation monotonic and records the
- * new attempt identity.
+ * this resolver follows the reviewed model/effort ladder and records the new
+ * attempt identity.
  */
 export function escalateModelPolicy(
   previous,
@@ -266,18 +300,15 @@ export function escalateModelPolicy(
   if (typeof reason !== 'string' || !reason.trim()) {
     throw new TypeError('an escalation reason is required');
   }
-  const tier = NEXT_TIER[normalizeTier(previous.requested?.tier)];
+  const previousTier = normalizeTier(previous.requested?.tier);
   const priorEffort = normalizeEffort(previous.requested.reasoning_effort);
-  const effortIndex = EFFORT_ORDER.indexOf(priorEffort);
-  const escalatedEffort = tier === 'sol' && previous.requested.tier === 'sol'
-    ? EFFORT_ORDER[Math.min(effortIndex + 1, EFFORT_ORDER.length - 1)]
-    : priorEffort;
+  const escalated = nextEscalationPair(previousTier, priorEffort);
   return resolveModelPolicy({
     stage: previous.stage,
     catalog,
     requested: {
-      tier,
-      reasoning_effort: reasoningEffort ?? escalatedEffort,
+      tier: escalated.tier,
+      reasoning_effort: reasoningEffort ?? escalated.reasoning_effort,
     },
     attemptNumber: previous.attempt_number + 1,
     escalationReason: reason,

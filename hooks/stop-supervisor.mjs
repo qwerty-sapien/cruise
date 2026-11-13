@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -15,13 +15,14 @@ import {
   parseFlightPlan,
 } from '../scripts/lib/flight-plan.mjs';
 import { captureWorkspaceFingerprint as captureProductFingerprint } from '../scripts/lib/supervisor.mjs';
+import { validateRuntimeDirectory, writeRuntimeJson } from '../scripts/lib/runtime-state.mjs';
 import {
   deactivateGoalSession,
   isGoalSessionActive,
+  runtimeSessionDirectory,
 } from './session-marker.mjs';
 
-const STATE_FILE = '.cruise/.supervisor.json';
-const GITIGNORE_FILE = '.cruise/.gitignore';
+const STATE_FILE = 'supervisor.json';
 const DEFAULT_STALL = Object.freeze({ quietTurns: 3, sameFailure: 3 });
 const FAILURE_LINE = /\b(?:error|fail(?:ed|ure)?|exception|panic|traceback)\b/iu;
 
@@ -48,47 +49,6 @@ export function parseHookFlightPlan(text) {
 async function inspectHookFlightPlan(cwd, now) {
   void now;
   return inspectFlightPlan(cwd);
-}
-
-async function ensureScratchDirectory(cwd) {
-  const directory = join(cwd, '.cruise');
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const metadata = await lstat(directory);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw new Error('.cruise must be a real directory');
-  return directory;
-}
-
-async function atomicWrite(path, text) {
-  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
-  try {
-    await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await rename(temporary, path);
-  } catch (error) {
-    await unlink(temporary).catch(() => {});
-    throw error;
-  }
-}
-
-async function ensureGitignore(directory) {
-  const path = join(directory, basename(GITIGNORE_FILE));
-  let text = '';
-  try {
-    text = await readFile(path, 'utf8');
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  const lines = text.split(/\r?\n/u);
-  const additions = ['.supervisor.json', '.supervisor-*.json', '.attestation.json']
-    .filter((entry) => !lines.includes(entry));
-  if (!additions.length) return;
-  const next = `${text}${text && !text.endsWith('\n') ? '\n' : ''}${additions.join('\n')}\n`;
-  await atomicWrite(path, next);
-}
-
-function sessionStateBasename(input) {
-  return typeof input?.session_id === 'string' && input.session_id
-    ? `.supervisor-${digest(input.session_id).slice(0, 24)}.json`
-    : basename(STATE_FILE);
 }
 
 function newState(flightHash, now) {
@@ -173,9 +133,8 @@ function validState(value) {
 async function readState(directory, flightHash, now, {
   preserveCycle = false,
   preserveInvalidRepair = false,
-  filename = basename(STATE_FILE),
 } = {}) {
-  const path = join(directory, filename);
+  const path = join(directory, STATE_FILE);
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     if (!validState(parsed)) throw new Error('supervisor scratch state is malformed');
@@ -199,8 +158,8 @@ async function readState(directory, flightHash, now, {
   }
 }
 
-async function writeState(directory, state, filename = basename(STATE_FILE)) {
-  await atomicWrite(join(directory, filename), `${JSON.stringify(state, null, 2)}\n`);
+async function writeState(directory, state) {
+  await writeRuntimeJson(directory, STATE_FILE, state);
 }
 
 async function captureWorkspaceFingerprint(cwd, options = {}) {
@@ -343,6 +302,7 @@ export async function runStopSupervisor(input, {
   now = Date.now(),
   goalSession = process.env.CRUISE_CLAUDE_GOAL === '1',
   sessionScoped = false,
+  runtimeDirectory = process.env.CRUISE_RUNTIME_DIR ?? null,
 } = {}) {
   if (!input || input.hook_event_name !== 'Stop' || typeof input.cwd !== 'string' || !input.cwd) return null;
   if (
@@ -354,20 +314,22 @@ export async function runStopSupervisor(input, {
   }
   if (!goalSession) return null;
   const cwd = resolve(input.cwd);
+  const directory = runtimeDirectory ?? await runtimeSessionDirectory(input);
+  if (!directory) throw new Error('active Cruise Goal has no registered runtime directory');
+  await validateRuntimeDirectory(directory, {
+    cwd,
+    ...(typeof input.session_id === 'string' && input.session_id
+      ? { sessionId: input.session_id }
+      : {}),
+  });
   const inspected = await inspectHookFlightPlan(cwd, now);
   if (inspected.state === 'absent') {
     if (input.permission_mode === 'plan') {
       await deactivateGoalSession(input);
       return { systemMessage: 'Cruise Goal completed a planning-only turn; no implementation assurance is claimed.' };
     }
-    const directory = await ensureScratchDirectory(cwd);
-    const stateFilename = sessionScoped
-      ? sessionStateBasename(input)
-      : basename(STATE_FILE);
-    await ensureGitignore(directory);
     const state = await readState(directory, 'absent', now, {
       preserveCycle: true,
-      filename: stateFilename,
     });
     state.turns_observed += 1;
     state.updated_at = now;
@@ -375,7 +337,6 @@ export async function runStopSupervisor(input, {
     let output;
     if (state.blocks_in_cycle >= cap) {
       state.ladder = 'stalled';
-      await deactivateGoalSession(input);
       output = {
         systemMessage: `Cruise allowed this stop after ${state.blocks_in_cycle} bounded corrections because .cruise/FLIGHT.md remained absent. Completion is unassured.`,
       };
@@ -389,19 +350,14 @@ export async function runStopSupervisor(input, {
         ].join(' '),
       };
     }
-    await writeState(directory, state, stateFilename);
+    await writeState(directory, state);
+    if (state.ladder === 'stalled') await deactivateGoalSession(input);
     return output;
   }
 
-  const directory = await ensureScratchDirectory(cwd);
-  const stateFilename = sessionScoped
-    ? sessionStateBasename(input)
-    : basename(STATE_FILE);
-  await ensureGitignore(directory);
   if (inspected.state === 'invalid') {
     const state = await readState(directory, inspected.contentHash, now, {
       preserveCycle: true,
-      filename: stateFilename,
     });
     const invalidHashes = state.invalid_flight_hashes ?? [];
     const repeated = invalidHashes.includes(inspected.contentHash);
@@ -419,7 +375,6 @@ export async function runStopSupervisor(input, {
     let output;
     if (repeated || capReached) {
       state.ladder = 'stalled';
-      await deactivateGoalSession(input);
       output = { systemMessage: invalidFlightReport(state, inspected.reason, capReached) };
     } else {
       state.blocks_in_cycle += 1;
@@ -428,7 +383,8 @@ export async function runStopSupervisor(input, {
       state.interventions = state.interventions.slice(-32);
       output = { decision: 'block', reason: correctiveReason(inspected.reason) };
     }
-    await writeState(directory, state, stateFilename);
+    await writeState(directory, state);
+    if (state.ladder === 'stalled') await deactivateGoalSession(input);
     return output;
   }
   const flight = inspected.plan;
@@ -468,7 +424,6 @@ export async function runStopSupervisor(input, {
   const state = await readState(directory, inspected.contentHash, now, {
     preserveCycle: true,
     preserveInvalidRepair: true,
-    filename: stateFilename,
   });
   const fingerprint = flight.version >= 2
     ? assessment?.progressFingerprint ?? 'assurance-context-unavailable'
@@ -492,14 +447,12 @@ export async function runStopSupervisor(input, {
     : null;
   if (flight.status === 'complete' && state.completion_blocks >= blockCap) {
     state.ladder = 'stalled';
-    await deactivateGoalSession(input);
     output = { systemMessage: stallMessage(state, 'the unassured completion correction cap was reached', true) };
   } else if (state.ladder === 'stalled' || (input.stop_hook_active && state.blocks_in_cycle >= blockCap)) {
-    await deactivateGoalSession(input);
+    state.ladder = 'stalled';
     output = { systemMessage: stallMessage(state, observation.reason) };
   } else if (state.blocks_in_cycle >= blockCap) {
     state.ladder = 'stalled';
-    await deactivateGoalSession(input);
     output = { systemMessage: stallMessage(state, observation.reason, true) };
   } else if (state.ladder === 'realign') {
     state.ladder = 'final';
@@ -508,7 +461,6 @@ export async function runStopSupervisor(input, {
     output = { decision: 'block', reason: finalReason(observation.reason) };
   } else if (state.ladder === 'final') {
     state.ladder = 'stalled';
-    await deactivateGoalSession(input);
     output = { systemMessage: stallMessage(state, observation.reason) };
   } else if (
     state.quiet_stops >= flight.stall.quietTurns ||
@@ -528,7 +480,8 @@ export async function runStopSupervisor(input, {
   if (flight.status === 'complete' && output.decision === 'block') {
     state.completion_blocks += 1;
   }
-  await writeState(directory, state, stateFilename);
+  await writeState(directory, state);
+  if (state.ladder === 'stalled') await deactivateGoalSession(input);
   return output;
 }
 
@@ -550,7 +503,7 @@ export async function main({ input = process.stdin, output = process.stdout } = 
   } catch (error) {
     if (hookInput) await deactivateGoalSession(hookInput).catch(() => {});
     output.write(JSON.stringify({
-      systemMessage: `Cruise Goal stop supervisor failed open: ${cleanMessage(error?.message)}. The stop was allowed; delete .cruise/.supervisor.json if its scratch state is damaged.`,
+      systemMessage: `Cruise Goal stop supervisor failed open: ${cleanMessage(error?.message)}. The stop was allowed; session scratch will be removed by Cruise cleanup or its TTL janitor.`,
     }));
   }
   return 0;

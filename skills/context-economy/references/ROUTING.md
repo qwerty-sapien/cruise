@@ -11,13 +11,13 @@
 
 | Level | Model and effort | Normal use | Exclusions |
 | --- | --- | --- | --- |
-| L1 | Luna medium | naming, formatting, concise docs, deterministic extraction, read-only map, one-symbol mechanical change | behavior changes, sensitive boundaries |
-| L2 | Terra medium | one local component, clear owner, clear test, low-risk implementation | public contract or cross-package ambiguity |
-| L3 | Terra high | bounded multi-file bug or feature, local API, moderate ambiguity | high-consequence boundaries |
-| L4 | Terra xhigh | ordinary multistep implementation, cross-package integration, difficult but non-sensitive debugging | security, privacy, money, migrations, scientific claims, physical effects |
-| L5 | Sol high | auth, authorization, PII, biometrics, payment, signing, replay, concurrency, migrations, retention, scientific estimands, holdouts, external contracts, hardware control | unresolved contradictory high-risk architecture |
-| L6 | Sol xhigh | L5 work with material contradictory evidence or one evidence-backed reasoning failure | routine second attempt |
-| L7 | Sol ultra | exceptional high-consequence architecture or a narrow L6 blocker with new evidence showing deeper reasoning is required | general execution, broad swarms |
+| L1 | GPT-5.6 Luna medium | naming, formatting, concise docs, deterministic extraction, read-only map, one-symbol mechanical change | behavior changes, sensitive boundaries |
+| L2 | GPT-5.6 Terra xhigh | one local component, clear owner, clear test, low-risk implementation | public contract or cross-package ambiguity |
+| L3 | GPT-5.6 Terra ultra | bounded multi-file bug or feature, local API, moderate ambiguity | high-consequence boundaries |
+| L4 | GPT-5.6 Sol xhigh | ordinary multistep implementation, cross-package integration, difficult but non-sensitive debugging | security, privacy, money, migrations, scientific claims, physical effects |
+| L5 | GPT-6 Astra high | auth, authorization, PII, biometrics, payment, signing, replay, concurrency, migrations, retention, scientific estimands, holdouts, external contracts, hardware control | unresolved contradictory high-risk architecture |
+| L6 | GPT-5.6 Sol ultra | L5 work with material contradictory evidence or one evidence-backed reasoning failure | routine second attempt |
+| L7 | GPT-6 Astra xhigh for direct exceptional-consequence work; ultra only for an evidenced escalation from L6 | exceptional high-consequence architecture or a narrow L6 blocker with new evidence showing deeper reasoning is required | general execution, broad swarms |
 
 ## Deterministic selection
 
@@ -51,6 +51,16 @@ Escalate only when all conditions hold:
 5. The quota reservation can cover it.
 
 A repeated prompt with the same evidence is prohibited.
+
+For the exceptional L6-to-L7 reasoning transition, use a managed Codex worker
+with `--complexity repeated --level 7 --reasoning-escalation-evidence <text>`
+and the required exceptional consequence and rationale. Generic `--evidence`
+is capsule context only and never selects Astra ultra; without the dedicated
+field, an explicit L7 override remains a direct Astra-xhigh request.
+
+## Astra role briefs
+
+For L5 and L7 Astra work, state the bounded task authority and autonomous follow-through to completion, require concise output, and set testing proportional to changed risk. Prompts retain their architecture; add only these model-aware role briefs.
 
 ## De-escalation
 

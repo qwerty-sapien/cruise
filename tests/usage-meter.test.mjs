@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   estimateCredits,
+  usageModelFamily,
   UsageMeter,
   USAGE_RATE_VERSION,
 } from '../scripts/lib/usage-meter.mjs';
@@ -59,6 +60,12 @@ test('cached input and reasoning subsets are priced exactly once', () => {
   assert.equal(summary.estimated_credits, 471.875);
   assert.equal(summary.totals.output_tokens, 500_000);
   assert.equal(summary.threads['thread-1'].last.reasoning_output_tokens, 400_000);
+});
+
+test('Astra is recognized but has no speculative credit estimate', () => {
+  const tokens = breakdown({ input: 1_000_000, cached: 250_000, output: 500_000 });
+  assert.equal(usageModelFamily('gpt-6-astra'), 'astra');
+  assert.equal(estimateCredits(tokens, 'gpt-6-astra'), null);
 });
 
 test('invalid invariants preserve raw evidence and make local accounting unknown', async (t) => {

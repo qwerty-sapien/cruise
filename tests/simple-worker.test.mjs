@@ -2,12 +2,40 @@ import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
+import { answerWorkerRequest } from '../scripts/cruise.mjs';
 
 import {
   classifyWorkerFailure,
   runSimpleWorker,
   workerFailureMessage,
 } from '../scripts/lib/simple-worker.mjs';
+
+test('worker questions keep routine delegation internal in both profiles and mixed batches', async () => {
+  for (const profile of ['relaxed', 'business-critical']) {
+    const shown = [];
+    const result = await answerWorkerRequest({ method: 'item/tool/requestUserInput', params: { questions: [
+      { id: 'delegate', question: `${profile}: May I spawn a sub-agent to review this patch?` },
+      { id: 'effect', question: 'Should the subagent delete the production database?' },
+    ] } }, {
+      picker: async () => { throw new Error('unexpected picker'); },
+      readLine: async ({ prompt }) => { shown.push(prompt); return 'Do not delete it.'; },
+    });
+    assert.match(result.answers.delegate.answers[0], /without asking/u);
+    assert.deepEqual(shown, ['Should the subagent delete the production database?: ']);
+    assert.deepEqual(result.answers.effect.answers, ['Do not delete it.']);
+  }
+});
+
+test('worker native denials remain host decisions', async () => {
+  let asked = false;
+  await answerWorkerRequest({ method: 'item/tool/requestUserInput', params: { questions: [
+    { id: 'delegate', question: 'May I spawn a sub-agent to review this patch?' },
+  ] } }, {
+    authorizationEvidence: { nativeApprovalDenied: true },
+    readLine: async () => { asked = true; return 'Stop the refused action.'; },
+  });
+  assert.equal(asked, true);
+});
 
 test('worker failures report observed transport categories without inventing DNS', () => {
   const upstream = classifyWorkerFailure({
@@ -73,11 +101,19 @@ function modelCatalog() {
         hidden: false,
         isDefault: true,
         defaultReasoningEffort: 'medium',
-        supportedReasoningEfforts: ['medium', 'high', 'xhigh'],
+        supportedReasoningEfforts: ['medium', 'high', 'xhigh', 'ultra'],
       },
       {
         id: 'gpt-5.6-sol',
         model: 'gpt-5.6-sol',
+        hidden: false,
+        isDefault: false,
+        defaultReasoningEffort: 'high',
+        supportedReasoningEfforts: ['high', 'xhigh', 'ultra'],
+      },
+      {
+        id: 'gpt-6-astra',
+        model: 'gpt-6-astra',
         hidden: false,
         isDefault: false,
         defaultReasoningEffort: 'high',
@@ -126,10 +162,62 @@ test('model selection is untouched without an explicit level', async () => {
   assert.deepEqual(client.requests.map(({ method }) => method), ['thread/start', 'turn/start']);
   const thread = client.requests[0].params;
   const turn = client.requests[1].params;
+  assert.match(thread.developerInstructions, /host-access-approved local director/u);
+  assert.match(thread.developerInstructions, /not by itself a new third-party provider disclosure/u);
   assert.ok(thread.developerInstructions.includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
   assert.equal(Object.hasOwn(thread, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'effort'), false);
+});
+
+test('worker transcript routes coordination internally and carries native evidence to its request handler', async () => {
+  for (const reviewThread of [null, 'worker-thread', 'other-thread']) {
+    let asked = false;
+    let reply;
+    await runSimpleWorker({
+      cwd: process.cwd(), task: 'Review the supplied source excerpt.',
+      clientFactory: (options) => {
+        const client = new FakeWorkerClient([]);
+        const request = client.request.bind(client);
+        client.request = async (method, params) => {
+          if (method !== 'turn/start') return request(method, params);
+          if (reviewThread) client.emit('notification', {
+            method: 'item/autoApprovalReview/completed',
+            params: { threadId: reviewThread, turnId: 'worker-turn', review: { status: 'denied' } },
+          });
+          reply = await options.onServerRequest({ method: 'item/tool/requestUserInput', params: {
+            questions: [{ id: 'delegate', question: 'May I spawn a sub-agent to review this patch?' }],
+          } }, client);
+          client.emit('notification', { method: 'turn/completed', params: { turn: { status: 'completed' } } });
+          return { turn: { id: 'worker-turn' } };
+        };
+        return client;
+      },
+      onServerRequest: (message, client, authorizationEvidence) => answerWorkerRequest(message, {
+        client, authorizationEvidence,
+        readLine: async () => { asked = true; return 'Stop the refused action.'; },
+      }),
+    });
+    assert.equal(asked, reviewThread === 'worker-thread');
+    if (!asked) assert.match(reply.answers.delegate.answers[0], /without asking/u);
+  }
+});
+
+test('worker launch rejects secret material and sensitive-file access before starting a client', async () => {
+  let starts = 0;
+  const clientFactory = () => {
+    starts += 1;
+    return new FakeWorkerClient([]);
+  };
+  await assert.rejects(
+    runSimpleWorker({ cwd: process.cwd(), task: 'Read .env and report it.', clientFactory }),
+    (error) => error?.code === 'CRUISE_SENSITIVE_PATH',
+  );
+  await assert.rejects(
+    runSimpleWorker({ cwd: process.cwd(), task: 'Use ACCESS_TOKEN=MINIREPO_VALUE.', clientFactory }),
+    (error) => error?.code === 'CRUISE_SECRET_MATERIAL',
+  );
+  assert.equal(starts, 0);
 });
 
 test('internal read-only workers cannot mutate the product workspace', async () => {
@@ -161,12 +249,12 @@ test('internal workers have a bounded execution timeout', async () => {
 test('every explicit level overrides the worker with its exact model and effort', async () => {
   const expected = [
     [1, 'gpt-5.6-luna', 'medium'],
-    [2, 'gpt-5.6-terra', 'medium'],
-    [3, 'gpt-5.6-terra', 'high'],
-    [4, 'gpt-5.6-terra', 'xhigh'],
-    [5, 'gpt-5.6-sol', 'high'],
-    [6, 'gpt-5.6-sol', 'xhigh'],
-    [7, 'gpt-5.6-sol', 'ultra'],
+    [2, 'gpt-5.6-terra', 'xhigh'],
+    [3, 'gpt-5.6-terra', 'ultra'],
+    [4, 'gpt-5.6-sol', 'xhigh'],
+    [5, 'gpt-6-astra', 'high'],
+    [6, 'gpt-5.6-sol', 'ultra'],
+    [7, 'gpt-6-astra', 'xhigh'],
   ];
   for (const [level, model, effort] of expected) {
     const client = new FakeWorkerClient([
@@ -196,6 +284,14 @@ test('every explicit level overrides the worker with its exact model and effort'
     const turn = client.requests[2].params;
     assert.equal(thread.model, model);
     assert.equal(thread.allowProviderModelFallback, false);
+    assert.match(thread.developerInstructions, new RegExp(`Cruise L${level}`, 'u'));
+    if ([5, 7].includes(level)) {
+      assert.match(thread.developerInstructions, /Infer routine gaps and persist within the bounded capsule/u);
+      assert.match(thread.developerInstructions, /ask only about material unresolved decisions/u);
+      assert.match(thread.developerInstructions, /calibrate tests to affected risk/u);
+    } else {
+      assert.doesNotMatch(thread.developerInstructions, /Infer routine gaps/u);
+    }
     assert.equal(turn.model, model);
     assert.equal(turn.effort, effort);
     assert.deepEqual(turn.responsesapiClientMetadata, {
@@ -203,6 +299,61 @@ test('every explicit level overrides the worker with its exact model and effort'
       cruise_agent_type: `cruise_l${level}`,
     });
   }
+});
+
+test('L7 launch requests distinguish direct exceptional work from an evidenced L6 reasoning escalation', async () => {
+  const exceptionalConsequence = {
+    consequence: 'exceptional irreversible effect',
+    rationale: 'the focused trace proves that the operation has no rollback path',
+  };
+  const cases = [
+    { label: 'direct', transition: null, effort: 'xhigh' },
+    {
+      label: 'escalated',
+      transition: {
+        kind: 'escalation',
+        work_item: 'single exceptional production operation',
+        evidence: 'a focused trace isolates the remaining uncertainty to reasoning',
+        from_level: 6,
+        failure_category: 'reasoning',
+        exceptional_consequence: exceptionalConsequence,
+      },
+      effort: 'ultra',
+    },
+  ];
+  for (const { label, transition, effort } of cases) {
+    const client = new FakeWorkerClient([
+      { method: 'turn/completed', params: { turn: { status: 'completed' } } },
+    ], modelCatalog());
+    await runSimpleWorker({
+      cwd: process.cwd(),
+      task: `Run the ${label} bounded L7 work.`,
+      level: 7,
+      exceptionalConsequence,
+      transition,
+      clientFactory: () => client,
+    });
+
+    const thread = client.requests.find(({ method }) => method === 'thread/start').params;
+    const turn = client.requests.find(({ method }) => method === 'turn/start').params;
+    assert.equal(thread.model, 'gpt-6-astra');
+    assert.equal(thread.allowProviderModelFallback, false);
+    assert.equal(turn.model, 'gpt-6-astra');
+    assert.equal(turn.effort, effort);
+  }
+});
+
+test('an explicit Astra level fails closed when Astra is absent from the catalog', async () => {
+  const client = new FakeWorkerClient([], {
+    data: modelCatalog().data.filter(({ id }) => id !== 'gpt-6-astra'),
+  });
+  await assert.rejects(runSimpleWorker({
+    cwd: process.cwd(),
+    task: 'Use the explicitly requested consequential worker.',
+    level: 5,
+    clientFactory: () => client,
+  }), /required worker pair is unavailable.*gpt-6-astra/u);
+  assert.deepEqual(client.requests.map(({ method }) => method), ['model/list']);
 });
 
 test('a stream failure after tool activity is reported, not silently duplicated or blocked', async () => {

@@ -8,6 +8,12 @@ import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
+import {
+  assertReadablePath,
+  isSensitivePath,
+  sensitiveGitPathspecs,
+} from './lib/sensitive-path.mjs';
+
 export const CONTEXT_VISIBLE_BYTES = 12 * 1024;
 export const CONTEXT_SLICE_LINES = 160;
 export const CONTEXT_SLICE_BYTES = 16 * 1024;
@@ -50,12 +56,13 @@ function safeRelative(cwd, input) {
   return { absolute, relative: rel };
 }
 
-function included(path, { explicit = false } = {}) {
+function included(path, { explicit = false, explicitSensitivePaths = [] } = {}) {
+  if (isSensitivePath(path, { explicitSensitivePaths })) return false;
   return explicit || !EXCLUDED_PATH.test(path);
 }
 
-function trackedFiles(cwd) {
-  return git(cwd, ['ls-files', '-z'])
+function trackedFiles(cwd, { explicitSensitivePaths = [] } = {}) {
+  return git(cwd, ['ls-files', '-z', '--', '.', ...sensitiveGitPathspecs(explicitSensitivePaths)])
     .split('\0')
     .filter(Boolean);
 }
@@ -81,11 +88,25 @@ async function fileIdentity(cwd, path) {
   return `stat:${info.mtimeMs}:${info.size}`;
 }
 
-function repositoryIdentity(cwd) {
-  const index = git(cwd, ['ls-files', '-s']);
-  const status = git(cwd, ['status', '--short']);
-  const diff = git(cwd, ['diff', '--no-ext-diff', '--binary']);
-  return `repo:${sha256(`${index}\0${status}\0${diff}`)}`;
+async function repositoryIdentity(cwd, paths, { explicitSensitivePaths = [] } = {}) {
+  const safe = (paths ?? trackedFiles(cwd, { explicitSensitivePaths }))
+    .filter((path) => included(path, { explicitSensitivePaths }));
+  const safeSet = new Set(safe);
+  const index = git(cwd, ['ls-files', '-s', '--', '.', ...sensitiveGitPathspecs(explicitSensitivePaths)])
+    .split('\n')
+    .filter((line) => safeSet.has(line.replace(/^\d+\s+[0-9a-f]+\s+\d+\t/u, '')))
+    .join('\n');
+  const metadata = [];
+  for (const path of safe) {
+    try {
+      const info = await lstat(resolve(cwd, path));
+      metadata.push(`${path}\0${info.size}\0${info.mtimeMs}\0${info.mode}`);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      metadata.push(`${path}\0missing`);
+    }
+  }
+  return `repo:${sha256(`${index}\0${metadata.join('\n')}`)}`;
 }
 
 function truncateLine(line, limit = CONTEXT_LONG_LINE_BYTES) {
@@ -141,11 +162,12 @@ async function lineScan(path, visit, { stopAfter = Infinity } = {}) {
   return number;
 }
 
-async function mapCommand(cwd, args) {
-  const files = trackedFiles(cwd);
+async function mapCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
+  const files = trackedFiles(cwd, { explicitSensitivePaths });
   const prefixes = args.map((path) => safeRelative(cwd, path).relative);
+  for (const path of prefixes) assertReadablePath(path, { explicitSensitivePaths });
   const selected = files.filter((path) => {
-    if (!included(path)) return false;
+    if (!included(path, { explicitSensitivePaths })) return false;
     return prefixes.length === 0 || prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   });
   const lines = [];
@@ -157,39 +179,61 @@ async function mapCommand(cwd, args) {
     raw: `${lines.join('\n')}${lines.length ? '\n' : ''}`,
     sources: selected,
     instructions: instructionPaths(files, selected),
-    identity: repositoryIdentity(cwd),
+    identity: await repositoryIdentity(cwd, selected, { explicitSensitivePaths }),
   };
 }
 
-async function searchCommand(cwd, args) {
+function chunksByArgumentBytes(paths, cap = 96 * 1024) {
+  const chunks = [];
+  let chunk = [];
+  let bytes = 0;
+  for (const path of paths) {
+    const size = Buffer.byteLength(path) + 1;
+    if (chunk.length > 0 && bytes + size > cap) {
+      chunks.push(chunk);
+      chunk = [];
+      bytes = 0;
+    }
+    chunk.push(path);
+    bytes += size;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
+}
+
+async function searchCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [pattern, ...paths] = args;
   if (!pattern) throw new Error('search requires a pattern');
   const normalized = paths.map((path) => safeRelative(cwd, path).relative);
-  const output = git(cwd, [
-    'grep', '-n', '-I', '--full-name', '-e', pattern,
-    ...(normalized.length ? ['--', ...normalized] : []),
-  ], { allowNoMatch: true });
+  for (const path of normalized) assertReadablePath(path, { explicitSensitivePaths });
+  const tracked = trackedFiles(cwd, { explicitSensitivePaths });
+  const selected = tracked.filter((path) => included(path, { explicitSensitivePaths }) && (
+    normalized.length === 0 || normalized.some((item) => path === item || path.startsWith(`${item}/`))
+  ));
+  const output = chunksByArgumentBytes(selected).map((chunk) => git(cwd, [
+    'grep', '-n', '-I', '--full-name', '-e', pattern, '--', ...chunk,
+  ], { allowNoMatch: true })).join('');
   const matches = [];
   const sources = new Set();
   for (const line of output.split('\n').filter(Boolean)) {
     const path = line.split(':', 1)[0];
-    if (!included(path, { explicit: normalized.some((item) => path === item || path.startsWith(`${item}/`)) })) continue;
     matches.push(line);
     sources.add(path);
   }
   return {
     raw: `${matches.join('\n')}${matches.length ? '\n' : ''}`,
     sources: [...sources],
-    instructions: instructionPaths(trackedFiles(cwd), [...sources]),
-    identity: repositoryIdentity(cwd),
+    instructions: instructionPaths(tracked, [...sources]),
+    identity: await repositoryIdentity(cwd, selected, { explicitSensitivePaths }),
   };
 }
 
-async function sliceCommand(cwd, args) {
+async function sliceCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input, startRaw = '1', endRaw = null] = args;
   if (!input) throw new Error('slice requires a file');
   const target = safeRelative(cwd, input);
-  if (!included(target.relative, { explicit: true })) {
+  assertReadablePath(target.relative, { explicitSensitivePaths });
+  if (!included(target.relative, { explicit: true, explicitSensitivePaths })) {
     throw new Error(`excluded file requires an explicit compact extractor: ${target.relative}`);
   }
   const start = Number(startRaw);
@@ -221,15 +265,16 @@ async function sliceCommand(cwd, args) {
   return {
     raw: lines.join(''),
     sources: [target.relative],
-    instructions: instructionPaths(trackedFiles(cwd), [target.relative]),
+    instructions: instructionPaths(trackedFiles(cwd, { explicitSensitivePaths }), [target.relative]),
     identity: await fileIdentity(cwd, target.relative),
   };
 }
 
-async function symbolsCommand(cwd, args) {
+async function symbolsCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('symbols requires a file');
   const target = safeRelative(cwd, input);
+  assertReadablePath(target.relative, { explicitSensitivePaths });
   const matches = [];
   const pattern = /^\s*(?:export\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|def|struct|enum)\s+([A-Za-z_$][\w$]*)/u;
   await lineScan(target.absolute, (line, number) => {
@@ -240,7 +285,7 @@ async function symbolsCommand(cwd, args) {
   return {
     raw: `${matches.join('\n')}${matches.length ? '\n' : ''}`,
     sources: [target.relative],
-    instructions: instructionPaths(trackedFiles(cwd), [target.relative]),
+    instructions: instructionPaths(trackedFiles(cwd, { explicitSensitivePaths }), [target.relative]),
     identity: await fileIdentity(cwd, target.relative),
   };
 }
@@ -256,23 +301,25 @@ function summarizeJson(value, depth = 0) {
   return value === null ? 'null' : typeof value;
 }
 
-async function jsonSummaryCommand(cwd, args) {
+async function jsonSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('json-summary requires a file');
   const target = safeRelative(cwd, input);
+  assertReadablePath(target.relative, { explicitSensitivePaths });
   const value = JSON.parse(await readFile(target.absolute, 'utf8'));
   return {
     raw: `${JSON.stringify(summarizeJson(value), null, 2)}\n`,
     sources: [target.relative],
-    instructions: instructionPaths(trackedFiles(cwd), [target.relative]),
+    instructions: instructionPaths(trackedFiles(cwd, { explicitSensitivePaths }), [target.relative]),
     identity: await fileIdentity(cwd, target.relative),
   };
 }
 
-async function tableSummaryCommand(cwd, args) {
+async function tableSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('table-summary requires a file');
   const target = safeRelative(cwd, input);
+  assertReadablePath(target.relative, { explicitSensitivePaths });
   let rows = 0;
   let columns = 0;
   let delimiter = ',';
@@ -292,15 +339,16 @@ async function tableSummaryCommand(cwd, args) {
   return {
     raw,
     sources: [target.relative],
-    instructions: instructionPaths(trackedFiles(cwd), [target.relative]),
+    instructions: instructionPaths(trackedFiles(cwd, { explicitSensitivePaths }), [target.relative]),
     identity: await fileIdentity(cwd, target.relative),
   };
 }
 
-async function logSummaryCommand(cwd, args) {
+async function logSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('log-summary requires a file');
   const target = safeRelative(cwd, input);
+  assertReadablePath(target.relative, { explicitSensitivePaths });
   const counts = { error: 0, warn: 0, info: 0 };
   let lines = 0;
   let first = '';
@@ -317,22 +365,29 @@ async function logSummaryCommand(cwd, args) {
   return {
     raw: `${JSON.stringify({ lines, counts, first, last }, null, 2)}\n`,
     sources: [target.relative],
-    instructions: instructionPaths(trackedFiles(cwd), [target.relative]),
+    instructions: instructionPaths(trackedFiles(cwd, { explicitSensitivePaths }), [target.relative]),
     identity: await fileIdentity(cwd, target.relative),
   };
 }
 
-async function changedCommand(cwd) {
-  const output = git(cwd, ['status', '--short']);
+async function changedCommand(cwd, _args, { explicitSensitivePaths = [] } = {}) {
+  const output = git(cwd, ['status', '--short', '--', '.', ...sensitiveGitPathspecs(explicitSensitivePaths)]);
   const lines = output.split('\n').filter((line) => {
     const path = line.slice(3).replace(/^"|"$/gu, '');
-    return included(path);
+    return included(path, { explicitSensitivePaths });
   });
   return {
     raw: `${lines.join('\n')}${lines.length ? '\n' : ''}`,
     sources: lines.map((line) => line.slice(3)),
-    instructions: instructionPaths(trackedFiles(cwd), lines.map((line) => line.slice(3))),
-    identity: repositoryIdentity(cwd),
+    instructions: instructionPaths(
+      trackedFiles(cwd, { explicitSensitivePaths }),
+      lines.map((line) => line.slice(3)),
+    ),
+    identity: await repositoryIdentity(
+      cwd,
+      trackedFiles(cwd, { explicitSensitivePaths }),
+      { explicitSensitivePaths },
+    ),
   };
 }
 
@@ -359,14 +414,23 @@ async function cachedResult(cwd, cacheKey) {
   }
 }
 
-export async function runContextView({ cwd = process.cwd(), command, args = [], visibleBytes = CONTEXT_VISIBLE_BYTES } = {}) {
+export async function runContextView({
+  cwd = process.cwd(),
+  command,
+  args = [],
+  visibleBytes = CONTEXT_VISIBLE_BYTES,
+  explicitSensitivePaths = [],
+} = {}) {
   if (!COMMANDS.has(command)) throw new Error(`unknown context-view command: ${String(command)}`);
   if (!Number.isSafeInteger(visibleBytes) || visibleBytes < 1 || visibleBytes > CONTEXT_VISIBLE_BYTES) {
     throw new TypeError('visibleBytes must be an integer from 1 through 12288');
   }
   const root = resolve(cwd);
-  const initial = await HANDLERS[command](root, args);
-  const cacheKey = sha256(JSON.stringify({ command, args, identity: initial.identity }));
+  if (!Array.isArray(explicitSensitivePaths) || explicitSensitivePaths.some((path) => typeof path !== 'string')) {
+    throw new TypeError('explicitSensitivePaths must be an array of repository-relative paths');
+  }
+  const initial = await HANDLERS[command](root, args, { explicitSensitivePaths });
+  const cacheKey = sha256(JSON.stringify({ command, args, explicitSensitivePaths, identity: initial.identity }));
   const hit = await cachedResult(root, cacheKey);
   let raw = initial.raw;
   let artifactPath;

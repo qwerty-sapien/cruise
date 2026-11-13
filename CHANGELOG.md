@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.3 — 2026-09-13
+
+- Updated worker routing documentation and prompts for the current L1–L7 model
+  catalog, including conditional L7 and Astra-ultra escalation behavior.
+- Reclassified mid-job Cruise source, skill, version, and integrity-hash drift
+  as exceptional internal recovery rather than an authorization or waiver
+  boundary.
+- Added bounded significance assessment and selective invalidation: unaffected
+  and user-owned work survives, only Cruise-owned code affected by changed
+  instructions is reworked, and non-code artifacts remain unless semantically
+  invalidated.
+- Removed forced task restarts from stale-cache recovery while retaining strict
+  never-read handling for dotenv and explicitly sensitive paths.
+
+## 0.4.2 — 2026-09-12
+
+- Made Codex Doctor compare critical installed plugin bytes with the configured
+  marketplace source instead of trusting a matching version string alone.
+- Defined source refresh, cache reinstall, digest verification, and new-task
+  reload as one update operation so working-tree patches cannot leave Codex on
+  stale skill instructions.
+- Removed speculative worker-model disclosure approvals while retaining strict
+  pre-access exclusion for dotenv, credential, private-key, and explicit secret
+  paths.
+
 ## 0.4.0 — 2026-07-25
 
 - Centered Cruise on Flight v2: an adaptive quality contract whose receipts are

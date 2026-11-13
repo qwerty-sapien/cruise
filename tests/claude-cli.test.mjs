@@ -1,14 +1,17 @@
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.mjs';
-import assert from 'node:assert/strict';
 import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from '../scripts/lib/git-sync-policy.mjs';
+import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import {
   CLAUDE_WORKER_LEVEL_POLICY,
+  claudeChangelogWorkerArgs,
   claudeSessionArgs,
   claudeWorkerArgs,
+  runClaudeChangelogWorker,
   runClaudeCli,
   runClaudeSession,
 } from '../scripts/lib/claude-cli.mjs';
@@ -30,8 +33,12 @@ test('Claude sessions load the plugin and invoke the slash-command skill nativel
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /no documented Codex-style Goal lifecycle API/u);
   assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
   assert.ok(args[args.indexOf('--append-system-prompt') + 1].includes(COLLABORATIVE_GIT_SYNC_INSTRUCTIONS));
+  assert.match(args[args.indexOf('--append-system-prompt') + 1], /write-only user references/u);
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /\.cruise\/FLIGHT\.md/u);
   assert.match(args[args.indexOf('--append-system-prompt') + 1], /Stop-hook supervisor/u);
+  assert.match(args[args.indexOf('--append-system-prompt') + 1], /host-access-approved local director/u);
+  assert.match(args[args.indexOf('--append-system-prompt') + 1], /non-admin users/u);
+  assert.doesNotMatch(args[args.indexOf('--append-system-prompt') + 1], /change-summaries|bird-eye summary/u);
   const planArgs = claudeSessionArgs({
     pluginRoot: '/workspace/cruise',
     skill: 'goal',
@@ -65,10 +72,51 @@ test('the published package contains both plugin manifests and only the active r
   assert.equal(metadata.files.includes('scripts/cruise.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/provider.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/claude-cli.mjs'), true);
+  assert.equal(metadata.files.includes('scripts/lib/changelog-observer.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/assurance.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/flight-plan.mjs'), true);
   assert.equal(metadata.files.includes('scripts/lib/queue.mjs'), true);
   assert.equal(metadata.files.some((entry) => entry.includes('refine')), false);
+});
+
+test('Claude changelog workers are captured, read-only, and detached from Goal hook state', async () => {
+  const args = claudeChangelogWorkerArgs({ task: 'Return JSON.' });
+  assert.equal(args.includes('-p'), true);
+  assert.deepEqual(
+    args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2),
+    ['--permission-mode', 'plan'],
+  );
+  const calls = [];
+  class Child extends EventEmitter {
+    constructor() {
+      super();
+      this.stdout = new PassThrough();
+      this.stderr = new PassThrough();
+    }
+  }
+  const promise = runClaudeChangelogWorker({
+    cwd: '/runtime',
+    task: 'Return JSON.',
+    env: {
+      BASE: 'kept',
+      CRUISE_RUNTIME_DIR: '/private/runtime',
+      CRUISE_SESSION_ID: 'goal-session',
+      CRUISE_CLAUDE_GOAL: '1',
+    },
+    spawnFn(command, workerArgs, options) {
+      calls.push({ command, workerArgs, options });
+      const child = new Child();
+      queueMicrotask(() => {
+        child.stdout.end(JSON.stringify({ result: '{"version":1}' }));
+        child.emit('exit', 0, null);
+      });
+      return child;
+    },
+  });
+  assert.equal(await promise, '{"version":1}');
+  assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe']);
+  assert.equal(calls[0].options.cwd, '/runtime');
+  assert.deepEqual(calls[0].options.env, { BASE: 'kept' });
 });
 
 test('Claude worker levels map to Claude model aliases and native effort values', () => {
@@ -78,6 +126,10 @@ test('Claude worker levels map to Claude model aliases and native effort values'
   assert.equal(defaultArgs.includes('--model'), false);
   assert.equal(defaultArgs.includes('--effort'), false);
   const selectedArgs = claudeWorkerArgs({ task: 'Run tests.', level: 6 });
+  assert.match(
+    selectedArgs[selectedArgs.indexOf('--append-system-prompt') + 1],
+    /not by itself a new third-party provider disclosure/u,
+  );
   assert.deepEqual(
     selectedArgs.slice(selectedArgs.indexOf('--model'), selectedArgs.indexOf('--model') + 4),
     ['--model', 'opus', '--effort', 'high'],
@@ -104,7 +156,7 @@ test('Claude CLI transport inherits the native TUI and returns its exit status',
   assert.equal(calls[0].options.cwd, '/workspace');
 });
 
-test('Claude Goal sessions use explicit ids and session-scoped supervision without process markers', async () => {
+test('Claude Goal sessions pass exact session-scoped runtime state to hooks and children', async () => {
   const calls = [];
   class Child extends EventEmitter {}
   const spawnFn = (command, args, options) => {
@@ -129,7 +181,10 @@ test('Claude Goal sessions use explicit ids and session-scoped supervision witho
     env: { BASE: 'kept', CRUISE_CLAUDE_GOAL: '1' },
     spawnFn,
   });
-  assert.deepEqual(calls[0].options.env, { BASE: 'kept' });
+  assert.equal(calls[0].options.env.BASE, 'kept');
+  assert.equal(calls[0].options.env.CRUISE_CLAUDE_GOAL, '1');
+  assert.equal(typeof calls[0].options.env.CRUISE_RUNTIME_DIR, 'string');
+  assert.equal(typeof calls[0].options.env.CRUISE_SESSION_ID, 'string');
   assert.deepEqual(calls[1].options.env, { BASE: 'kept' });
   assert.equal(calls[0].args.includes('--session-id'), true);
   assert.equal(calls[1].args.includes('--session-id'), true);

@@ -46,13 +46,13 @@ For app-server work, inspect the installed or current generated protocol schema 
 
 ## Model routing
 
-- L1 Luna medium.
-- L2 Terra medium.
-- L3 Terra high.
-- L4 Terra xhigh.
-- L5 Sol high.
-- L6 Sol xhigh.
-- L7 Sol ultra.
+- L1 GPT-5.6 Luna medium.
+- L2 GPT-5.6 Terra xhigh.
+- L3 GPT-5.6 Terra ultra.
+- L4 GPT-5.6 Sol xhigh.
+- L5 GPT-6 Astra high.
+- L6 GPT-5.6 Sol ultra.
+- L7 GPT-6 Astra xhigh for direct exceptional-consequence work; use ultra only for an evidenced escalation from L6.
 
 Tool, permission, dependency, environment, and transport failures do not cause model escalation. Escalate only the narrow work item after new evidence.
 

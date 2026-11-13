@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import {
+  assertNoSecretMaterial,
+  assertNoSensitiveAccessRequest,
+  assertNoSensitivePathReference,
+  NEVER_READ_INSTRUCTIONS,
+} from './sensitive-path.mjs';
+
 export const MAX_CAPSULE_BYTES = 8 * 1024;
 export const MAX_WORKER_HANDOFF_BYTES = 4 * 1024;
 
@@ -33,6 +40,10 @@ function stringList(value, label) {
   return value.map((item) => item.trim()).filter(Boolean);
 }
 
+function safePathReferences(value, label) {
+  return stringList(value, label).map((item) => assertNoSensitivePathReference(item, label));
+}
+
 function assertByteCap(value, cap, label) {
   const bytes = Buffer.byteLength(value);
   if (bytes > cap) throw new Error(`${label} exceeds ${cap} bytes`);
@@ -55,22 +66,29 @@ export function buildContextCapsule({
   if (!Number.isSafeInteger(visibleOutputBytes) || visibleOutputBytes < 1 || visibleOutputBytes > 12 * 1024) {
     throw new TypeError('visibleOutputBytes must be an integer from 1 through 12288');
   }
+  const safeTask = text(task, 'capsule task');
+  assertNoSensitiveAccessRequest(safeTask, 'capsule task');
+  const protectedInvariants = stringList(invariants, 'invariants');
+  if (!protectedInvariants.includes(NEVER_READ_INSTRUCTIONS)) {
+    protectedInvariants.push(NEVER_READ_INSTRUCTIONS);
+  }
   const capsule = {
     schema_version: 1,
     kind: 'cruise_bounded_context_capsule',
-    task: text(task, 'capsule task'),
+    task: safeTask,
     non_goals: stringList(nonGoals, 'nonGoals'),
     current_evidence: stringList(evidence, 'evidence'),
-    relevant_files_symbols_ranges: stringList(relevantRanges, 'relevantRanges'),
-    protected_invariants: stringList(invariants, 'invariants'),
-    edit_ownership: stringList(ownership, 'ownership'),
-    focused_verification: stringList(verification, 'verification'),
+    relevant_files_symbols_ranges: safePathReferences(relevantRanges, 'relevantRanges'),
+    protected_invariants: protectedInvariants,
+    edit_ownership: safePathReferences(ownership, 'ownership'),
+    focused_verification: safePathReferences(verification, 'verification'),
     remaining_uncertainty: stringList(uncertainty, 'uncertainty'),
     stop_conditions: stringList(stopConditions, 'stopConditions'),
     escalation_conditions: stringList(escalationConditions, 'escalationConditions'),
     model_visible_output_cap_bytes: visibleOutputBytes,
   };
   const serialized = `${JSON.stringify(capsule, null, 2)}\n`;
+  assertNoSecretMaterial(serialized, 'worker capsule');
   const bytes = assertByteCap(serialized, MAX_CAPSULE_BYTES, 'worker capsule');
   return Object.freeze({
     value: Object.freeze(capsule),

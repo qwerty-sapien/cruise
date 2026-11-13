@@ -41,6 +41,8 @@ Default rates current on 2026-08-20, configurable by versioned policy:
 
 Rates are credits per million tokens.
 
+GPT-6 Astra credit estimates are unavailable until a versioned authoritative Codex-credit rate exists. Until then, account `usedPercent` remains the quota authority for Astra work.
+
 ```text
 uncached = input - cached
 
