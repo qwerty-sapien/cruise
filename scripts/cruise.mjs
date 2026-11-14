@@ -23,6 +23,7 @@ import {
   evaluateFlightAssurance,
 } from './lib/assurance.mjs';
 import { writeOriginPrompt } from './lib/origin-note.mjs';
+import { createLineReader } from './lib/line-input.mjs';
 import { pickOne } from './lib/picker.mjs';
 import { providerDefinition, resolveProvider, skillReference } from './lib/provider.mjs';
 import {
@@ -32,6 +33,8 @@ import {
   writeQueue,
 } from './lib/queue.mjs';
 import {
+  answerApproval,
+  answerUserInput,
   SimpleCruiseGoalBootstrapTimeoutError,
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
@@ -221,7 +224,15 @@ export function parseArgs(argv, { env = process.env } = {}) {
   return command === 'queue' ? { ...options, queueAction, prompt } : { ...options, prompt };
 }
 
-export async function readLineOnce({ prompt, input = process.stdin, output = process.stderr }) {
+export async function readLineOnce({ prompt, input = process.stdin, output = process.stderr, lineReader = null }) {
+  if (lineReader || !(input.isTTY && output.isTTY)) {
+    const reader = lineReader ?? createLineReader({ input });
+    try {
+      return await reader.question({ prompt, output });
+    } finally {
+      if (!lineReader) reader.close();
+    }
+  }
   const readline = createInterface({
     input,
     output,
@@ -639,25 +650,12 @@ export async function runWorker(options, {
 
 async function answerWorkerRequest(message, { client = null } = {}) {
   const params = message.params ?? {};
+  const input = process.stdin;
+  const output = process.stderr;
   if (message.method === 'item/tool/requestUserInput') {
-    return awaitHumanInput(client, async () => {
-      const answers = {};
-      for (const question of params.questions ?? []) {
-        const options = Array.isArray(question.options) ? question.options : [];
-        if (options.length > 0) {
-          const selection = await pickOne({
-            title: `${question.header ?? ''}: ${question.question ?? ''}`.replace(/^: /u, ''),
-            options,
-          });
-          const value = selection?.value ?? selection?.label;
-          if (value == null) throw new SimpleCruiseInterruptedError();
-          answers[question.id] = { answers: [String(value)] };
-        } else {
-          answers[question.id] = { answers: [await readLineOnce({ prompt: `${question.question}: ` })] };
-        }
-      }
-      return { answers };
-    });
+    return awaitHumanInput(client, () => answerUserInput(params, {
+      pickOne, readLine: readLineOnce, input, output,
+    }));
   }
   if ([
     'item/commandExecution/requestApproval',
@@ -665,14 +663,7 @@ async function answerWorkerRequest(message, { client = null } = {}) {
     'item/permissions/requestApproval',
   ].includes(message.method)) {
     return awaitHumanInput(client, async () => {
-      const selection = await pickOne({
-        title: params.reason ?? params.command ?? 'Approve this action?',
-        options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
-          label: String(value),
-          value,
-        })),
-      });
-      const decision = selection?.value ?? selection?.label ?? 'decline';
+      const decision = await answerApproval(params, { pickOne, input, output });
       return message.method === 'item/permissions/requestApproval'
         ? { permissions: decision === 'accept' ? params.permissions ?? {} : {}, scope: 'turn' }
         : { decision };

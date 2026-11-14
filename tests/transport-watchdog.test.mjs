@@ -12,6 +12,7 @@ import {
 } from '../scripts/lib/app-server-client.mjs';
 import {
   SimpleCruiseGoalBootstrapTimeoutError,
+  SimpleCruiseInputUnavailableError,
   SimpleCruiseSession,
 } from '../scripts/lib/simple-session.mjs';
 
@@ -38,6 +39,7 @@ class HostileAppServer extends EventEmitter {
     this.interval = null;
     this.exited = false;
     this.kills = [];
+    this.received = [];
   }
 
   send(message) {
@@ -102,6 +104,7 @@ class HostileAppServer extends EventEmitter {
   }
 
   handle(message) {
+    this.received.push(message);
     if (message.method === 'initialize') {
       if (this.mode === 'A_no_initialize') return;
       this.respond(message, { userAgent: 'fake', codexHome: '/tmp/fake' });
@@ -223,13 +226,12 @@ async function createRun(mode, {
   };
 }
 
-test('A-H hostile matrix bounds every silent transport path and preserves C/F', async () => {
+test('A-H hostile matrix bounds silent transport paths and distinguishes C/F/G', async () => {
   const inactivityModes = [
     'A_no_initialize',
     'B_no_thread_start',
     'D_turn_never_completes',
     'E_goal_continuation_hang',
-    'G_question_no_stdin',
     'H_turn_start_no_reply',
   ];
   for (const mode of inactivityModes) {
@@ -245,6 +247,26 @@ test('A-H hostile matrix bounds every silent transport path and preserves C/F', 
     } finally {
       await run.cleanup();
     }
+  }
+
+  const unavailable = await createRun('G_question_no_stdin', {
+    pickOne: async () => ({ status: 'cancelled', reason: 'eof' }),
+  });
+  try {
+    await assert.rejects(unavailable.running, (error) => {
+      assert.ok(error instanceof SimpleCruiseInputUnavailableError);
+      assert.equal(error.code, 'CRUISE_INPUT_UNAVAILABLE');
+      assert.equal(error.reason, 'eof');
+      return true;
+    });
+    const response = unavailable.server.received.find((message) => message.id === 9001);
+    assert.equal(Object.hasOwn(response, 'result'), false);
+    assert.equal(response.error.code, -32000);
+    assert.deepEqual(response.error.data, { code: 'CRUISE_INPUT_UNAVAILABLE', reason: 'eof' });
+    assert.equal(unavailable.client._inactivityTimer, null);
+    assert.equal(unavailable.server.exited, true);
+  } finally {
+    await unavailable.cleanup();
   }
 
   const bootstrap = await createRun('C_goal_no_turn');

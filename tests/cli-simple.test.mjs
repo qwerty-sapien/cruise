@@ -118,7 +118,7 @@ test('the release exposes exactly four real skills with synchronized versions', 
   const packageVersion = JSON.parse(await readFile(resolve('package.json'), 'utf8')).version;
   const codex = JSON.parse(await readFile(resolve('.codex-plugin/plugin.json'), 'utf8'));
   const claude = JSON.parse(await readFile(resolve('.claude-plugin/plugin.json'), 'utf8'));
-  assert.equal(packageVersion, '0.4.0');
+  assert.equal(packageVersion, '0.9.0');
   assert.equal(codex.version, packageVersion);
   assert.equal(claude.version, packageVersion);
   assert.doesNotMatch(JSON.stringify(codex.interface.defaultPrompt), /refine/u);

@@ -325,6 +325,36 @@ test("non-TTY fallback supports q cancellation and EOF cancellation", async () =
   assert.deepEqual(eofResult, { status: "cancelled", reason: "eof", via: "numbered" });
 });
 
+test("an ending TTY stream settles as EOF and restores terminal state", async () => {
+  const input = Readable.from([]);
+  input.isTTY = true;
+  input.isRaw = false;
+  const rawModeCalls = [];
+  input.setRawMode = (value) => { input.isRaw = value; rawModeCalls.push(value); };
+  const output = new FakeOutput();
+
+  assert.deepEqual(await pickOne({ title: "Native approval", options: ["Approve", "Decline"], input, output }), {
+    status: "cancelled", reason: "eof", via: "tty",
+  });
+  assert.deepEqual(rawModeCalls, [true, false]);
+  for (const event of ["keypress", "end", "close", "error"]) assert.equal(input.listenerCount(event), 0);
+  assert.equal(output.listenerCount("error"), 0);
+});
+
+test("an already-ended TTY stream settles without entering raw mode", async () => {
+  const input = Readable.from([]);
+  input.resume();
+  await new Promise((resolve) => input.once("end", resolve));
+  input.isTTY = true;
+  const rawModeCalls = [];
+  input.setRawMode = (value) => rawModeCalls.push(value);
+
+  assert.deepEqual(await pickOne({ title: "Native approval", options: ["Approve"], input, output: new FakeOutput() }), {
+    status: "cancelled", reason: "eof", via: "tty",
+  });
+  assert.deepEqual(rawModeCalls, []);
+});
+
 test("one shared line reader preserves picker, free-text, and picker answers", async () => {
   const input = Readable.from(["1\ncustom requirement\n2\n"]);
   const lineReader = createLineReader({ input });

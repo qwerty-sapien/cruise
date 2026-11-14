@@ -64,12 +64,30 @@ function hasEffectNotification(message) {
 }
 
 async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerRequest }) {
+  const completion = deferred();
+  // Exit/terminal events can reject this while a setup RPC is still pending.
+  completion.promise.catch(() => {});
   const client = clientFactory({
     spawnOptions: { cwd },
     clientInfo: { name: 'cruise-worker', title: 'Cruise Worker', version: '0.1.0' },
-    onServerRequest,
+    onServerRequest: onServerRequest === null ? null : async (...args) => {
+      try {
+        return await onServerRequest(...args);
+      } catch (error) {
+        if (['CRUISE_INPUT_UNAVAILABLE', 'CRUISE_INTERRUPTED'].includes(error?.code)) {
+          try {
+            // Reply before settling: stopping first would close the RPC stream.
+            (args[1] ?? client).respondError(args[0].id, error);
+          } catch {
+            // The peer may already have exited while waiting for human input.
+          }
+          completion.reject(error);
+          return undefined;
+        }
+        throw error;
+      }
+    },
   });
-  const completion = deferred();
   let threadId = null;
   let turnId = null;
   let effectsObserved = false;

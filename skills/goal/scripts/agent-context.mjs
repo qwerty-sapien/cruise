@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Offline, bounded retrieval. Native host permissions remain authoritative.
 import { lstat, open, readdir, realpath, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -12,8 +13,10 @@ const inside = (root, path) => path === root || path.startsWith(root + sep);
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 
 async function read(path, limit = LIMIT) {
-  const file = await open(path, 'r');
+  // A FIFO must not block open before its descriptor type can be checked.
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
+    if (!(await file.stat()).isFile()) throw new Error(`Non-regular input rejected: ${path}`);
     const buffer = Buffer.alloc(limit + 1);
     let length = 0;
     while (length < buffer.length) {
@@ -56,7 +59,11 @@ export async function resume(root, agent, session) {
   const current = await checkpoint(root, agent, session);
   const { path, owned, namespace } = current;
   const task = await owned('task.md', 4096);
+  if (!task.trim()) throw new Error('Checkpoint task must not be empty');
   const progress = JSON.parse(await owned('progress.json', 4096));
+  if (!progress || typeof progress !== 'object' || Array.isArray(progress)) {
+    throw new Error('Checkpoint progress must be an object');
+  }
   const manifest = (await owned('context.requirements.txt', 8192)).split('\n').filter((line) => line.trim());
   if (manifest.length > 32) throw new Error('Too many context pointers');
   const excerpts = [];

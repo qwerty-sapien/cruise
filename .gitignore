@@ -77,3 +77,6 @@ evals/*
 
 # Agent-owned context stays local and outside model conversation history.
 /agents/
+
+# Owner reference notes are write-only to agents, not product inputs.
+/_*.md

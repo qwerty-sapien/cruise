@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { index, resume } from '../skills/goal/scripts/agent-context.mjs';
 
 const OLD = '20261114T180000000Z';
@@ -47,6 +49,27 @@ test('invalid latest checkpoint never falls back to older history', async (t) =>
   await assert.rejects(resume(root, 'a', 's'), /owner mismatch/u);
 });
 
+test('incomplete latest task or progress rejects without older fallback', async (t) => {
+  const { root, make } = await fixture(t);
+  const old = await make('a', 's', OLD);
+  await writeFile(join(old, 'task.md'), 'obsolete-fallback-task');
+  const newest = await make();
+  for (const task of ['', ' \t\n']) {
+    await writeFile(join(newest, 'task.md'), task);
+    await assert.rejects(resume(root, 'a', 's'), /task must not be empty/u);
+  }
+  await writeFile(join(newest, 'task.md'), 'Continue latest task');
+  for (const progress of [null, [], 1, true, 'invalid']) {
+    await writeFile(join(newest, 'progress.json'), JSON.stringify(progress));
+    await assert.rejects(resume(root, 'a', 's'), /progress must be an object/u);
+  }
+  await writeFile(join(newest, 'progress.json'), '{}');
+  const selected = JSON.parse(await resume(root, 'a', 's'));
+  assert.equal(selected.checkpoint, newest);
+  assert.equal(selected.task, 'Continue latest task');
+  assert.deepEqual(selected.progress, {});
+});
+
 test('peer, other-session, older-generation and traversal pointers fail closed', async (t) => {
   const { root, make } = await fixture(t);
   const current = await make();
@@ -75,6 +98,25 @@ test('symlinks cannot redirect ownership or excerpts into peer history', async (
   await rm(join(current, 'owner.json'));
   await symlink(join(peer, 'owner.json'), join(current, 'owner.json'));
   await assert.rejects(resume(root, 'a', 's'), /Symlinked/u);
+});
+
+test('resume promptly rejects FIFO checkpoint and excerpt inputs', { skip: process.platform === 'win32' }, async (t) => {
+  for (const name of ['task.md', 'conversation.jsonl']) {
+    await t.test(name, async (subtest) => {
+      const { root, make } = await fixture(subtest);
+      const current = await make();
+      await rm(join(current, name));
+      execFileSync('mkfifo', [join(current, name)]);
+      const result = spawnSync(process.execPath, [
+        fileURLToPath(new URL('../skills/goal/scripts/agent-context.mjs', import.meta.url)),
+        'resume', root, 'a', 's',
+      ], { encoding: 'utf8', timeout: 1200 });
+      assert.equal(result.error, undefined, 'helper must not wait for a FIFO writer');
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Non-regular input rejected/u);
+      assert.equal(result.stdout, '');
+    });
+  }
 });
 
 test('stale ranges, invalid ranges, and large outputs fail without partial extraction', async (t) => {

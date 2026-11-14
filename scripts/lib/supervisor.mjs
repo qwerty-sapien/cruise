@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, readlink, rename, unlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { constants } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, opendir, readFile, readlink, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { devNull, tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { DEFAULT_STALL } from './flight-plan.mjs';
@@ -10,6 +12,14 @@ const execFileAsync = promisify(execFile);
 const FAILURE_LINE = /\b(?:error|fail(?:ed|ure)?|exception|panic|traceback)\b/iu;
 export const MAX_SUPERVISOR_HISTORY = 32;
 export const SUPERVISOR_STATE_FILE = '.supervisor.json';
+export const NON_GIT_FINGERPRINT_LIMITS = Object.freeze({
+  entries: 10_000,
+  bytes: 64 * 1024 * 1024,
+  ignoreBytes: 64 * 1024,
+  pathBytes: 1024 * 1024,
+  depth: 32,
+  elapsedMs: 10_000,
+});
 let atomicSequence = 0;
 
 function digest(value) {
@@ -361,9 +371,276 @@ export async function writeSupervisorState(cwd, state) {
   await writeCruiseScratchJson(cwd, SUPERVISOR_STATE_FILE, state);
 }
 
+// Exclude reserved native state and credentials before opening files. Ordinary
+// product/output names are included unless the project's .gitignore says otherwise.
+const NON_GIT_EXCLUDED_DIRECTORIES = new Set([
+  '.git', '.hg', '.svn', '.agents', '.codex', '.claude', '.cursor',
+  '.aws', '.ssh', '.gnupg', '.kube', '.docker', '.azure', '.gcloud', '.config',
+  '.agent-context', 'secrets', '.secrets', 'credentials',
+]);
+const NON_GIT_EXCLUDED_FILES = new Set([
+  '.env', '.netrc', '.npmrc', '.pypirc', '.dockercfg', '.git-credentials',
+  'credentials', 'credentials.json', 'secrets.json', 'auth.json', 'tokens.json',
+  'service-account.json', 'service_account.json', '.ds_store',
+  '.bash_history', '.zsh_history', '.python_history', '.node_repl_history',
+  '.lesshst', '.sqlite_history', '.claude.json', '.codex.json', '.authinfo', '.gitconfig',
+]);
+
+function excludedNonGitPath(path, excludeFlightPlan) {
+  const parts = path.split('/');
+  const name = parts.at(-1).toLowerCase();
+  if (parts.some((part) => NON_GIT_EXCLUDED_DIRECTORIES.has(part.toLowerCase()))) return true;
+  if (['agents', 'agent-context'].includes(parts[0].toLowerCase())) return true;
+  if (parts.length === 1 && /^_.*\.md$/iu.test(name)) return true;
+  if (NON_GIT_EXCLUDED_FILES.has(name) || name.startsWith('.env.')) return true;
+  if (/^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)(?:\.pub)?$/u.test(name)) return true;
+  if (/\.(?:pem|key|p12|pfx|keystore|jks)$/u.test(name)) return true;
+  if (parts[0].toLowerCase() === '.cruise') {
+    return excludeFlightPlan || (parts.length > 1 && ![
+      '.cruise/flight.md', '.cruise/origin.md',
+    ].includes(path.toLowerCase()));
+  }
+  return false;
+}
+
+function sameFilesystemObservation(first, second) {
+  return ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs'].every((key) => first[key] === second[key]);
+}
+
+async function captureNonGitFingerprint(cwd, { excludeFlightPlan }) {
+  const root = await realpath(cwd);
+  // An unreadable or corrupt existing repository must not silently fall back to
+  // directory-only assurance. Inspect marker metadata, never their contents.
+  let ancestor = root;
+  for (let count = 0; ; count += 1) {
+    if (count > 128) throw new Error('non-Git workspace ancestry limit exceeded');
+    try {
+      await lstat(join(ancestor, '.git'));
+      throw new Error('Git repository metadata exists but could not be inspected');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  const startedAt = Date.now();
+  const limits = NON_GIT_FINGERPRINT_LIMITS;
+  let entries = 0;
+  let bytes = 0;
+  let pathBytes = 0;
+  const observations = [];
+  const ignoreObservations = [];
+  const fileHashes = new Map();
+  const metadataObservations = new Map();
+  const included = new Set(['']);
+  const linkTargets = [];
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const assertWithinDeadline = () => {
+    if (Date.now() - startedAt > limits.elapsedMs) throw new Error('non-Git fingerprint deadline exceeded');
+  };
+  const assertDirectoryChain = async (path) => {
+    const chain = [];
+    for (let directory = dirname(path); ; directory = dirname(directory)) {
+      const expected = metadataObservations.get(directory);
+      if (!expected?.isDirectory()) throw new Error('file ancestry was not captured');
+      chain.push([directory, expected]);
+      if (directory === root) break;
+    }
+    for (const [directory, expected] of chain.reverse()) {
+      assertWithinDeadline();
+      const current = await lstat(directory, { bigint: true });
+      if (!current.isDirectory() || !sameFilesystemObservation(expected, current) ||
+          await realpath(directory) !== directory) throw new Error('workspace directory ancestry changed');
+    }
+  };
+  const stableFileHash = async (path, metadata, { ignoreFile = false } = {}) => {
+    assertWithinDeadline();
+    await assertDirectoryChain(path);
+    if (!metadata.isFile()) throw new Error('non-Git fingerprint requires regular files');
+    if (ignoreFile && metadata.size > BigInt(limits.ignoreBytes)) throw new Error('ignore file limit exceeded');
+    const cached = fileHashes.get(path);
+    if (cached) {
+      if (!sameFilesystemObservation(metadata, cached.metadata)) throw new Error('file changed during fingerprint');
+      return cached.hash;
+    }
+    if (metadata.size > BigInt(limits.bytes - bytes)) throw new Error('non-Git fingerprint byte limit exceeded');
+    bytes += Number(metadata.size);
+    // Never follow a final-component symlink, or block on a raced FIFO/device.
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const before = await handle.stat({ bigint: true });
+      if (!before.isFile() || !sameFilesystemObservation(metadata, before)) throw new Error('file changed before fingerprint');
+      // O_NOFOLLOW only covers the last component. Recheck all pinned parent
+      // identities and the opened path before the first content read. The file
+      // descriptor then retains that file even if its path is moved afterwards.
+      await assertDirectoryChain(path);
+      if (!sameFilesystemObservation(before, await lstat(path, { bigint: true }))) throw new Error('opened file path changed');
+      await assertDirectoryChain(path);
+      const hash = createHash('sha256');
+      const ignoreChunks = ignoreFile ? [] : null;
+      const buffer = Buffer.alloc(Math.min(64 * 1024, Number(metadata.size) + 1));
+      let count = 0;
+      while (true) {
+        assertWithinDeadline();
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        count += bytesRead;
+        if (count > Number(metadata.size)) throw new Error('file grew during fingerprint');
+        hash.update(buffer.subarray(0, bytesRead));
+        if (ignoreChunks) ignoreChunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      }
+      const after = await handle.stat({ bigint: true });
+      const current = await lstat(path, { bigint: true });
+      if (count !== Number(metadata.size) || !sameFilesystemObservation(before, after) ||
+          !sameFilesystemObservation(after, current)) throw new Error('file changed during fingerprint');
+      const value = hash.digest('hex');
+      fileHashes.set(path, { metadata: after, hash: value, ignoreContents: ignoreChunks ? Buffer.concat(ignoreChunks) : null });
+      return value;
+    } finally {
+      await handle.close();
+    }
+  };
+
+  // A disposable native Git repository supplies exact nested .gitignore rules,
+  // including negation. Its worktree contains captured ignore files and empty
+  // directory shapes, so Git never rereads source paths through raced ancestry.
+  const scratch = await mkdtemp(join(tmpdir(), 'cruise-workspace-ignore-'));
+  const ignoreWorktree = join(scratch, 'worktree');
+  const options = {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 3000,
+    maxBuffer: 2 * limits.pathBytes,
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))),
+      LC_ALL: 'C',
+      GIT_CONFIG_GLOBAL: devNull,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_COUNT: '0',
+      GIT_CONFIG_PARAMETERS: '',
+      GIT_INDEX_FILE: join(scratch, 'index'),
+    },
+  };
+  try {
+    await execFileAsync('git', ['init', '--bare', '--quiet', '--template=', scratch], options);
+    await mkdir(ignoreWorktree);
+    const ignoredPaths = async (paths) => {
+      if (!paths.length) return new Set();
+      assertWithinDeadline();
+      const command = execFileAsync('git', [
+        `--git-dir=${scratch}`, `--work-tree=${ignoreWorktree}`,
+        '-c', `core.excludesFile=${devNull}`,
+        'check-ignore', '--no-index', '--stdin', '-z',
+      ], options);
+      command.child.stdin.on('error', () => {});
+      command.child.stdin.end(`${paths.join('\u0000')}\u0000`);
+      const result = await command.catch((error) => {
+        if (error.code === 1) return error; // No matched paths is a normal result.
+        throw error;
+      });
+      if (result.stderr?.trim()) throw new Error('Git ignore observation was incomplete');
+      const ignored = new Set(result.stdout.split('\u0000').filter(Boolean));
+      if ([...ignored].some((path) => !paths.includes(path))) throw new Error('unexpected Git ignore result');
+      return ignored;
+    };
+    const walk = async (directory, parent = '', depth = 0) => {
+      assertWithinDeadline();
+      if (depth > limits.depth) throw new Error('non-Git fingerprint depth limit exceeded');
+      const before = await lstat(directory, { bigint: true });
+      if (!before.isDirectory() || await realpath(directory) !== directory) throw new Error('directory is not a stable workspace path');
+      metadataObservations.set(directory, before);
+      const names = [];
+      const directoryNames = new Set();
+      let ignoreFilePresent = false;
+      const stream = await opendir(directory, { encoding: 'buffer' });
+      for await (const entry of stream) {
+        assertWithinDeadline();
+        if (++entries > limits.entries) throw new Error('non-Git fingerprint entry limit exceeded');
+        const name = decoder.decode(entry.name);
+        if (name === '.gitignore') ignoreFilePresent = true;
+        const path = parent ? `${parent}/${name}` : name;
+        pathBytes += Buffer.byteLength(path);
+        if (pathBytes > limits.pathBytes) throw new Error('non-Git fingerprint path limit exceeded');
+        if (!excludedNonGitPath(path, excludeFlightPlan)) {
+          names.push(name);
+          if (entry.isDirectory()) directoryNames.add(name);
+        }
+      }
+      names.sort();
+      await assertDirectoryChain(join(directory, '.directory-check'));
+      const mirroredDirectory = join(ignoreWorktree, parent);
+      if (ignoreFilePresent) {
+        const path = join(directory, '.gitignore');
+        const metadata = await lstat(path, { bigint: true });
+        ignoreObservations.push([parent, await stableFileHash(path, metadata, { ignoreFile: true })]);
+        await writeFile(join(mirroredDirectory, '.gitignore'), fileHashes.get(path).ignoreContents);
+      }
+      for (const name of directoryNames) {
+        assertWithinDeadline();
+        await mkdir(join(mirroredDirectory, name));
+      }
+      const ignored = await ignoredPaths(names.map((name) => parent ? `${parent}/${name}` : name));
+      await assertDirectoryChain(join(directory, '.directory-check'));
+      for (const name of names) {
+        const path = parent ? `${parent}/${name}` : name;
+        if (ignored.has(path)) continue;
+        const absolutePath = join(directory, name);
+        await assertDirectoryChain(absolutePath);
+        const metadata = await lstat(absolutePath, { bigint: true });
+        await assertDirectoryChain(absolutePath);
+        included.add(path);
+        if (metadata.isDirectory()) {
+          observations.push(['directory', path]);
+          await walk(absolutePath, path, depth + 1);
+        } else if (metadata.isFile()) {
+          observations.push(['file', path, Number(metadata.mode & 0o111n), await stableFileHash(absolutePath, metadata)]);
+        } else if (metadata.isSymbolicLink()) {
+          // Hash the link itself; its resolved target must also be captured in
+          // this workspace. Escaping, dangling, and excluded targets fail closed.
+          const target = decoder.decode(await readlink(absolutePath, { encoding: 'buffer' }));
+          const targetPath = relative(root, await realpath(absolutePath));
+          if (isAbsolute(targetPath) || targetPath === '..' || targetPath.startsWith(`..${sep}`)) throw new Error('symlink escapes workspace');
+          linkTargets.push(targetPath.split(sep).join('/'));
+          const after = await lstat(absolutePath, { bigint: true });
+          if (!sameFilesystemObservation(metadata, after)) throw new Error('symlink changed during fingerprint');
+          metadataObservations.set(absolutePath, after);
+          observations.push(['symlink', path, target]);
+        } else {
+          throw new Error('unsupported non-regular workspace entry');
+        }
+      }
+      const after = await lstat(directory, { bigint: true });
+      if (!sameFilesystemObservation(before, after)) throw new Error('directory changed during fingerprint');
+    };
+    await walk(root);
+    if (linkTargets.some((target) => !included.has(target))) throw new Error('symlink target is outside captured inputs');
+    // Metadata only rejects races; it never substitutes for content evidence.
+    for (const [path, observation] of [...metadataObservations, ...fileHashes]) {
+      assertWithinDeadline();
+      const expected = observation.metadata ?? observation;
+      if (!sameFilesystemObservation(expected, await lstat(path, { bigint: true }))) throw new Error('workspace changed during fingerprint');
+    }
+    assertWithinDeadline();
+    return digest(JSON.stringify({
+      format: 'cruise-non-git-content-v1', observations, ignoreObservations,
+    }));
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 export async function captureWorkspaceFingerprint(cwd, { excludeFlightPlan = false } = {}) {
   try {
     const options = { cwd, encoding: 'utf8', maxBuffer: Infinity };
+    const repository = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], {
+      ...options, env: { ...process.env, LC_ALL: 'C' }, timeout: 3000,
+    }).catch((error) => {
+      // Git's normal absent-repository diagnostic varies at mount boundaries.
+      if (error.stderr?.startsWith('fatal: not a git repository (or any ')) return null;
+      throw error;
+    });
+    if (repository === null) return await captureNonGitFingerprint(cwd, { excludeFlightPlan });
     const pathspec = excludeFlightPlan
       ? ['--', '.', ':(exclude).cruise/**']
       : [];

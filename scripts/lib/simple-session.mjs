@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 
+import { createLineReader } from './line-input.mjs';
 import {
   DEFAULT_STALL,
   flightPlanTemplate,
@@ -216,46 +217,91 @@ export function automaticGoalProgress(params = {}) {
   return automaticRoutineGoalAdvance(params) ?? automaticGoalAuthorization(params);
 }
 
-async function answerUserInput(params, { pickOne, readLine, input, output, lineReader }) {
-  const answers = {};
-  for (const question of params.questions ?? []) {
-    const options = Array.isArray(question.options) ? question.options : [];
-    if (options.length > 0) {
-      const selection = await pickOne({
-        title: `${question.header ?? ''}: ${question.question ?? ''}`.replace(/^: /u, ''),
-        options,
-        input,
-        output,
-        lineReader,
-      });
-      const value = selectionValue(selection);
-      if (value === null) throw new SimpleCruiseInterruptedError();
-      answers[question.id] = { answers: [String(value)] };
-    } else {
-      const answer = await readLine({
-        prompt: `${question.question ?? 'Answer'}: `,
-        input,
-        output,
-        lineReader,
-      });
-      answers[question.id] = { answers: [String(answer)] };
-    }
+function requireHumanSelection(selection) {
+  const value = selection?.status === 'cancelled' ? null : selectionValue(selection);
+  if (value !== null) return value;
+  const reason = selection?.reason ?? 'unavailable';
+  if (reason === 'eof' || reason === 'unavailable') {
+    throw new SimpleCruiseInputUnavailableError(reason);
   }
-  return { answers };
+  throw new SimpleCruiseInterruptedError();
 }
 
-async function answerApproval(params, { pickOne, input, output, lineReader }) {
+export async function answerUserInput(params, { pickOne, readLine, input, output, lineReader }) {
+  const answers = {};
+  const ownsLineReader = lineReader == null && !(input?.isTTY && output?.isTTY);
+  if (ownsLineReader) lineReader = createLineReader({ input });
+  try {
+    for (const question of params.questions ?? []) {
+      const options = Array.isArray(question.options) ? question.options : [];
+      if (options.length > 0) {
+        const selection = await pickOne({
+          title: `${question.header ?? ''}: ${question.question ?? ''}`.replace(/^: /u, ''),
+          options,
+          input,
+          output,
+          lineReader,
+        });
+        answers[question.id] = { answers: [String(requireHumanSelection(selection))] };
+      } else {
+        const answer = await readLine({
+          prompt: `${question.question ?? 'Answer'}: `,
+          input,
+          output,
+          lineReader,
+        });
+        if (answer == null) {
+          if (lineReader?.endReason && lineReader.endReason !== 'eof') throw new SimpleCruiseInterruptedError();
+          throw new SimpleCruiseInputUnavailableError('eof');
+        }
+        answers[question.id] = { answers: [String(answer)] };
+      }
+    }
+    return { answers };
+  } finally {
+    if (ownsLineReader) lineReader.close();
+  }
+}
+
+function approvalDecisionLabel(value) {
+  if (value === 'accept') return 'Approve once';
+  if (value === 'acceptForSession') return 'Approve for this session';
+  if (value === 'decline') return 'Decline';
+  if (value === 'cancel') return 'Decline and interrupt';
+  if (value?.acceptWithExecpolicyAmendment) {
+    return `Approve and allow future commands matching ${JSON.stringify(value.acceptWithExecpolicyAmendment.execpolicy_amendment)}`;
+  }
+  if (value?.applyNetworkPolicyAmendment) {
+    const amendment = value.applyNetworkPolicyAmendment.network_policy_amendment;
+    if (amendment?.action === 'allow' || amendment?.action === 'deny') {
+      return `${amendment.action === 'allow' ? 'Allow' : 'Deny'} network access to ${amendment.host} persistently`;
+    }
+  }
+  return typeof value === 'string' ? value : `Native decision: ${JSON.stringify(value)}`;
+}
+
+export async function answerApproval(params, { pickOne, input, output, lineReader }) {
   const selection = await pickOne({
     title: params.reason ?? params.command ?? 'Approve this action?',
     options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
-      label: String(value),
+      label: approvalDecisionLabel(value),
       value,
     })),
     input,
     output,
     lineReader,
   });
-  return selectionValue(selection) ?? 'decline';
+  return requireHumanSelection(selection);
+}
+
+export class SimpleCruiseInputUnavailableError extends Error {
+  constructor(reason = 'eof') {
+    super(`Cruise cannot answer the native request: human input is unavailable (${reason}).`);
+    this.name = 'CruiseInputUnavailableError';
+    this.code = 'CRUISE_INPUT_UNAVAILABLE';
+    this.reason = reason;
+    this.data = { code: this.code, reason };
+  }
 }
 
 export class SimpleCruiseInterruptedError extends Error {
@@ -343,6 +389,7 @@ export class SimpleCruiseSession extends EventEmitter {
     this.pickOne = pickOne;
     this.readLine = readLine;
     this.lineReader = lineReader;
+    this.inputError = null;
     this.input = input;
     this.output = output;
     this.errorOutput = errorOutput;
@@ -427,7 +474,7 @@ export class SimpleCruiseSession extends EventEmitter {
         try {
           await this.activateGoal();
         } catch (error) {
-          goalActivated.resolve();
+          goalActivated.reject(error);
           this.pending?.reject(error);
           await nativeTurn.catch(() => {});
           throw error;
@@ -448,6 +495,7 @@ export class SimpleCruiseSession extends EventEmitter {
       }
       while (this.skill === 'goal') {
         await this.interactions;
+        if (this.inputError) throw this.inputError;
         if (result.status !== 'completed') {
           throw new Error(`Cruise ${this.skill} ended with status ${result.status}.`);
         }
@@ -552,6 +600,7 @@ export class SimpleCruiseSession extends EventEmitter {
         continuationCompleted = true;
       }
       await this.interactions;
+      if (this.inputError) throw this.inputError;
       if (result.status !== 'completed') {
         throw new Error(`Cruise ${this.skill} ended with status ${result.status}.`);
       }
@@ -958,6 +1007,8 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async waitForNativeGoalTurn(goalActivated = Promise.resolve()) {
     const completion = deferred();
+    // The host can exit before Goal activation releases this waiter.
+    completion.promise.catch(() => {});
     this.turnId = null;
     this.pending = completion;
     this.nativeGoalTurnWaiting = true;
@@ -994,7 +1045,7 @@ export class SimpleCruiseSession extends EventEmitter {
 
   async startIdleGoalTurn(completion) {
     const waiting = () => this.pending === completion && !this.nativeGoalTurnStarted
-      && !this.nativeGoalTurnTimedOut && !this.interrupted && !this.stopping;
+      && !this.nativeGoalTurnTimedOut && !this.nativeGoalCleanupCancelled && !this.interrupted && !this.stopping;
     if (!waiting()) return;
     const { thread } = await this.client.request('thread/read', {
       threadId: this.threadId,
@@ -1126,11 +1177,18 @@ export class SimpleCruiseSession extends EventEmitter {
   enqueueRequest(message) {
     this.interactions = this.interactions
       .then(() => this.handleRequest(message))
-      .catch((error) => this.client.respondError(message.id, error));
+      .catch((error) => {
+        if (error instanceof SimpleCruiseInputUnavailableError || error instanceof SimpleCruiseInterruptedError) {
+          this.inputError ??= error;
+          this.pending?.reject(error);
+        }
+        this.client.respondError(message.id, error);
+      });
   }
 
   async handleRequest(message) {
     if (this.stopping) return;
+    if (this.inputError) throw this.inputError;
     let result;
     if (message.method === 'item/tool/requestUserInput') {
       result = this.skill === 'goal' ? automaticGoalProgress(message.params) : null;

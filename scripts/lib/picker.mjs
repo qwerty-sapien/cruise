@@ -418,6 +418,8 @@ function pickOneTty({ title, options, input, output, signal }) {
     const cleanup = (summary) => {
       const errors = [];
       recordError(errors, () => input.removeListener("keypress", onKeypress));
+      recordError(errors, () => input.removeListener("end", onInputEnd));
+      recordError(errors, () => input.removeListener("close", onInputEnd));
       recordError(errors, () => input.removeListener("error", onInputError));
       recordError(errors, () => output.removeListener("error", onOutputError));
       recordError(errors, () => signal?.removeEventListener("abort", onAbort));
@@ -486,6 +488,10 @@ function pickOneTty({ title, options, input, output, signal }) {
       finish(null, error);
     }
 
+    function onInputEnd() {
+      finish({ status: "cancelled", reason: "eof" });
+    }
+
     function onOutputError(error) {
       finish(null, error);
     }
@@ -499,8 +505,14 @@ function pickOneTty({ title, options, input, output, signal }) {
         finish({ status: "cancelled", reason: String(signal.reason ?? "resolved") });
         return;
       }
+      if (input.readableEnded === true || input.destroyed === true) {
+        onInputEnd();
+        return;
+      }
       emitKeypressEvents(input);
       input.on("keypress", onKeypress);
+      input.once("end", onInputEnd);
+      input.once("close", onInputEnd);
       input.once("error", onInputError);
       output.once("error", onOutputError);
       signal?.addEventListener("abort", onAbort, { once: true });

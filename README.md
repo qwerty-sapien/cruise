@@ -61,6 +61,48 @@ passed independent review. After the final product edit, use
 says `ready_for_completion: true`, then mark it complete and confirm
 `allows_completion: true`.
 
+## Local plugin installation source
+
+Use a clean runtime package as the local marketplace source. Native local-plugin
+installation copies its source directory, so pointing it at an active working
+checkout can copy ignored agent contexts, histories, and task artifacts too.
+`npm pack` exports only the declared runtime and four public skill directories;
+extract that package into a separate runtime directory and point the local
+marketplace entry there. Keep the working checkout and its private contexts out
+of the installation source. Refresh with the native plugin installer after a
+runtime update; retain older runtime caches while another session uses them.
+
+## Native input and local context
+
+Closed or unavailable approval input is an input-channel error, not an owner's
+refusal. Cruise reports it and exits; a new native session can receive the real
+owner response. Structured native approval choices retain their original payloads.
+Sign-in and credential persistence belong to the selected host.
+
+For one-shot workers, exit 0 indicates that the native turn returned. Check the
+produced artifacts or run the task verifier before accepting the result; an
+explicit blocker in the response still requires attention.
+
+Non-Git Goals use a bounded content snapshot for evidence freshness. The snapshot
+uses native Git ignore rules, so Git must be available even when the workspace
+has no repository. Exceeded limits or unreliable captures leave completion unassured. Generated/native state,
+credentials, and agent checkpoints are excluded before content hashing; ordinary
+nested source directories remain inputs. Native filesystem permissions provide
+isolation; the fingerprint reader is not an operating-system security boundary.
+
+When delegating, use [native collaboration and context handoffs](skills/goal/references/agent-context.md).
+Only the assigned agent/session's latest checkpoint is a resumption source unless
+the human explicitly authorizes another scope. Agents coordinate through native
+messages and checkpoint before exhaustion instead of requesting compaction.
+
+Whole-process macOS isolation must also permit the native host's own operation.
+The tested topology retained own/sister research restrictions and permitted only
+Codex's native installation-id write, task-local SQLite/log writes, HTTPS/DNS, and
+the canonical mDNS resolver socket. Native auto-review handled nested shell
+sandbox failures. Historical launchers using removed managed/control flags need
+to use the current plain `cruise --codex worker -C <workspace> <request>` interface.
+Do not copy credentials or widen research-file access to make that setup work.
+
 ## Goal supervision
 
 The default flight-plan thresholds are three unchanged workspace observations

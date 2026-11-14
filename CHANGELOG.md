@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0 — 2026-11-14
+
+- Keep Cruise thin: native hosts own sign-in, permissions, tools, and agent
+  communication; removed managed/auth/quota control layers stay removed.
+- Start the first native Goal turn when the host is idle, preserve execution
+  intent across a read-only Plan bootstrap, and handle reply/notification order.
+- Distinguish an unavailable input channel from an explicit owner refusal;
+  render structured native choices while returning their original payloads.
+- Observe startup promise failures promptly, prevent turns after failed
+  activation, and send input RPC errors before closing worker transport.
+- Bind assurance to bounded content snapshots in ordinary non-Git workspaces
+  and reject stale evidence after product changes.
+- Reuse the canonical Flight template; keep agent handoffs scoped to the
+  assigned identity’s latest checkpoint and use native peer messages.
+- Reject non-regular checkpoint inputs before reading so a FIFO cannot hang
+  bounded retrieval; block incomplete latest task/progress without older fallback.
+- Install only the runtime package, excluding private contexts, conversation
+  histories, local artifacts, user references, and retired skill archives.
+- Add regression coverage for the audited adapter failures and their lifecycle
+  and filesystem siblings. Live canary scope and limitations are recorded
+  separately from the mock-only test suite.
+
 ## 0.4.0 — 2026-07-25
 
 - Centered Cruise on Flight v2: an adaptive quality contract whose receipts are
