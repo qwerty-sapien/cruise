@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { AppServerRpcError } from '../scripts/lib/app-server-client.mjs';
+import { createNativeAuthNormalizer } from '../scripts/lib/auth-recovery-runtime.mjs';
 import { answerWorkerRequest } from '../scripts/cruise.mjs';
 import { changelogSummaryTask } from '../scripts/lib/changelog-observer.mjs';
 import { pickOne } from '../scripts/lib/picker.mjs';
@@ -179,6 +181,58 @@ class FakeWorkerClient extends EventEmitter {
     throw new Error(`unexpected request ${method}`);
   }
 }
+
+test('worker auth recovery retries pre-effect only and cleans every client/listener', async () => {
+  for (const mode of ['recovered', 'paused', 'repeated', 'effect', 'denial', 'ambiguous', 'non-auth', 'turn-network', 'startup-network']) {
+    let recoveries = 0;
+    const clients = [];
+    const handoff = { kind: 'login', action: { command: 'codex', args: ['login'] } };
+    const runtime = { normalize: createNativeAuthNormalizer(), async recover(input) {
+      recoveries++; assert.equal(input.interactive, false);
+      assert.equal(input.evidence.credentialState, 'revoked');
+      return mode === 'paused' ? { status: 'paused', handoff } : { status: 'recovered' };
+    } };
+    const revoked = () => new AppServerRpcError({ code: -32603,
+      message: 'HTTP 401 Unauthorized, body: {"error":{"code":"token_revoked"}}' }, { method: 'account/rateLimits/read' });
+    const run = runSimpleWorker({ cwd: '/tmp', task: 'Inspect ordinary source.', authRecovery: runtime,
+      stdin: { isTTY: false }, errorOutput: { write() {} }, clientFactory() {
+        const index = clients.length;
+        const client = new FakeWorkerClient([{ method: 'turn/completed', params: { turn: { id: 'worker-turn', status: 'completed' } } }]);
+        clients.push(client);
+        client.stop = async () => { client.stopped = true; };
+        const request = client.request.bind(client);
+        client.request = async (method, params) => {
+          if (method === 'account/rateLimits/read') {
+            if (mode === 'non-auth') throw new AppServerRpcError({ code: -32603, message: 'HTTP 401 token_revoked' }, { method });
+            if (!['effect', 'denial', 'ambiguous', 'turn-network', 'startup-network'].includes(mode) && (index === 0 || mode === 'repeated')) throw revoked();
+            return {};
+          }
+          if ((mode === 'turn-network' && method === 'turn/start') || (mode === 'startup-network' && method === 'thread/start')) throw new Error('ECONNRESET');
+          if ((mode === 'ambiguous' && method === 'thread/start') || (['effect', 'denial'].includes(mode) && method === 'turn/start')) {
+            if (mode === 'effect') client.emit('notification', { method: 'item/started', params: { item: { type: 'commandExecution' } } });
+            if (mode === 'denial') client.emit('notification', { method: 'item/autoApprovalReview/completed', params: { threadId: 'worker-thread', review: { status: 'denied' } } });
+            throw revoked();
+          }
+          return request(method, params);
+        };
+        return client;
+      } });
+    if (mode === 'recovered') await run;
+    else await assert.rejects(run, error => {
+      if (mode === 'paused') assert.deepEqual(error.authRecovery.handoff, handoff);
+      if (['effect', 'ambiguous'].includes(mode)) assert.equal(error.authRecovery.status, 'recovered');
+      if (mode === 'denial') assert.equal(error.cause.code, 'CRUISE_NATIVE_APPROVAL_DENIED');
+      return true;
+    });
+    assert.equal(recoveries, ['denial', 'non-auth', 'turn-network', 'startup-network'].includes(mode) ? 0 : 1, mode);
+    assert.equal(clients.length, ['recovered', 'repeated', 'non-auth'].includes(mode) ? 2 : 1, mode);
+    for (const client of clients) {
+      assert.equal(client.stopped, true);
+      assert.equal(client.listenerCount('notification'), 0);
+      assert.equal(client.listenerCount('exit'), 0);
+    }
+  }
+});
 
 test('startup exit rejection is observed before start settles without masking the startup error', () => {
   const workerModule = new URL('../scripts/lib/simple-worker.mjs', import.meta.url).href;

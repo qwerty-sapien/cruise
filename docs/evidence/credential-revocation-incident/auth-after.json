@@ -1,0 +1,12 @@
+{
+  "pid": 73736,
+  "phase": "complete",
+  "accountAvailable": true,
+  "quotaAvailable": true,
+  "modelTurns": 0,
+  "authType": "chatgpt",
+  "childExitCode": 0,
+  "childSignal": null,
+  "revokedObserved": false,
+  "refreshReusedObserved": false
+}

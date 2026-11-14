@@ -1,5 +1,6 @@
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
 import { AppServerClient } from './app-server-client.mjs';
+import { createCallerAuthRecovery } from './auth-recovery-runtime.mjs';
 import { AUTHORIZATION_POLICY_INSTRUCTIONS } from './authorization-policy.mjs';
 import { assertNoSecretMaterial, assertNoSensitiveAccessRequest } from './sensitive-path.mjs';
 import { normalizeRecommendedLevel, resolveWorkerPolicy } from './worker-policy.mjs';
@@ -98,6 +99,8 @@ async function oneAttempt({
   transition,
   approvalsReviewer,
   outputSchema,
+  authRecoveryEnabled,
+  attemptState,
 }) {
   let nativeApprovalDenied = false;
   const env = { ...process.env };
@@ -137,6 +140,7 @@ async function oneAttempt({
   let threadId = null;
   let turnId = null;
   let effectsObserved = false;
+  let startupSubmitted = false;
   const messages = new Map();
   let outputConflict = false;
   const messageFor = (id) => {
@@ -194,6 +198,7 @@ async function oneAttempt({
   client.on('exit', exited);
   try {
     await client.start();
+    if (authRecoveryEnabled) await client.request('account/rateLimits/read');
     let policy = null;
     if (level !== null) {
       const catalog = await client.request('model/list', { limit: 100 });
@@ -207,6 +212,7 @@ async function oneAttempt({
         throw new Error(`required worker pair is unavailable: ${policy.degradation_reasons.join('; ')}`);
       }
     }
+    startupSubmitted = true;
     const started = await client.request('thread/start', {
       cwd,
       runtimeWorkspaceRoots: [],
@@ -261,6 +267,7 @@ async function oneAttempt({
       denied.effectsObserved = effectsObserved;
       throw denied;
     }
+    attemptState.preEffect = !startupSubmitted && !effectsObserved;
     try {
       Object.defineProperty(error, 'effectsObserved', {
         value: effectsObserved,
@@ -301,6 +308,8 @@ export async function runSimpleWorker({
   outputSchema = undefined,
   stdin = process.stdin,
   errorOutput = process.stderr,
+  authRecovery = null,
+  authProfile = 'default',
 } = {}) {
   if (typeof cwd !== 'string' || !cwd) throw new TypeError('worker cwd is required');
   const input = prepareWorkerInput(task);
@@ -311,8 +320,12 @@ export async function runSimpleWorker({
     throw new TypeError('worker timeoutMs must be a positive integer or null');
   }
   const reviewer = resolveApprovalsReviewer(approvalsReviewer, { input: stdin });
+  const recovery = createCallerAuthRecovery({ runtime: authRecovery, profile: authProfile,
+    interactive: stdin?.isTTY === true });
   errorOutput.write(`Cruise worker: native approvals reviewer=${reviewer}; selection is not an approval result.\n`);
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Replay evidence belongs to this invocation, never to a provider error.
+    const attemptState = { preEffect: false };
     try {
       return await oneAttempt({
         cwd,
@@ -330,11 +343,22 @@ export async function runSimpleWorker({
         transition,
         approvalsReviewer: reviewer,
         outputSchema,
+        authRecoveryEnabled: Boolean(authRecovery),
+        attemptState,
       });
     } catch (cause) {
+      const auth = await recovery.attempt(cause, {
+        preEffect: attemptState.preEffect,
+        nativeApprovalDenied: cause?.code === 'CRUISE_NATIVE_APPROVAL_DENIED',
+      });
+      if (auth) {
+        if (attempt === 0 && auth.retry) continue;
+        throw auth.error;
+      }
       const failure = classifyWorkerFailure(cause);
       const effectsObserved = cause?.effectsObserved === true;
-      if (attempt === 0 && !effectsObserved && cause?.code !== 'CRUISE_NATIVE_APPROVAL_DENIED' && retryable(failure)) continue;
+      if (attempt === 0 && !effectsObserved && cause?.code !== 'CRUISE_NATIVE_APPROVAL_DENIED'
+        && (!authRecovery || attemptState.preEffect) && retryable(failure)) continue;
       const error = new Error(workerFailureMessage(failure), { cause });
       error.code = 'CRUISE_WORKER_STREAM_FAILURE';
       error.category = failure.category;

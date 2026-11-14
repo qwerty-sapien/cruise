@@ -29,6 +29,8 @@
     "scripts/release-push.sh",
     "scripts/lib/assurance.mjs",
     "scripts/lib/authorization-policy.mjs",
+    "scripts/lib/auth-recovery.mjs",
+    "scripts/lib/auth-recovery-runtime.mjs",
     "scripts/lib/compaction-controller.mjs",
     "scripts/lib/context-capsule.mjs",
     "scripts/lib/app-server-client.mjs",
@@ -62,9 +64,11 @@
     "skills/",
     "scripts/lib/staged-handoff.mjs",
     "docs/STAGED_HANDOFF.md",
+    "docs/AUTH_RECOVERY.md",
     "docs/UX_TROUBLESHOOTING.md"
   ],
   "scripts": {
+    "pretest": "node --test tests/auth-recovery.test.mjs tests/auth-recovery-runtime.test.mjs tests/auth-recovery-cli.test.mjs",
     "test:ux": "node --test tests/bootstrap-resilience.test.mjs tests/simple-session.test.mjs tests/authorization-policy.test.mjs tests/cli-simple.test.mjs tests/context-view.test.mjs tests/simple-worker.test.mjs tests/worker-dispatcher.test.mjs tests/changelog-observer.test.mjs tests/user-reference.test.mjs tests/non-git-assurance.test.mjs tests/supervisor.test.mjs tests/runtime-state.test.mjs tests/stop-supervisor.test.mjs",
     "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/runtime-state.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/authorization-policy.test.mjs tests/git-sync-policy.test.mjs tests/migration-config.test.mjs tests/migration-policy.test.mjs tests/migration-controller.test.mjs tests/migration-cli.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/changelog-observer.test.mjs tests/user-reference.test.mjs tests/release-push.test.mjs tests/usage-meter.test.mjs tests/compaction-controller.test.mjs tests/quota-guard.test.mjs tests/context-runtime.test.mjs tests/quota-cli.test.mjs tests/context-router.test.mjs tests/context-view.test.mjs tests/worker-dispatcher.test.mjs tests/root-session-policy.test.mjs tests/context-economy-packaging.test.mjs tests/mock-efficiency-benchmark.test.mjs tests/skill-trigger-policy.test.mjs tests/context-economy-audit.test.mjs tests/staged-handoff.test.mjs tests/bootstrap-resilience.test.mjs tests/doctor-probe-timeout.test.mjs tests/non-git-assurance.test.mjs",
     "benchmark:mock": "node scripts/mock-efficiency-benchmark.mjs",

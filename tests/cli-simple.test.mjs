@@ -201,7 +201,7 @@ test('real managed CLI joins Goal, staged and Debug parents with independent lea
       await parentQuota.release();
       return;
     }
-    assert.deepEqual(workerClient.requests.map(entry => entry.method), ['model/list', 'thread/start', 'turn/start']);
+    assert.deepEqual(workerClient.requests.map(entry => entry.method), ['account/rateLimits/read', 'model/list', 'thread/start', 'turn/start']);
     const turn = workerClient.requests.at(-1).params;
     assert.deepEqual(turn.sandboxPolicy, { type: 'readOnly' });
     assert.equal(turn.cwd, cwd);
@@ -815,6 +815,9 @@ class StartClient extends EventEmitter {
   async start() {}
   async stop() {}
   async request(method) {
+    if (method === 'account/rateLimits/read') return { rateLimits: {
+      secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 2000000000 },
+    } };
     if (method === 'thread/start') return { thread: { id: 'thread' } };
     if (method === 'turn/start') {
       queueMicrotask(() => this.emit('notification', {
@@ -967,6 +970,9 @@ test('a native Goal bootstrap timeout maps to exit code 4', async (t) => {
     async stop() {}
 
     async request(method, params = {}) {
+      if (method === 'account/rateLimits/read') return { rateLimits: {
+        secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 2000000000 },
+      } };
       if (method === 'thread/start') {
         return { thread: { id: 'thread-timeout' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }

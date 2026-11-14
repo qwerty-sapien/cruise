@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createCallerAuthRecovery } from './auth-recovery-runtime.mjs';
 import {
   lstat,
   mkdir,
@@ -205,9 +206,15 @@ export class QuotaGuard {
     staleReservationMs = 15 * 60 * 1_000,
     lockTimeoutMs = 5_000,
     resumeCommand = 'cruise goal --strict-budget <request>',
+    authRecovery = null,
+    authProfile = 'default',
+    authInteractive = false,
   } = {}) {
     if (!cwd) throw new TypeError('quota guard cwd is required');
     this.cwd = cwd;
+    this.authRecovery = authRecovery;
+    this.authRecoveryBoundary = createCallerAuthRecovery({ runtime: authRecovery,
+      profile: authProfile, interactive: authInteractive });
     this.weeklyDeltaCap = parsePercent(weeklyDeltaCap, DEFAULT_WEEKLY_DELTA_CAP_PERCENT, 'weekly delta cap');
     this.goalReservation = parsePercent(goalReservation, DEFAULT_GOAL_RESERVATION_PERCENT, 'Goal reservation');
     if (this.goalReservation > this.weeklyDeltaCap) throw new TypeError('Goal reservation cannot exceed cap');
@@ -356,10 +363,16 @@ export class QuotaGuard {
   }
 
   async readAuthority(client) {
-    const [account, rateLimits] = await Promise.all([
+    const requests = [
       client.request('account/read', { refreshToken: false }),
       client.request('account/rateLimits/read'),
-    ]);
+    ];
+    // Drain both reads before recovery so no stale read races fresh authority.
+    const results = this.authRecovery ? await Promise.allSettled(requests) : null;
+    if (results?.some(result => result.status === 'rejected')) {
+      throw (results[1].status === 'rejected' ? results[1] : results[0]).reason;
+    }
+    const [account, rateLimits] = results ? results.map(result => result.value) : await Promise.all(requests);
     this.accountHash = deriveAccountHash(account);
     this.snapshot = rateLimits?.rateLimits ?? null;
     return selectWeeklyWindow(this.snapshot);
@@ -377,6 +390,7 @@ export class QuotaGuard {
       weekly_delta_cap_percent: this.weeklyDeltaCap,
       goal_reservation_percent: this.goalReservation,
       resume_command: this.resumeCommand,
+      ...(state.authRecovery ? { authRecovery: state.authRecovery } : {}),
     };
     const directory = await ensureCruiseScratch(this.cwd, BUDGET_IGNORE_ENTRIES);
     await atomicWriteText(join(directory, 'BUDGET-PAUSE.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -384,17 +398,48 @@ export class QuotaGuard {
   }
 
   async start({ client, goalId = randomUUID(), reservationPercent = this.goalReservation } = {}) {
+    try {
+      return await this.startAuthority({ client, goalId, reservationPercent });
+    } catch (error) {
+      if (this.authRecovery && !this.reservationId) client.off?.('notification', this.onNotification);
+      throw error;
+    }
+  }
+
+  async withAuthRecovery(operation) {
+    try {
+      const result = await operation();
+      this.authRecoveryBoundary.reset();
+      return result;
+    } catch (error) {
+      if (!this.strictBudget) throw error;
+      const auth = await this.authRecoveryBoundary.attempt(error, { preEffect: true });
+      if (!auth) throw error;
+      if (!auth.retry) throw auth.error;
+      // Retry only these read-only authority operations, never reservations.
+      try {
+        const result = await operation();
+        this.authRecoveryBoundary.reset();
+        return result;
+      } catch (retryError) {
+        const retryAuth = await this.authRecoveryBoundary.attempt(retryError, { preEffect: true });
+        throw retryAuth?.error ?? retryError;
+      }
+    }
+  }
+
+  async startAuthority({ client, goalId, reservationPercent }) {
     this.client = client;
     if (!await this.campaignBudgetEnabled()) return this.disabledBudgetState();
     client.on?.('notification', this.onNotification);
     let window;
     try {
-      window = await this.readAuthority(client);
+      window = await this.withAuthRecovery(() => this.readAuthority(client));
     } catch (error) {
       if (this.strictBudget) {
         const guidance = classifyWorkerFailure(error).category === 'account-routing'
           ? ` (account-routing). ${ACCOUNT_ROUTING_GUIDANCE}` : '';
-        await this.pause(`weekly quota authority unavailable: ${error.message}${guidance}`);
+        await this.pause(`weekly quota authority unavailable: ${error.message}${guidance}`, { authRecovery: error.authRecovery });
       }
       return { metered: false, reason: String(error?.message ?? error) };
     }
@@ -433,10 +478,10 @@ export class QuotaGuard {
     await this.pendingNotification;
     let response;
     try {
-      response = await this.client.request('account/rateLimits/read');
+      response = await this.withAuthRecovery(() => this.client.request('account/rateLimits/read'));
       this.snapshot = response?.rateLimits ?? this.snapshot;
     } catch (error) {
-      if (this.strictBudget) await this.pause(`weekly quota refresh failed: ${error.message}`);
+      if (this.strictBudget) await this.pause(`weekly quota refresh failed: ${error.message}`, { authRecovery: error.authRecovery });
     }
     const window = selectWeeklyWindow(this.snapshot);
     if (!window) {

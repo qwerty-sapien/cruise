@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
-import { AppServerClient } from '../scripts/lib/app-server-client.mjs';
+import { AppServerClient, AppServerRpcError } from '../scripts/lib/app-server-client.mjs';
+import { createNativeAuthNormalizer } from '../scripts/lib/auth-recovery-runtime.mjs';
 import { SimpleCruiseSession, resolveFirstTurnDeadlineMs } from '../scripts/lib/simple-session.mjs';
 import { parseArgs, runStart } from '../scripts/cruise.mjs';
 import { ManagedWorkerDispatcher } from '../scripts/lib/worker-dispatcher.mjs';
@@ -29,6 +30,9 @@ class GoalClient extends EventEmitter {
   interrupt() {}
   async request(method, params = {}) {
     this.calls.push({ method, params });
+    if (method === 'account/rateLimits/read') return { rateLimits: {
+      secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 2000000000 },
+    } };
     if (method === 'thread/start') return { thread: { id: 'ready-thread' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
     if (method === 'thread/settings/update') return {};
     if (method === 'thread/read') return { thread: { status: { type: this.threadStatus, activeFlags: [] } } };
@@ -80,6 +84,50 @@ async function fixture(t, overrides = {}) {
   });
   return { root, client, session, diagnostics: () => diagnostics };
 }
+
+test('auth pause before staged activation leaves parent lease and quota ownership untouched', async (t) => {
+  const client = new GoalClient();
+  const handoff = { kind: 'login', action: { command: 'codex', args: ['login'] } };
+  client.request = async method => {
+    assert.equal(method, 'account/rateLimits/read');
+    throw new AppServerRpcError({ code: -32603, message: 'body: {"error":{"code":"token_revoked"}}' }, { method });
+  };
+  let recoveries = 0;
+  const { session } = await fixture(t, { client,
+    beforeGoalActivation() { assert.fail('parent workspace must not be activated'); },
+    quotaGuard: { start() { assert.fail('quota start'); }, release() { assert.fail('parent reservation release'); } },
+    authRecovery: { normalize: createNativeAuthNormalizer(), async recover() { recoveries++; return { status: 'paused', handoff }; } },
+  });
+  await assert.rejects(session.run(), error => {
+    assert.deepEqual(error.authRecovery.handoff, handoff); return true;
+  });
+  assert.equal(recoveries, 1); assert.equal(session.workspaceActivated, false);
+  assert.equal(client.stopped, true);
+  for (const event of ['notification', 'request', 'exit']) assert.equal(client.listenerCount(event), 0);
+});
+
+test('recovered staged Goal activates once, owns its quota lifecycle, and completes one native turn', async (t) => {
+  const client = new GoalClient();
+  const request = client.request.bind(client);
+  let reads = 0, recoveries = 0, activations = 0, starts = 0, releases = 0;
+  client.request = async (method, params) => {
+    if (method === 'account/rateLimits/read') {
+      if (++reads === 1) throw new AppServerRpcError({ code: -32603, message: 'body: {"error":{"code":"token_revoked"}}' }, { method });
+      return {};
+    }
+    return request(method, params);
+  };
+  const { session } = await fixture(t, { client,
+    beforeGoalActivation: async () => { activations++; return ''; },
+    quotaGuard: { async start() { starts++; }, async release() { releases++; } },
+    authRecovery: { normalize: createNativeAuthNormalizer(), async recover() { recoveries++; return { status: 'recovered' }; } },
+  });
+  assert.equal((await session.run()).status, 'complete');
+  assert.deepEqual([reads, recoveries, activations, starts, releases], [2, 1, 1, 1, 1]);
+  assert.equal(client.calls.filter(call => call.method === 'thread/start').length, 1);
+  assert.equal(client.calls.filter(call => call.method === 'thread/goal/set').length, 1);
+  assert.equal(client.stopped, true);
+});
 
 test('startup deadline is bounded by default and preserves explicit long/off limits', () => {
   assert.equal(resolveFirstTurnDeadlineMs(null), 30_000);

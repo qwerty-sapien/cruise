@@ -4,6 +4,8 @@ import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { AppServerRpcError } from '../scripts/lib/app-server-client.mjs';
+import { createNativeAuthNormalizer } from '../scripts/lib/auth-recovery-runtime.mjs';
 
 import {
   BudgetPauseError,
@@ -51,6 +53,114 @@ async function quotaWorkspace(t, label) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return { root, baseDirectory: join(root, 'account-ledgers') };
 }
+
+test('strict authority recovery drains reads, retries once, and reserves only after fresh authority', async (t) => {
+  const { root, baseDirectory } = await quotaWorkspace(t, 'auth-recovered');
+  let recovered = false, recoveries = 0, accountSettled = false, reads = 0;
+  const client = new MockAccountClient(snapshot());
+  const request = client.request.bind(client);
+  client.request = async (method, params) => {
+    if (method === 'account/read' && !recovered) {
+      await new Promise(resolve => setImmediate(resolve));
+      accountSettled = true;
+      throw new Error('account unavailable');
+    }
+    if (method === 'account/rateLimits/read') {
+      reads++;
+      if (!recovered) throw new AppServerRpcError({ code: -32603, message: 'body: {"error":{"code":"token_revoked"}}' }, { method });
+    }
+    return request(method, params);
+  };
+  const guard = new QuotaGuard({ cwd: root, baseDirectory, strictBudget: true,
+    authRecovery: { normalize: createNativeAuthNormalizer(), async recover(input) {
+      assert.equal(accountSettled, true); assert.equal(guard.reservationId, null);
+      assert.equal(input.interactive, false); recoveries++; recovered = true;
+      return { status: 'recovered' };
+    } } });
+  assert.equal((await guard.start({ client })).metered, true);
+  assert.equal(recoveries, 1); assert.equal(reads, 2);
+  assert.equal(JSON.parse(await readFile(guard.ledgerPath(), 'utf8')).reservations.length, 1);
+  await guard.release();
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+test('strict auth handoff and exhausted retry retain exit 6 and clean startup listener', async (t) => {
+  for (const status of ['paused', 'recovered']) {
+    const { root, baseDirectory } = await quotaWorkspace(t, `auth-${status}`);
+    let reads = 0, recoveries = 0;
+    const handoff = { kind: 'login', action: { command: 'codex', args: ['login'] } };
+    const client = new MockAccountClient(snapshot());
+    const request = client.request.bind(client);
+    client.request = async (method, params) => {
+      if (method === 'account/rateLimits/read') {
+        reads++; throw new AppServerRpcError({ code: -32603, message: 'body: {"error":{"code":"token_revoked"}}' }, { method });
+      }
+      return request(method, params);
+    };
+    const guard = new QuotaGuard({ cwd: root, baseDirectory, strictBudget: true,
+      authRecovery: { normalize: createNativeAuthNormalizer(), async recover() { recoveries++; return { status, handoff }; } } });
+    await assert.rejects(guard.start({ client }), error => {
+      assert.ok(error instanceof BudgetPauseError); assert.equal(error.exitCode, 6);
+      if (status === 'paused') assert.deepEqual(error.report.authRecovery.handoff, handoff);
+      return true;
+    });
+    assert.equal(guard.reservationId, null);
+    assert.equal(client.listenerCount('notification'), 0);
+    assert.equal(reads, status === 'paused' ? 1 : 2); assert.equal(recoveries, 1);
+  }
+});
+
+test('strict check recovery cannot bypass campaign cap or release another reservation', async (t) => {
+  const { root, baseDirectory } = await quotaWorkspace(t, 'auth-check');
+  const client = new MockAccountClient(snapshot());
+  const parent = new QuotaGuard({ cwd: root, baseDirectory, strictBudget: true });
+  await parent.start({ client });
+  let recoveries = 0, expired = false;
+  const request = client.request.bind(client);
+  client.request = async (method, params) => {
+    if (expired && method === 'account/rateLimits/read') {
+      expired = false;
+      throw new AppServerRpcError({ code: -32603, message: 'body: {"error":{"code":"token_revoked"}}' }, { method });
+    }
+    return request(method, params);
+  };
+  const guard = new QuotaGuard({ cwd: root, baseDirectory, strictBudget: true,
+    authRecovery: { normalize: createNativeAuthNormalizer(), async recover() { recoveries++; return { status: 'recovered' }; } } });
+  await guard.start({ client });
+  expired = true;
+  await guard.check();
+  assert.equal(recoveries, 1);
+  client.rateLimits = [snapshot({ used: 30 })]; expired = true;
+  await assert.rejects(guard.check(), error => error.exitCode === 6 && /campaign cap/.test(error.message));
+  assert.equal(recoveries, 2, 'successful fresh authority ends the earlier episode');
+  const ledger = JSON.parse(await readFile(guard.ledgerPath(), 'utf8'));
+  assert.equal(ledger.reservations.filter(item => item.status === 'active').length, 2);
+  await guard.release();
+  assert.equal(JSON.parse(await readFile(parent.ledgerPath(), 'utf8')).reservations.find(item => item.id === parent.reservationId).status, 'active');
+  await parent.release();
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+test('strict authority exclusions pause without login or an unmetered retry', async (t) => {
+  const { root, baseDirectory } = await quotaWorkspace(t, 'auth-exclusions');
+  for (const code of ['401', 'authentication_required', 'approval_denied', 'wrong_workspace', 'billing', 'rate_limit', 'ENOTFOUND']) {
+    let reads = 0;
+    const client = new MockAccountClient(snapshot());
+    const request = client.request.bind(client);
+    client.request = async (method, params) => {
+      if (method === 'account/rateLimits/read') {
+        reads++;
+        throw new AppServerRpcError({ code: -32603, message: `body: ${JSON.stringify({ error: { code } })}` }, { method });
+      }
+      return request(method, params);
+    };
+    const guard = new QuotaGuard({ cwd: root, baseDirectory, strictBudget: true,
+      authRecovery: { normalize: createNativeAuthNormalizer(), recover() { assert.fail('excluded failure triggered login'); } } });
+    await assert.rejects(guard.start({ client }), error => error.exitCode === 6);
+    assert.equal(reads, 1); assert.equal(guard.reservationId, null);
+    assert.equal(client.listenerCount('notification'), 0);
+  }
+});
 
 test('weekly selection chooses the window closest to 10,080 minutes', () => {
   const selected = selectWeeklyWindow(snapshot({ used: 33 }));

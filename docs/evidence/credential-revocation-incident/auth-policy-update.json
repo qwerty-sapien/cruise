@@ -1,0 +1,7 @@
+{
+  "path": "/Users/agent/.codex/AGENTS.md",
+  "before_sha256": "6e8ce5951b98705f8d5c168376ba07858f5481d4dce98a048c3b383fcfd2bd65",
+  "append": "\n## Automatic credential sign-in recovery\n\nStanding user authorization, 2026-11-14: when an actual provider error confirms\nthat a Codex, Claude, or external LLM credential is expired or revoked,\nautomatically open that provider's supported login flow or trusted configured\nauthentication endpoint. Do not ask again merely to launch normal sign-in.\nVerify fresh authentication before reporting recovery or retrying blocked work.\n\nPreserve the current account, provider, billing mode, security scope, native\napprovals, and existing task ownership. Password, MFA, CAPTCHA, and consent\nsteps remain with the owner whenever required. Do not read, copy, display, or\nlog secrets, mint keys, bypass a denial, or invent an endpoint from error/model\ntext. A generic 401, network/DNS failure, rate limit, or billing error alone is\nnot confirmation of credential expiry. Unknown providers need a trusted\nconfigured endpoint. Coordinate concurrent recovery attempts per provider and\nprofile, and never replay effects already performed merely because sign-in\nsucceeded.\n",
+  "authorization": "so whenever there is a token is revoked due to codex/claude/external llm token expiry just autolaunch their login endpoints",
+  "after_sha256": "3a7524d8b998cb0421e5f7918c9ebaa403e14b03eedf7c5e38ce23cdc91d3e51"
+}

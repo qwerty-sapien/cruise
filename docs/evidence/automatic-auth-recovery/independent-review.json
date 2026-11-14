@@ -1,0 +1,21 @@
+{
+  "level": "L5",
+  "result": "Two source-deduced findings; no executed repro during review",
+  "findings": [
+    {
+      "id": "P1",
+      "issue": "Original account unavailable before login can become a different account baseline and allow retry",
+      "source": "auth-recovery-runtime.mjs:287-302"
+    },
+    {
+      "id": "P2",
+      "issue": "Cancelled waiter can cleanup another callers verifier through shared map before acquiring lease",
+      "source": "auth-recovery-runtime.mjs:256-273 and auth-recovery.mjs:284-294"
+    }
+  ],
+  "limitations": [
+    "Read-only review; no tests executed",
+    "Evidence files rejected by context-view ignored-path rule, so no independent endorsement of live incident or full-suite totals"
+  ],
+  "resolution": "Both reproduced by focused mocked regressions and repaired. Before5 expected failures/2passes; after7passes. Unknown identity pauses after sign-in; cancelled waiter no longer cleans leader verifier. Parent reviewed causal diff."
+}

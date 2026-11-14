@@ -1,4 +1,5 @@
 import { resolveApprovalsReviewer, nativeReviewerInstructions } from './simple-worker.mjs';
+import { createCallerAuthRecovery } from './auth-recovery-runtime.mjs';
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
 import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
 import { EventEmitter } from 'node:events';
@@ -496,6 +497,8 @@ export class SimpleCruiseSession extends EventEmitter {
     rootOverride = null,
     cheaperDiagnostic = false,
     continuationContextReader = readContinuationContext,
+    authRecovery = null,
+    authProfile = 'default',
   }) {
     super();
     if (!client || !cwd || !prompt || !skill || !skillPath) {
@@ -530,6 +533,10 @@ export class SimpleCruiseSession extends EventEmitter {
     this.startupHeartbeatMs = startupHeartbeatMs;
     this.beforeGoalActivation = beforeGoalActivation;
     this.startupAbortController = new AbortController();
+    this.authRecovery = authRecovery;
+    this.authRecoveryBoundary = createCallerAuthRecovery({ runtime: authRecovery, profile: authProfile,
+      interactive: input?.isTTY === true, signal: this.startupAbortController.signal });
+    this.quotaStartAttempted = false;
     this.workspaceActivated = beforeGoalActivation === null;
     this.bootstrapHandoff = '';
     this.firstTurnCleanupDeadlineMs = firstTurnCleanupDeadlineMs;
@@ -594,7 +601,9 @@ export class SimpleCruiseSession extends EventEmitter {
     this.client.on('exit', this.onExit);
     try {
       await this.waitForStartup(this.client.start());
+      if (this.authRecovery) await this.waitForStartup(this.readAuthAuthority());
       if (this.quotaGuard && !this.beforeGoalActivation) {
+        this.quotaStartAttempted = true;
         await this.quotaGuard.start({
           client: this.client,
           goalId: this.runtimeDirectory ?? `cruise-${this.skill}`,
@@ -673,6 +682,7 @@ export class SimpleCruiseSession extends EventEmitter {
         if (this.startupAbortController.signal.aborted) throw this.startupAbortController.signal.reason;
         this.workspaceActivated = true;
         if (this.quotaGuard) {
+          this.quotaStartAttempted = true;
           await this.quotaGuard.start({ client: this.client, goalId: this.runtimeDirectory ?? `cruise-${this.skill}` });
         }
       }
@@ -863,6 +873,12 @@ export class SimpleCruiseSession extends EventEmitter {
       }
       return this.finishResult({ status: 'complete', skill: this.skill, threadId: this.threadId });
     } catch (error) {
+      // Once thread startup/activation/turn submission is attempted, acceptance
+      // can be ambiguous. Recovery may establish auth, but cannot replay it.
+      const auth = await this.authRecoveryBoundary.attempt(error, {
+        nativeApprovalDenied: this.turnNativeApprovalDenied,
+      });
+      if (auth) error = auth.error;
       if (['CRUISE_BUDGET_PAUSE', 'CRUISE_CONTEXT_PRESSURE_PAUSE'].includes(error?.code)) {
         await this.pauseActiveGoal().catch(() => {});
       }
@@ -894,8 +910,21 @@ export class SimpleCruiseSession extends EventEmitter {
         }
         this.printClosingTraceSignpost();
       }
-      await this.quotaGuard?.release().catch(() => {});
+      if (!this.authRecovery || this.quotaStartAttempted) await this.quotaGuard?.release().catch(() => {});
       await this.client.stop().catch(() => {});
+    }
+  }
+
+  async readAuthAuthority() {
+    try {
+      return await this.client.request('account/rateLimits/read');
+    } catch (error) {
+      const auth = await this.authRecoveryBoundary.attempt(error, { preEffect: true,
+        nativeApprovalDenied: this.turnNativeApprovalDenied });
+      if (!auth) throw error;
+      if (!auth.retry) throw auth.error;
+      // This is a read on the existing client, not a transport/thread restart.
+      return this.client.request('account/rateLimits/read');
     }
   }
 

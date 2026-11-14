@@ -47,6 +47,7 @@ import {
 import { runSimpleWorker, resolveApprovalsReviewer } from './lib/simple-worker.mjs';
 import { automaticDelegationAuthorization, automaticLocalAuthorization } from './lib/authorization-policy.mjs';
 import { createStagedHandoff } from './lib/staged-handoff.mjs';
+import { createCliAuthRecovery } from './lib/auth-recovery-runtime.mjs';
 import {
   buildContextCapsule,
   parseWorkerHandoff,
@@ -608,11 +609,13 @@ export function createCommitChangelogObserver({
   observerFactory = (input) => new CommitChangelogObserver(input),
   pollIntervalMs,
   now,
+  authRecoveryFactory = createCliAuthRecovery,
   onWarning = (error) => {
     process.stderr.write(`Cruise warning: changelog update failed: ${displayError(error?.message)}\n`);
   },
 }) {
   const resolvedProvider = resolveProvider(provider);
+  const authRecovery = authRecoveryFactory({ provider: resolvedProvider, cwd: runtimeDirectory ?? cwd });
   return observerFactory({
     cwd,
     ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
@@ -623,11 +626,13 @@ export function createCommitChangelogObserver({
         return claudeWorker({
           cwd: runtimeDirectory,
           task,
+          authRecovery, authProfile: authRecovery.profile,
         });
       }
       const result = await codexWorker({
         cwd: runtimeDirectory,
         task,
+        authRecovery, authProfile: authRecovery.profile,
         level: null,
         readOnly: true,
         timeoutMs: 120_000,
@@ -682,9 +687,12 @@ async function runHostedSession(
     input = process.stdin,
     sessionFactory = (input) => new SimpleCruiseSession(input),
     quotaGuardFactory = (input) => new QuotaGuard(input),
+    authRecoveryFactory = createCliAuthRecovery,
   } = {},
 ) {
   const provider = resolveProvider(options.provider);
+  const authRecovery = authRecoveryFactory({ provider, cwd, input,
+    ...(clientFactory ? { clientFactory } : {}) });
   if (options.approvalsReviewer !== undefined && (provider !== 'codex' || options.skill !== 'goal')) {
     throw new Error('--approvals-reviewer is supported only by Codex Goal and worker.');
   }
@@ -692,6 +700,7 @@ async function runHostedSession(
     const result = await claudeRunner({
       cwd,
       pluginRoot: PACKAGE_ROOT,
+      authRecovery, authProfile: authRecovery.profile,
       prompt: options.prompt,
       skill: options.skill,
       planOnly: Boolean(options.planOnly),
@@ -729,6 +738,7 @@ async function runHostedSession(
   const stopSurfacingStderr = surfaceAppServerStderr(client);
   const session = sessionFactory({
     client,
+    authRecovery, authProfile: authRecovery.profile,
     cwd,
     prompt: options.prompt,
     skill: options.skill,
@@ -750,6 +760,7 @@ async function runHostedSession(
     quotaGuard: !injectedClientFactory && options.skill === 'goal'
       ? quotaGuardFactory({
           cwd,
+          authRecovery, authProfile: authRecovery.profile, authInteractive: input?.isTTY === true,
           weeklyDeltaCap: options.weeklyDeltaCap,
           goalReservation: options.goalReservation,
           strictBudget: options.strictBudget,
@@ -802,7 +813,7 @@ async function runHostedSession(
           : {}),
       };
     }
-    if (error?.code === 'CRUISE_BUDGET_PAUSE') {
+    if (error?.code === 'CRUISE_BUDGET_PAUSE' || error?.code === 'CRUISE_AUTH_RECOVERY_PAUSE') {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
       return {
         status: 'budget-paused',
@@ -1359,12 +1370,15 @@ export async function runWorker(options, {
   claudeWorker = runClaudeWorker,
   budgetClientFactory = (input) => new AppServerClient(input),
   quotaGuardFactory = (input) => new QuotaGuard(input),
+  authRecoveryFactory = createCliAuthRecovery,
   dispatchLedgerFactory = (input) => new WorkerDispatchLedger(input),
   enforceBudget = worker === null,
   env = process.env,
 } = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const provider = resolveProvider(options.provider);
+  const authRecovery = authRecoveryFactory({ provider, cwd, input, env,
+    clientFactory: budgetClientFactory });
   if (options.approvalsReviewer !== undefined && provider !== 'codex') {
     throw new Error('--approvals-reviewer is supported only by Codex Goal and worker.');
   }
@@ -1480,6 +1494,7 @@ export async function runWorker(options, {
       });
       quotaGuard = quotaGuardFactory({
         cwd,
+        authRecovery, authProfile: authRecovery.profile, authInteractive: input?.isTTY === true,
         weeklyDeltaCap: options.weeklyDeltaCap,
         goalReservation: options.goalReservation,
         strictBudget: options.strictBudget,
@@ -1490,6 +1505,7 @@ export async function runWorker(options, {
     }
     const result = await selectedWorker({
       cwd,
+      authRecovery, authProfile: authRecovery.profile, input,
       task: capsule
         ? `${capsule.serialized}\n${WORKER_HANDOFF_SCHEMA_INSTRUCTIONS}`
         : options.prompt,
@@ -1515,7 +1531,7 @@ export async function runWorker(options, {
     if (result.output && !result.output.endsWith('\n')) process.stdout.write('\n');
     return 0;
   } catch (error) {
-    if (error?.code === 'CRUISE_BUDGET_PAUSE') {
+    if (error?.code === 'CRUISE_BUDGET_PAUSE' || error?.code === 'CRUISE_AUTH_RECOVERY_PAUSE') {
       process.stderr.write(`cruise: ${displayError(error.message)}\n`);
       return BUDGET_PAUSE_EXIT_CODE;
     }
@@ -1572,14 +1588,18 @@ export async function runBudget(options, {
   clientFactory = (input) => new AppServerClient(input),
   quotaGuardFactory = (input) => new QuotaGuard(input),
   output = process.stdout,
+  authRecoveryFactory = createCliAuthRecovery,
+  input = process.stdin,
 } = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
+  const authRecovery = authRecoveryFactory({ provider: 'codex', cwd, input, clientFactory });
   const client = clientFactory({
     spawnOptions: { cwd },
     clientInfo: { name: 'cruise', title: 'Cruise', version: CLI_VERSION },
   });
   const guard = quotaGuardFactory({
     cwd,
+    authRecovery, authProfile: authRecovery.profile, authInteractive: input?.isTTY === true,
     weeklyDeltaCap: options.weeklyDeltaCap,
     goalReservation: options.goalReservation,
     strictBudget: options.strictBudget,
@@ -1587,6 +1607,14 @@ export async function runBudget(options, {
   });
   try {
     await client.start();
+    // status() converts authority failures into a report. Recover at its native
+    // read-only boundary first, before that conversion loses provider evidence.
+    if (options.strictBudget && guard.withAuthRecovery && await guard.campaignBudgetEnabled()) {
+      try { await guard.withAuthRecovery(() => guard.readAuthority(client)); }
+      catch (error) {
+        await guard.pause(`weekly quota authority unavailable: ${error.message}`, { authRecovery: error.authRecovery });
+      }
+    }
     const status = await guard.status(client);
     const report = {
       metered: status.metered,
@@ -1611,8 +1639,10 @@ export async function runBudget(options, {
     }
     return 0;
   } catch (error) {
-    if (error?.code === 'CRUISE_BUDGET_PAUSE') {
-      if (options.json) output.write(`${JSON.stringify(error.report)}\n`);
+    if (error?.code === 'CRUISE_BUDGET_PAUSE' || error?.code === 'CRUISE_AUTH_RECOVERY_PAUSE') {
+      if (options.json) output.write(`${JSON.stringify(error.report ?? {
+        status: 'budget-paused', reason: error.message, authRecovery: error.authRecovery,
+      })}\n`);
       else output.write(`Cruise weekly budget: paused (${error.message})\n`);
       return BUDGET_PAUSE_EXIT_CODE;
     }

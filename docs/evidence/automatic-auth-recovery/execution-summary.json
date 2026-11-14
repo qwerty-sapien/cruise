@@ -1,0 +1,44 @@
+{
+  "root_launcher_model": "gpt-5.6-sol high",
+  "workers": "Managed L5 implementation and read-only review per routing policy",
+  "scope": "Partial launcher-root telemetry; parent-host and standalone-worker usage not fully measured",
+  "weekly_used_percent_delta": null,
+  "weekly_delta_limit": "No retained authoritative task-wide start/end pair; unknown, not inferred from tokens",
+  "root_thread": "01a1da18-3581-7cc1-aba8-c2aaac008931",
+  "root_observation": {
+    "model": "gpt-5.6-sol",
+    "accounting_known": true,
+    "high_watermarks": {
+      "input_tokens": 7686511,
+      "cached_input_tokens": 7551232,
+      "output_tokens": 23129,
+      "reasoning_output_tokens": 9915,
+      "total_tokens": 7709640
+    },
+    "last": {
+      "input_tokens": 145415,
+      "cached_input_tokens": 141312,
+      "output_tokens": 124,
+      "reasoning_output_tokens": 13,
+      "total_tokens": 145539
+    },
+    "model_context_window": 258400,
+    "context_pressure": 0.5627515479876161,
+    "accepted_snapshots": 74,
+    "estimated_credits": 128.647025,
+    "invalid_evidence": []
+  },
+  "root_totals": {
+    "input_tokens": 7686511,
+    "cached_input_tokens": 7551232,
+    "output_tokens": 23129,
+    "reasoning_output_tokens": 9915,
+    "total_tokens": 7709640
+  },
+  "root_estimated_credits": 128.647025,
+  "compaction": {
+    "count": 0,
+    "attempts": 0,
+    "latest_outcome": null
+  }
+}

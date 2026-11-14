@@ -1,0 +1,313 @@
+TAP version 13
+# Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+# Subtest: real worker CLI shares recovery with strict quota, launches non-TTY login and preserves worker controls
+ok 1 - real worker CLI shares recovery with strict quota, launches non-TTY login and preserves worker controls
+  ---
+  duration_ms: 249.006709
+  type: 'test'
+  ...
+# Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+# Subtest: real worker preflight recovery retries only before model work when budget is disabled
+ok 2 - real worker preflight recovery retries only before model work when budget is disabled
+  ---
+  duration_ms: 201.368
+  type: 'test'
+  ...
+# Subtest: strict quota CLI returns pause 6 after failed login and never launches model work
+ok 3 - strict quota CLI returns pause 6 after failed login and never launches model work
+  ---
+  duration_ms: 3.065916
+  type: 'test'
+  ...
+# cruise: Authentication recovery requires handoff; the failed operation was not replayed.
+# Subtest: hosted Goal wires one recovery into session and quota, maps recovery pause to 6
+ok 4 - hosted Goal wires one recovery into session and quota, maps recovery pause to 6
+  ---
+  duration_ms: 209.170959
+  type: 'test'
+  ...
+# Subtest: package manifest ships the entire auth recovery runtime closure and docs
+ok 5 - package manifest ships the entire auth recovery runtime closure and docs
+  ---
+  duration_ms: 0.439917
+  type: 'test'
+  ...
+# Subtest: Codex 0.169.0 revoked contract accepts only bounded trailing rate-limit body JSON
+ok 6 - Codex 0.169.0 revoked contract accepts only bounded trailing rate-limit body JSON
+  ---
+  duration_ms: 1.931583
+  type: 'test'
+  ...
+# Subtest: native normalization uses exact structured fields and typed RPC errors only
+ok 7 - native normalization uses exact structured fields and typed RPC errors only
+  ---
+  duration_ms: 0.45875
+  type: 'test'
+  ...
+# Subtest: fixed shell-free login inherits I/O and does not change auth environment
+ok 8 - fixed shell-free login inherits I/O and does not change auth environment
+  ---
+  duration_ms: 1.034167
+  type: 'test'
+  ...
+# Subtest: Claude status returns only bounded loggedIn state
+ok 9 - Claude status returns only bounded loggedIn state
+  ---
+  duration_ms: 0.19925
+  type: 'test'
+  ...
+# Subtest: abort and timeout stop only owned process group and require confirmed exit
+ok 10 - abort and timeout stop only owned process group and require confirmed exit
+  ---
+  duration_ms: 0.465833
+  type: 'test'
+  ...
+# Subtest: unconfirmed group survival fails cleanup even after parent closes
+ok 11 - unconfirmed group survival fails cleanup even after parent closes
+  ---
+  duration_ms: 0.170083
+  type: 'test'
+  ...
+# Subtest: portal opener accepts only trusted exact HTTPS destinations
+ok 12 - portal opener accepts only trusted exact HTTPS destinations
+  ---
+  duration_ms: 0.175875
+  type: 'test'
+  ...
+# Subtest: headless runtime never spawns or calls provider and returns exact trusted handoff
+ok 13 - headless runtime never spawns or calls provider and returns exact trusted handoff
+  ---
+  duration_ms: 0.520625
+  type: 'test'
+  ...
+# Subtest: mock app-server errors normalize for verification without exposing prose
+ok 14 - mock app-server errors normalize for verification without exposing prose
+  ---
+  duration_ms: 0.578917
+  type: 'test'
+  ...
+# Subtest: macOS non-TTY CLI launches login, verifies with fresh clients and cleans listeners
+ok 15 - macOS non-TTY CLI launches login, verifies with fresh clients and cleans listeners
+  ---
+  duration_ms: 1.3945
+  type: 'test'
+  ...
+# Subtest: profile lock identity ignores cwd and session but separates configured homes
+ok 16 - profile lock identity ignores cwd and session but separates configured homes
+  ---
+  duration_ms: 0.549709
+  type: 'test'
+  ...
+# Subtest: CLI cancellation propagates through verification and disposes bounded listeners
+ok 17 - CLI cancellation propagates through verification and disposes bounded listeners
+  ---
+  duration_ms: 0.173833
+  type: 'test'
+  ...
+# Subtest: explicit credential override yields update handoff without reading the value
+ok 18 - explicit credential override yields update handoff without reading the value
+  ---
+  duration_ms: 0.08575
+  type: 'test'
+  ...
+# Subtest: Claude only accepts exact documented native assistant error envelopes
+ok 19 - Claude only accepts exact documented native assistant error envelopes
+  ---
+  duration_ms: 0.139041
+  type: 'test'
+  ...
+# Subtest: native verifier stop error retains the lock and cannot report recovery
+ok 20 - native verifier stop error retains the lock and cannot report recovery
+  ---
+  duration_ms: 0.2905
+  type: 'test'
+  ...
+# Subtest: fresh verifier refuses an account switch across native login
+ok 21 - fresh verifier refuses an account switch across native login
+  ---
+  duration_ms: 0.481583
+  type: 'test'
+  ...
+# Subtest: only confirmed scoped expired/revoked credential evidence qualifies
+ok 22 - only confirmed scoped expired/revoked credential evidence qualifies
+  ---
+  duration_ms: 0.707208
+  type: 'test'
+  ...
+# Subtest: Codex login and native verification use fixed contracts and redact arbitrary text
+ok 23 - Codex login and native verification use fixed contracts and redact arbitrary text
+  ---
+  duration_ms: 4.054667
+  type: 'test'
+  ...
+# Subtest: non-applicable failures do not acquire locks or call adapters
+ok 24 - non-applicable failures do not acquire locks or call adapters
+  ---
+  duration_ms: 0.435583
+  type: 'test'
+  ...
+# Subtest: headless login pauses with trusted action; no login process starts
+ok 25 - headless login pauses with trusted action; no login process starts
+  ---
+  duration_ms: 0.478167
+  type: 'test'
+  ...
+# Subtest: verification failures, malformed quota, and native denials never trigger login
+ok 26 - verification failures, malformed quota, and native denials never trigger login
+  ---
+  duration_ms: 6.244709
+  type: 'test'
+  ...
+# Subtest: confirmed verification exception allows login; exit zero alone does not recover
+ok 27 - confirmed verification exception allows login; exit zero alone does not recover
+  ---
+  duration_ms: 0.8395
+  type: 'test'
+  ...
+# Subtest: Claude uses auth status, auth login, auth status; all owned handles are reaped
+ok 28 - Claude uses auth status, auth login, auth status; all owned handles are reaped
+  ---
+  duration_ms: 0.886166
+  type: 'test'
+  ...
+# Subtest: Claude local signed-in status does not overrule confirmed expiry or switch billing
+ok 29 - Claude local signed-in status does not overrule confirmed expiry or switch billing
+  ---
+  duration_ms: 2.549
+  type: 'test'
+  ...
+# Subtest: static keys only expose validated trusted portal and require verified update
+ok 30 - static keys only expose validated trusted portal and require verified update
+  ---
+  duration_ms: 1.392958
+  type: 'test'
+  ...
+# Subtest: concurrent callers wait and recheck; separate profiles do not collide
+ok 31 - concurrent callers wait and recheck; separate profiles do not collide
+  ---
+  duration_ms: 11.022917
+  type: 'test'
+  ...
+# Subtest: waiting, verification, and login are bounded and cancellation removes listeners
+ok 32 - waiting, verification, and login are bounded and cancellation removes listeners
+  ---
+  duration_ms: 94.992292
+  type: 'test'
+  ...
+# Subtest: cleanup failure/timeout retains lease and never claims recovery
+ok 33 - cleanup failure/timeout retains lease and never claims recovery
+  ---
+  duration_ms: 31.88125
+  type: 'test'
+  ...
+# Subtest: nonzero login and observer errors do not leak errors or skip cleanup
+ok 34 - nonzero login and observer errors do not leak errors or skip cleanup
+  ---
+  duration_ms: 1.3
+  type: 'test'
+  ...
+# Subtest: cross-process mock transcript launches exactly one login and recovers dead owner
+ok 35 - cross-process mock transcript launches exactly one login and recovers dead owner
+  ---
+  duration_ms: 139.250042
+  type: 'test'
+  ...
+# Subtest: empty orphan registration recovers; live locks are not stolen by age
+ok 36 - empty orphan registration recovers; live locks are not stolen by age
+  ---
+  duration_ms: 1.889125
+  type: 'test'
+  ...
+# Subtest: Claude headless handoff performs no status spawn
+ok 37 - Claude headless handoff performs no status spawn
+  ---
+  duration_ms: 0.384584
+  type: 'test'
+  ...
+# Subtest: external portal opens only trusted configuration and is reaped before pause
+ok 38 - external portal opens only trusted configuration and is reaped before pause
+  ---
+  duration_ms: 0.914833
+  type: 'test'
+  ...
+# Subtest: Claude changelog accepts structured source evidence with the shared instruction guards
+ok 39 - Claude changelog accepts structured source evidence with the shared instruction guards
+  ---
+  duration_ms: 3.925416
+  type: 'test'
+  ...
+# Subtest: captured native Claude failure recovers once, then pauses without replay
+ok 40 - captured native Claude failure recovers once, then pauses without replay
+  ---
+  duration_ms: 2.262917
+  type: 'test'
+  ...
+# Subtest: captured model prose and generic auth failure never launch login
+ok 41 - captured model prose and generic auth failure never launch login
+  ---
+  duration_ms: 0.5645
+  type: 'test'
+  ...
+# Subtest: captured Claude cancellation waits for owned process group cleanup
+ok 42 - captured Claude cancellation waits for owned process group cleanup
+  ---
+  duration_ms: 0.482792
+  type: 'test'
+  ...
+# Subtest: non-TTY Claude worker preserves final output and invokes native stream-json once
+ok 43 - non-TTY Claude worker preserves final output and invokes native stream-json once
+  ---
+  duration_ms: 0.662042
+  type: 'test'
+  ...
+# Subtest: Claude sessions load the plugin and invoke the slash-command skill natively
+ok 44 - Claude sessions load the plugin and invoke the slash-command skill natively
+  ---
+  duration_ms: 0.350584
+  type: 'test'
+  ...
+# Subtest: the published package contains both plugin manifests and only the active runtime closure
+ok 45 - the published package contains both plugin manifests and only the active runtime closure
+  ---
+  duration_ms: 4.249708
+  type: 'test'
+  ...
+# Subtest: Claude changelog workers are captured, read-only, and detached from Goal hook state
+ok 46 - Claude changelog workers are captured, read-only, and detached from Goal hook state
+  ---
+  duration_ms: 0.475375
+  type: 'test'
+  ...
+# Subtest: Claude worker levels map to Claude model aliases and native effort values
+ok 47 - Claude worker levels map to Claude model aliases and native effort values
+  ---
+  duration_ms: 0.1565
+  type: 'test'
+  ...
+# Subtest: Claude CLI transport inherits the native TUI and returns its exit status
+ok 48 - Claude CLI transport inherits the native TUI and returns its exit status
+  ---
+  duration_ms: 0.36425
+  type: 'test'
+  ...
+# Subtest: Claude Goal sessions pass exact session-scoped runtime state to hooks and children
+ok 49 - Claude Goal sessions pass exact session-scoped runtime state to hooks and children
+  ---
+  duration_ms: 231.589584
+  type: 'test'
+  ...
+# Subtest: Claude process exit zero cannot masquerade as Goal completion
+ok 50 - Claude process exit zero cannot masquerade as Goal completion
+  ---
+  duration_ms: 582.581708
+  type: 'test'
+  ...
+1..50
+# tests 50
+# suites 0
+# pass 50
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 894.263541

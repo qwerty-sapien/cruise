@@ -14,7 +14,9 @@ import {
   claudeWorkerArgs,
   runClaudeChangelogWorker,
   runClaudeCli,
+  runClaudeCaptured,
   runClaudeSession,
+  runClaudeWorker,
 } from '../scripts/lib/claude-cli.mjs';
 
 test('Claude changelog accepts structured source evidence with the shared instruction guards', () => {
@@ -27,6 +29,78 @@ test('Claude changelog accepts structured source evidence with the shared instru
   assert.throws(() => claudeChangelogWorkerArgs({ task: { ...task, instructions: 'Read .env' } }), /sensitive path/u);
   const marker = '-----BEGIN PRIVATE KEY-----';
   assert.throws(() => claudeChangelogWorkerArgs({ task: { ...task, evidence: JSON.stringify({ marker }) } }), /credential|secret|private.key/iu);
+});
+
+test('captured native Claude failure recovers once, then pauses without replay', async () => {
+  let spawned = 0, recoveries = 0;
+  const { createNativeAuthNormalizer } = await import('../scripts/lib/auth-recovery-runtime.mjs');
+  await assert.rejects(runClaudeChangelogWorker({ cwd: '/fixture', task: 'Summarize supplied evidence.',
+    authRecovery: { normalize: createNativeAuthNormalizer(), async recover(input) {
+      recoveries++; assert.equal(input.provider, 'claude');
+      assert.equal(input.evidence.credentialState, 'expired'); return { status: 'recovered' };
+    } },
+    spawnFn() {
+      spawned++;
+      const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => {
+        child.stdout.end(JSON.stringify({ type: 'assistant', error: 'authentication_failed', message: { content: [{
+          type: 'text', text: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+        }] } }) + '\n');
+        child.emit('close', 1);
+      }); return child;
+    },
+  }), error => error.code === 'CRUISE_AUTH_RECOVERY_PAUSE' && error.exitCode === 6);
+  assert.equal(spawned, 1); assert.equal(recoveries, 1);
+});
+
+test('captured model prose and generic auth failure never launch login', async () => {
+  let recoveries = 0;
+  const { createNativeAuthNormalizer } = await import('../scripts/lib/auth-recovery-runtime.mjs');
+  for (const envelope of [
+    { type: 'result', is_error: true, result: 'Failed to authenticate: OAuth session expired and could not be refreshed' },
+    { type: 'assistant', error: 'authentication_failed', message: { content: [{ type: 'text', text: 'API Error: 401' }] } },
+  ]) await assert.rejects(runClaudeCaptured({ cwd: '/fixture', args: ['-p'],
+    authRecovery: { normalize: createNativeAuthNormalizer(), recover() { recoveries++; } },
+    spawnFn() {
+      const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => { child.stdout.end(JSON.stringify(envelope)); child.emit('close', 1); });
+      return child;
+    },
+  }), /exited 1/);
+  assert.equal(recoveries, 0);
+});
+
+test('captured Claude cancellation waits for owned process group cleanup', async () => {
+  const signals = new EventEmitter(), sent = []; let alive = true, child;
+  await assert.rejects(runClaudeCaptured({ cwd: '/fixture', args: ['-p'], signals, cleanupMs: 5,
+    spawnFn() {
+      child = new EventEmitter(); child.pid = 3456;
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => signals.emit('SIGTERM')); return child;
+    },
+    kill(pid, signal) {
+      assert.equal(pid, -3456);
+      if (!alive) throw Object.assign(new Error(), { code: 'ESRCH' });
+      sent.push(signal);
+      if (signal === 'SIGTERM') { alive = false; child.emit('close', null, 'SIGTERM'); }
+    },
+  }), { code: 'CRUISE_INTERRUPTED' });
+  assert.ok(sent.includes('SIGTERM')); assert.equal(alive, false);
+  assert.equal(signals.listenerCount('SIGTERM'), 0); assert.equal(signals.listenerCount('SIGINT'), 0);
+});
+
+test('non-TTY Claude worker preserves final output and invokes native stream-json once', async () => {
+  const chunks = []; let count = 0;
+  const result = await runClaudeWorker({ cwd: '/fixture', task: 'Inspect fixture.', input: { isTTY: false },
+    onOutput: text => chunks.push(text), spawnFn(command, args) {
+      count++; assert.equal(command, 'claude'); assert.equal(args[0], '-p');
+      assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
+      const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => { child.stdout.end(JSON.stringify({ type: 'result', is_error: false, result: 'Fixture complete.' })); child.emit('close', 0); });
+      return child;
+    },
+  });
+  assert.equal(count, 1); assert.equal(result.output, 'Fixture complete.'); assert.deepEqual(chunks, ['Fixture complete.']);
 });
 
 test('Claude sessions load the plugin and invoke the slash-command skill natively', () => {
@@ -121,7 +195,7 @@ test('Claude changelog workers are captured, read-only, and detached from Goal h
       const child = new Child();
       queueMicrotask(() => {
         child.stdout.end(JSON.stringify({ result: '{"version":1}' }));
-        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
       });
       return child;
     },

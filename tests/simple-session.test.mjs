@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { AppServerRpcError } from '../scripts/lib/app-server-client.mjs';
+import { createNativeAuthNormalizer } from '../scripts/lib/auth-recovery-runtime.mjs';
 
 import {
   automaticGoalAuthorization,
@@ -66,6 +68,61 @@ class FakeClient extends EventEmitter {
     throw new Error(`unexpected request ${method}`);
   }
 }
+
+test('session auth boundaries recover reads but never replay ambiguous startup or turns', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-auth-session-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const mode of ['recovered', 'paused', 'repeated', 'ambiguous', 'effect', 'denial', 'non-auth']) {
+    const client = new FakeClient();
+    let reads = 0, threads = 0, turns = 0, recoveries = 0;
+    const revoked = () => new AppServerRpcError({ code: -32603,
+      message: 'HTTP 401 Unauthorized, body: {"error":{"code":"token_revoked"}}' }, { method: 'account/rateLimits/read' });
+    const request = client.request.bind(client);
+    client.stop = async () => { client.stopped = true; };
+    client.request = async (method, params) => {
+      if (method === 'account/rateLimits/read') {
+        reads++;
+        if (mode === 'non-auth') throw new Error('HTTP 401 token_revoked');
+        if (mode === 'repeated' || (['recovered', 'paused'].includes(mode) && reads === 1)) throw revoked();
+        return {};
+      }
+      if (method === 'thread/start') { threads++; if (mode === 'ambiguous') throw revoked(); }
+      if (method === 'turn/start') {
+        turns++;
+        if (['effect', 'denial'].includes(mode)) {
+          client.emit('notification', { method: 'turn/started', params: { threadId: TRACE_THREAD_ID, turn: { id: 'turn-1' } } });
+          client.emit('notification', mode === 'denial'
+            ? { method: 'item/autoApprovalReview/completed', params: { threadId: TRACE_THREAD_ID, turnId: 'turn-1', review: { status: 'denied' } } }
+            : { method: 'item/started', params: { threadId: TRACE_THREAD_ID, item: { type: 'commandExecution' } } });
+          throw revoked();
+        }
+      }
+      return request(method, params);
+    };
+    const handoff = { kind: 'login', action: { command: 'codex', args: ['login'] } };
+    const session = new SimpleCruiseSession({ client, cwd: root, skill: 'quick', skillPath: '/tmp/quick.md',
+      prompt: 'Inspect ordinary source.', input: { isTTY: false }, traceHome: root,
+      output: { write() {} }, errorOutput: { write() {} }, locateTrace: async () => null,
+      authRecovery: { normalize: createNativeAuthNormalizer(), async recover(input) {
+        recoveries++; assert.equal(input.interactive, false);
+        return mode === 'paused' ? { status: 'paused', handoff } : { status: 'recovered' };
+      } } });
+    if (mode === 'recovered') assert.equal((await session.run()).status, 'complete');
+    else await assert.rejects(session.run(), error => {
+      if (mode === 'paused') assert.deepEqual(error.authRecovery.handoff, handoff);
+      if (['ambiguous', 'effect'].includes(mode)) assert.equal(error.authRecovery.status, 'recovered');
+      if (mode === 'repeated') assert.equal(error.authRecovery.reason, 'recovery-already-attempted');
+      if (mode === 'denial') assert.ok(error instanceof AppServerRpcError);
+      return true;
+    });
+    assert.equal(recoveries, ['denial', 'non-auth'].includes(mode) ? 0 : 1, mode);
+    assert.equal(reads, ['recovered', 'repeated'].includes(mode) ? 2 : 1, mode);
+    assert.equal(threads, ['paused', 'repeated', 'non-auth'].includes(mode) ? 0 : 1, mode);
+    assert.equal(turns, ['recovered', 'effect', 'denial'].includes(mode) ? 1 : 0, mode);
+    assert.equal(session.pending, null); assert.equal(client.stopped, true);
+    for (const event of ['notification', 'request', 'exit']) assert.equal(client.listenerCount(event), 0);
+  }
+});
 
 test('Goal ordinary turns and mode settings preserve the explicit sandbox selection', async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), 'cruise-sandbox-session-'));

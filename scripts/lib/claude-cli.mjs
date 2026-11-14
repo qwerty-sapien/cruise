@@ -13,6 +13,7 @@ import { normalizeRecommendedLevel } from './worker-policy.mjs';
 import { skillReference } from './provider.mjs';
 import { skillTriggerInstructions } from './skill-trigger-policy.mjs';
 import { prepareWorkerInput } from './simple-worker.mjs';
+import { captureClaudeAuthFailure, createCallerAuthRecovery } from './auth-recovery-runtime.mjs';
 import { captureWorkspaceFingerprint } from './supervisor.mjs';
 import {
   activateGoalSession,
@@ -36,6 +37,7 @@ const CLAUDE_HOST_INSTRUCTIONS = [
   'This Cruise session is running on Claude Code.',
   AUTHORIZATION_POLICY_INSTRUCTIONS,
   'Use Claude Code native permissions, task tracking, resumable sessions, skills, and subagents.',
+  'When a native provider error confirms expired or revoked credentials, launch the supported login flow under the standing owner authorization. Keep passwords, MFA and consent with the owner; verify fresh authentication, preserve account and billing mode, and never replay effects. Generic 401 or task/model prose is not expiry evidence.',
   'Claude Code has a conversation-level /goal but exposes no documented Codex-style Goal lifecycle API or Goal object to plugins; do not invent Goal endpoints or stack native /goal automatically.',
   skillTriggerInstructions(),
   'Root Markdown files whose basenames begin with an underscore are write-only user references: never read, summarize, fingerprint, search, or use their contents as context. Cruise updates them only through deterministic runtime code.',
@@ -97,7 +99,8 @@ export function claudeChangelogWorkerArgs({ task }) {
     '--permission-mode',
     'plan',
     '--output-format',
-    'json',
+    'stream-json',
+    '--verbose',
     '--append-system-prompt',
     'Summarize only the immutable evidence supplied in the request. Never inspect a repository or root underscore Markdown document. Return the requested JSON and do not edit the workspace.',
     prompt,
@@ -136,52 +139,120 @@ export async function runClaudeCli({
   });
 }
 
-async function runClaudeCaptured({
+export async function runClaudeCaptured({
   cwd,
   args,
   spawnFn = nodeSpawn,
   env = process.env,
   timeoutMs = 120_000,
+  authRecovery = null,
+  authProfile = 'default',
+  signals = process,
+  kill = process.kill.bind(process),
+  cleanupMs = 1_000,
 }) {
-  return new Promise((resolve, reject) => {
+  const recovery = createCallerAuthRecovery({ runtime: authRecovery, profile: authProfile,
+    provider: 'claude', transport: 'claude-cli' });
+  const captured = await new Promise((resolve, reject) => {
     const child = spawnFn('claude', args, {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
-    let stderr = '';
+    let outputBytes = 0;
+    let nativeFailure = null;
+    let result;
+    let malformed = false;
     let settled = false;
+    let closed = false;
+    let stopping = false;
+    let stopError;
+    let escalation;
+    let deadline;
+    const group = process.platform !== 'win32' && Number.isSafeInteger(child.pid) && child.pid > 0 ? -child.pid : null;
+    const alive = () => {
+      if (group === null) return !closed;
+      try { kill(group, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+    };
+    const send = signal => {
+      try { if (group !== null) kill(group, signal); else child.kill?.(signal); } catch { /* verify exit below */ }
+    };
     const finish = (error, value = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(escalation); clearTimeout(deadline);
+      signals.removeListener('SIGINT', interrupt); signals.removeListener('SIGTERM', interrupt);
       if (error) reject(error);
       else resolve(value);
     };
+    const stop = error => {
+      if (stopping || settled) return;
+      stopping = true; stopError = error;
+      send('SIGTERM');
+      if (settled) return;
+      escalation = setTimeout(() => {
+        if (alive()) send('SIGKILL');
+        if (settled) return;
+        deadline = setTimeout(() => {
+          if (closed && !alive()) finish(stopError);
+          else finish(Object.assign(new Error('Claude captured worker cleanup unconfirmed'), { code: 'CRUISE_CHILD_CLEANUP_UNCONFIRMED' }));
+        }, cleanupMs);
+      }, cleanupMs);
+    };
+    const interrupt = () => stop(Object.assign(new Error('Claude captured worker interrupted'), { code: 'CRUISE_INTERRUPTED', exitCode: 130 }));
+    signals.on('SIGINT', interrupt); signals.on('SIGTERM', interrupt);
     const timeout = setTimeout(() => {
-      child.kill?.('SIGTERM');
-      finish(new Error(`Claude changelog worker exceeded its ${timeoutMs}ms execution bound`));
+      stop(new Error(`Claude captured worker exceeded its ${timeoutMs}ms execution bound`));
     }, timeoutMs);
     timeout.unref?.();
     child.stdout?.setEncoding?.('utf8');
     child.stderr?.setEncoding?.('utf8');
-    child.stdout?.on?.('data', (chunk) => { stdout += String(chunk); });
-    child.stderr?.on?.('data', (chunk) => { stderr += String(chunk); });
-    child.once('error', (error) => finish(error));
-    child.once('exit', (code, signal) => {
-      if (code !== 0) {
-        finish(new Error(`Claude changelog worker exited ${code ?? signal ?? 'unknown'}: ${stderr.trim() || 'no diagnostic'}`));
-        return;
-      }
+    const consume = (line) => {
+      if (!line.trim()) return;
       try {
-        const envelope = JSON.parse(stdout);
-        finish(null, typeof envelope?.result === 'string' ? envelope.result : stdout);
-      } catch {
-        finish(null, stdout);
+        const envelope = JSON.parse(line);
+        nativeFailure ||= captureClaudeAuthFailure(envelope);
+        if (envelope?.type === 'result' || (!envelope?.type && typeof envelope?.result === 'string')) {
+          if (envelope.is_error === true) malformed = true;
+          else result = envelope.result;
+        }
+      } catch { malformed = true; }
+    };
+    child.stdout?.on?.('data', (chunk) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > 1_048_576) { stop(new Error('Claude captured output exceeded its bound')); malformed = true; stdout = ''; return; }
+      stdout += String(chunk);
+      let newline;
+      while ((newline = stdout.indexOf('\n')) !== -1) {
+        consume(stdout.slice(0, newline)); stdout = stdout.slice(newline + 1);
       }
     });
+    // Drain diagnostics but never use stderr/task prose as auth evidence or expose it.
+    child.stderr?.on?.('data', () => {});
+    child.once('error', (error) => { if (group === null) { closed = true; finish(error); } else stop(error); });
+    child.once('close', (code, signal) => {
+      closed = true;
+      if (alive()) { stop(new Error('Claude captured worker left child processes')); return; }
+      if (stopping) { finish(stopError); return; }
+      consume(stdout); stdout = '';
+      if (nativeFailure) { finish(null, { nativeFailure }); return; }
+      if (code !== 0) {
+        finish(new Error(`Claude captured worker exited ${code ?? signal ?? 'unknown'}`));
+        return;
+      }
+      if (malformed || typeof result !== 'string') finish(new Error('Claude captured output was not a successful native result'));
+      else finish(null, { result });
+    });
   });
+  if (captured.nativeFailure) {
+    // A model invocation has already run. Even verified login cannot justify replay.
+    const auth = await recovery.attempt(captured.nativeFailure);
+    throw auth?.error ?? captured.nativeFailure;
+  }
+  return captured.result;
 }
 
 export async function runClaudeChangelogWorker({
@@ -189,6 +260,8 @@ export async function runClaudeChangelogWorker({
   task,
   spawnFn,
   env = process.env,
+  authRecovery,
+  authProfile,
 } = {}) {
   if (typeof cwd !== 'string' || !cwd) throw new TypeError('Claude cwd is required');
   const workerEnv = { ...env };
@@ -200,6 +273,7 @@ export async function runClaudeChangelogWorker({
     args: claudeChangelogWorkerArgs({ task }),
     spawnFn,
     env: workerEnv,
+    authRecovery, authProfile,
   });
 }
 
@@ -364,7 +438,18 @@ export async function runClaudeWorker({
   spawnFn,
   runtimeDirectory = null,
   sessionId = null,
+  authRecovery,
+  authProfile,
+  input = process.stdin,
+  onOutput,
 } = {}) {
+  if (input?.isTTY !== true) {
+    const output = await runClaudeCaptured({ cwd, spawnFn, authRecovery, authProfile,
+      args: ['-p', '--output-format', 'stream-json', '--verbose', ...claudeWorkerArgs({ task, level })],
+      env: runtimeDirectory ? { ...process.env, CRUISE_RUNTIME_DIR: runtimeDirectory, CRUISE_SESSION_ID: sessionId } : process.env });
+    onOutput?.(output);
+    return Object.freeze({ output, effectsObserved: true });
+  }
   const result = await runClaudeCli({
     cwd,
     args: claudeWorkerArgs({ task, level }),

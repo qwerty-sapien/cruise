@@ -1,0 +1,254 @@
+✔ Codex 0.169.0 revoked contract accepts only bounded trailing rate-limit body JSON (1.528208ms)
+✔ native normalization uses exact structured fields and typed RPC errors only (1.463875ms)
+✔ fixed shell-free login inherits I/O and does not change auth environment (1.424833ms)
+✔ Claude status returns only bounded loggedIn state (0.223583ms)
+✔ abort and timeout stop only owned process group and require confirmed exit (0.541ms)
+✔ unconfirmed group survival fails cleanup even after parent closes (0.191042ms)
+✔ portal opener accepts only trusted exact HTTPS destinations (0.188417ms)
+✔ headless runtime never spawns or calls provider and returns exact trusted handoff (1.360625ms)
+✔ mock app-server errors normalize for verification without exposing prose (0.884333ms)
+✔ only confirmed scoped expired/revoked credential evidence qualifies (0.76575ms)
+✔ Codex login and native verification use fixed contracts and redact arbitrary text (4.70125ms)
+✔ non-applicable failures do not acquire locks or call adapters (0.460417ms)
+✔ headless login pauses with trusted action; no login process starts (0.500875ms)
+✔ verification failures, malformed quota, and native denials never trigger login (6.33975ms)
+✔ confirmed verification exception allows login; exit zero alone does not recover (1.026458ms)
+✔ Claude uses auth status, auth login, auth status; all owned handles are reaped (1.382709ms)
+✔ static keys only expose validated trusted portal and require verified update (2.311292ms)
+✔ concurrent callers wait and recheck; separate profiles do not collide (10.869875ms)
+✔ waiting, verification, and login are bounded and cancellation removes listeners (94.803833ms)
+✔ cleanup failure/timeout retains lease and never claims recovery (31.147917ms)
+✔ nonzero login and observer errors do not leak errors or skip cleanup (1.124417ms)
+✔ cross-process mock transcript launches exactly one login and recovers dead owner (142.291917ms)
+✔ empty orphan registration recovers; live locks are not stolen by age (1.700167ms)
+✔ Claude headless handoff performs no status spawn (0.353792ms)
+✔ external portal opens only trusted configuration and is reaped before pause (0.794083ms)
+✔ auth pause before staged activation leaves parent lease and quota ownership untouched (8.491916ms)
+✔ recovered staged Goal activates once, owns its quota lifecycle, and completes one native turn (8.600166ms)
+✔ startup deadline is bounded by default and preserves explicit long/off limits (0.271208ms)
+✔ initial Goal carries user provenance and observes early native completion (false) (7.303084ms)
+✔ initial Goal carries user provenance and observes early native completion (true) (4.618916ms)
+✔ idle Goal metadata schedules exactly one explicit read-only Plan bootstrap (6.562708ms)
+✔ cancelling default unlimited native startup pauses automatically and settles once (8.615208ms)
+✔ already running native turn is adopted and a lost completion is recovered from history (254.663541ms)
+✔ completion without a started event is recovered from notification (3.146583ms)
+✔ completion without a started event is recovered from history (3.141042ms)
+✔ ambiguous turn/start acceptance is reconciled without resubmission (254.931417ms)
+✔ concrete authentication cause surfaces promptly from start rejection (3.162459ms)
+✔ concrete authentication cause surfaces promptly from nonretrying error (2.672083ms)
+✔ concrete authentication cause surfaces promptly from failed completion (2.839333ms)
+✔ retrying and foreign-thread errors do not replace native completion (3.909458ms)
+✔ a missing activation reply cannot hide bootstrap timeout (23.982459ms)
+✔ a missing activation reply cannot hide bootstrap error (2.408292ms)
+✔ cancel settles an ambiguous bootstrap once and clears reconciliation (7.0655ms)
+✔ exit settles an ambiguous bootstrap once and clears reconciliation (7.150541ms)
+✔ reactivation ignores the consumed turn and explicitly starts the default-mode correction (external=false) (0.784375ms)
+✔ reactivation ignores the consumed turn and explicitly starts the default-mode correction (external=true) (0.446375ms)
+✔ explicit Plan bootstrap advances to execution and a managed dispatch with persisted handoff (external=false) (7.671333ms)
+✔ explicit Plan bootstrap advances to execution and a managed dispatch with persisted handoff (external=true) (5.69475ms)
+✔ CLI exposes explicit timeout and requires a complete Codex-only handoff pair (0.877625ms)
+✔ initialize handshake is independently configurable without conflating shutdown waits (0.202ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread ready-thread started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-parent-KGWP2n/sessions; resume: codex resume ready-thread.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread ready-thread; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-parent-KGWP2n/sessions; resume: codex resume ready-thread.
+✔ staged launcher: accept keeps parent ownership until fresh acceptance (535.965584ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+✔ staged launcher: cancel keeps parent ownership until fresh acceptance (8.050708ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+✔ staged launcher: exit keeps parent ownership until fresh acceptance (7.5015ms)
+✔ cancellation settles stalled initialize setup without waiting for an RPC deadline (0.583542ms)
+✔ cancellation settles stalled thread/start setup without waiting for an RPC deadline (5.872417ms)
+✔ cancellation settles stalled thread/settings/update setup without waiting for an RPC deadline (7.132333ms)
+✔ large fresh handoff stays in collaboration instructions and not the bounded Goal objective (2.501625ms)
+✔ staged setup defers quota authority and usage writes until parent acceptance (8.182708ms)
+✔ cancellation after an early native start cannot hang behind activation or interrupt RPCs (16.774875ms)
+✔ strict authority recovery drains reads, retries once, and reserves only after fresh authority (16.101458ms)
+✔ strict auth handoff and exhausted retry retain exit 6 and clean startup listener (8.330959ms)
+✔ strict check recovery cannot bypass campaign cap or release another reservation (17.861041ms)
+✔ strict authority exclusions pause without login or an unmetered retry (12.321042ms)
+✔ weekly selection chooses the window closest to 10,080 minutes (0.178375ms)
+✔ sparse rate-limit notifications merge without clearing prior values (0.154917ms)
+✔ a reset epoch establishes a new campaign baseline (6.262625ms)
+✔ two concurrent processes reserve atomically without oversubscription (57.708042ms)
+✔ dead old-process reservations are marked stale before a new reservation (8.14825ms)
+✔ the guard pauses before the cap and writes a resumable report (7.153042ms)
+✔ strict mode refuses an unmetered Goal (2.122667ms)
+▶ strict authority failures preserve pause containment and qualify routing guidance narrowly
+  ✔ account/read: workspace routing discovery failed (2.066334ms)
+  ✔ account/read: workspace routing discovery failed: authentication required (1.8215ms)
+  ✔ account/read: workspace routing discovery failed: invalid configuration (2.607917ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed (1.939625ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed: authentication required (1.818125ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed: invalid configuration (1.757459ms)
+✔ strict authority failures preserve pause containment and qualify routing guidance narrowly (12.520167ms)
+✔ ordinary local Goal access includes option descriptions and values in effect checks (16.252625ms)
+✔ session auth boundaries recover reads but never replay ambiguous startup or turns (18.68525ms)
+✔ Goal ordinary turns and mode settings preserve the explicit sandbox selection (3.427125ms)
+✔ simple sessions send one normal skill turn without control-plane instructions (9.04025ms)
+✔ relaxed goal resolves operational questions without opening user input (11.125375ms)
+✔ relaxed quick resolves operational questions without opening user input (5.021625ms)
+✔ relaxed debug resolves operational questions without opening user input (4.685791ms)
+✔ relaxed build resolves operational questions without opening user input (3.06675ms)
+✔ business-critical goal resolves operational questions without opening user input (3.841417ms)
+✔ business-critical quick resolves operational questions without opening user input (2.457584ms)
+✔ business-critical debug resolves operational questions without opening user input (2.488ms)
+✔ business-critical build resolves operational questions without opening user input (2.601ms)
+✔ mixed question batches surface only the material product decision (0.445833ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread thread-goal started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-goal.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread thread-goal; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-goal.
+✔ Goal auto-advances each completed active turn until native completion (10.128833ms)
+✔ Goal disclosure transcript: unsupported pause (3.5415ms)
+✔ Goal disclosure transcript: plain subagent permission question (2.595041ms)
+✔ Goal disclosure transcript: Cruise integrity drift waiver (2.640541ms)
+✔ Goal disclosure transcript: native denial (3.497042ms)
+✔ Goal disclosure transcript: duplicate native denial (2.783792ms)
+✔ Goal disclosure transcript: native approval (3.342ms)
+✔ Goal disclosure transcript: other thread denial (3.484917ms)
+✔ Goal disclosure transcript: replayed prior turn denial (4.169334ms)
+✔ Goal disclosure transcript: repeated unsupported pause stops after one correction (3.445208ms)
+✔ native approval responses cannot be replaced by Cruise consent and reset on a new turn (0.99575ms)
+✔ root approval EOF reports a channel error without a response or fabricated denial (1.961375ms)
+✔ root native explicit decline and cancellation remain authoritative through the picker (1.443167ms)
+✔ root session propagates approval-channel failure and stops its client (3.186834ms)
+✔ root structured native decisions have readable labels and preserve their exact payload (0.58625ms)
+✔ Goal bootstrap deadline reports diagnostics and pauses a Goal that never starts a turn (24.965125ms)
+✔ Goal bootstrap timeout cannot hang in diagnostic cleanup (34.893625ms)
+✔ interrupt cancels a hung bootstrap diagnostic without leaking its cleanup timer (16.163208ms)
+✔ app-server exit cancels a hung bootstrap diagnostic cleanup timer (14.67325ms)
+✔ a native Goal turn just before the deadline cancels the timer without changing stdout (95.7665ms)
+✔ Goal supervision realigns, runs one final experiment, then pauses with a report (24.5835ms)
+✔ invalid flight state gets one corrective Codex turn without resetting supervision (17.27175ms)
+✔ a progressing Codex turn leaves a zero-intervention supervisor trail (4.293625ms)
+Cruise warning: supervision degraded: invalid .cruise/FLIGHT.md (missing opening fence).
+✔ a repaired Codex flight keeps its correction in the active ladder (5.303833ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread thread-interrupt started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-interrupt.
+Cruise: trace unresolved for thread thread-interrupt; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-interrupt.
+✔ interrupting an activation pauses a Goal that became active in flight (3.654542ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread thread-plan-only started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-plan-only.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread thread-plan-only; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-plan-only.
+✔ a plan-only Goal completes after its native Plan turn without implementation (3.274166ms)
+✔ Codex completion assessment rejects stale gates and accepts fresh Flight v2 receipts (4.939042ms)
+✔ Goal automatically accepts unmistakable routine phase gates but not risky choices (0.821167ms)
+✔ Goal invocation authorizes routine Plan, Goal, and contract transitions without a copied phrase (4.127166ms)
+✔ Goal session answers an in-scope contract gate without opening the picker (0.763916ms)
+✔ only the dedicated fail-closed Cruise migration command bypasses redundant native approval (0.5395ms)
+✔ native Goal reviewer true/undefined survives explicit Plan, execution, continuation and reactivation (19.592333ms)
+✔ native Goal reviewer false/undefined survives explicit Plan, execution, continuation and reactivation (14.722625ms)
+✔ native Goal reviewer false/user survives explicit Plan, execution, continuation and reactivation (14.131709ms)
+✔ native Goal reviewer true/auto_review survives explicit Plan, execution, continuation and reactivation (13.556416ms)
+✔ native Goal reviewer false/guardian_subagent survives explicit Plan, execution, continuation and reactivation (13.529542ms)
+✔ native Goal reviewer rejection surfaces without fallback and before activation when settings fail (5.718916ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=user; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ worker questions keep routine delegation internal in both profiles and mixed batches (12.539583ms)
+✔ worker native denials remain host decisions (0.154959ms)
+✔ worker approval EOF and missing selections never synthesize decisions or permissions (4.097917ms)
+✔ worker native decisions roundtrip and explicit permission choices remain effective (3.129708ms)
+✔ worker failures report observed transport categories without inventing DNS (0.780042ms)
+✔ only the exact generic routing error receives account-routing guidance (0.362416ms)
+✔ generic account-routing startup failure stops the client without retry or model turn (2.636667ms)
+✔ worker auth recovery retries pre-effect only and cleans every client/listener (4.633167ms)
+✔ startup exit rejection is observed before start settles without masking the startup error (50.746125ms)
+✔ a pre-effect upstream failure retries once without durable retry state (0.874958ms)
+✔ model selection is untouched without an explicit level (0.387791ms)
+✔ worker forwards an explicit native output schema and omits it by default (0.494875ms)
+✔ worker transcript routes coordination internally and carries native evidence to its request handler (1.688ms)
+✔ worker permissions channel failure propagates without a grant, denial, or retry (0.727959ms)
+✔ worker launch rejects secret material and sensitive-file access before starting a client (0.922542ms)
+✔ internal read-only workers cannot mutate the product workspace (0.358792ms)
+✔ worker external sandbox is request-scoped (readOnly=false) (0.534167ms)
+✔ worker external sandbox is request-scoped (readOnly=true) (0.383166ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ internal workers have a bounded execution timeout (5.058458ms)
+✔ every explicit level overrides the worker with its exact model and effort (2.821ms)
+✔ L7 launch requests distinguish direct exceptional work from an evidenced L6 reasoning escalation (0.598708ms)
+✔ an explicit Astra level fails closed when Astra is absent from the catalog (0.438625ms)
+✔ a stream failure after tool activity is reported, not silently duplicated or blocked (0.357125ms)
+✔ canonical final text is collected without deltas and commentary is streaming only (0.717666ms)
+✔ legacy null-phase and delta-only streams remain supported without conflating item IDs (0.95675ms)
+✔ partial answers and normalized progress text do not contaminate a canonical final handoff (0.412666ms)
+✔ conflicting or ambiguous final streams fail closed (1.969625ms)
+✔ read-only worker requests no-persist retrieval without writable product roots (0.291167ms)
+✔ changelog source evidence is data while instruction and credential checks remain active (2.84325ms)
+✔ native worker reviewer true/undefined is forwarded without changing approval policy (0.268458ms)
+✔ native worker reviewer false/undefined is forwarded without changing approval policy (0.19025ms)
+✔ native worker reviewer false/user is forwarded without changing approval policy (0.180625ms)
+✔ native worker reviewer true/auto_review is forwarded without changing approval policy (0.178375ms)
+✔ native worker reviewer false/guardian_subagent is forwarded without changing approval policy (0.177958ms)
+✔ invalid worker reviewer fails before transport creation (0.069209ms)
+✔ native worker reviewer rejection propagates without fallback or retry (0.526875ms)
+✔ native reviewer denial prevents an unchanged worker retry after a transport failure (0.304583ms)
+ℹ tests 164
+ℹ suites 0
+ℹ pass 164
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1319.600084

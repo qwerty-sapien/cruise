@@ -1,0 +1,111 @@
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+▶ real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup
+  ✔ goal (651.375292ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ goal-error (603.294084ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+cruise: weekly quota authority unavailable: workspace routing discovery failed (account-routing). Check authenticated account/backend connectivity. On macOS inside an outer sandbox, check resolver access to the canonical /private/var/run/mDNSResponder Unix socket (docs/EXTERNAL_SANDBOX.md). This generic error does not establish a local workspace-root problem or prove DNS failure. Resolve the cause before resuming; do not weaken policy or retry a denial.
+  ✔ goal-routing (239.013125ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+  ✔ staged (610.88125ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+  ✔ debug (796.952208ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+
+  ✔ standalone (285.405167ms)
+✔ real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup (3188.742833ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+▶ managed CLI rejects invalid parent bindings before capsule writes or transport creation
+  ✔ missing-runtime (204.304917ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ missing-session (204.801917ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ wrong-session (206.381416ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ wrong-cwd (205.716375ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ unregistered (277.302334ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ stale-lease (208.229875ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ expired-runtime (206.667916ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ inactive-runtime (205.619542ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ tampered-manifest (199.908166ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ worker-parent (193.798333ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ unsafe-runtime (190.864708ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ symlink-runtime (215.226833ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ foreign-inherited-runtime (219.453875ms)
+✔ managed CLI rejects invalid parent bindings before capsule writes or transport creation (2740.2885ms)
+✔ ordinary local access cannot authorize a separate copy to an external URL (7.718875ms)
+✔ worker request handler auto-answers authorized local work without a human picker or delegation wording (13.896208ms)
+✔ worker handler preserves option effects, explicit denial evidence and native approval requests (2.39675ms)
+✔ worker handler skips secret paths and resolves each question independently (0.567875ms)
+✔ the npm package entry runs the Cruise CLI (159.387875ms)
+✔ app-server stderr is attributed across chunk boundaries (0.359208ms)
+✔ the public CLI accepts direct requests and rejects retired control-plane flags (0.92075ms)
+✔ the release exposes four public skills plus the internal context policy (2.749875ms)
+✔ attest is a prompt-free inspection command with machine-readable output (1.228542ms)
+✔ provider selectors are request-scoped, mutually exclusive, and default to Codex (0.174542ms)
+✔ workers receive ordinary text and an explicit, request-scoped level (209.700792ms)
+✔ external sandbox is explicit, Codex-only, and limited to Goal and worker commands (1.234417ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+
+✔ external sandbox CLI option reaches hosted Goals and managed workers (454.446667ms)
+Cruise worker: requested level=auto; routed minimum=L7; selected=L7.
+
+Cruise worker: requested level=7; routed minimum=L6; selected=L7.
+
+Cruise worker: requested level=7; routed minimum=L6; selected=L7.
+
+✔ managed CLI routing requires explicit reasoning evidence for an L6-to-L7 transition (719.095542ms)
+✔ reasoning escalation evidence rejects incomplete or non-Codex worker routes (0.793667ms)
+✔ reference command delegates deterministic user-document writing without reading outputs (2.207458ms)
+✔ direct changelog command delegates one exact commit through isolated scratch (1.236167ms)
+✔ Claude workers use the Claude adapter without touching Codex app-server (218.38275ms)
+Cruise: thread thread started (model unknown).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread.
+Cruise: trace unresolved for thread thread; sessions: /Users/agent/.codex/sessions; resume: codex resume thread.
+✔ a completed ordinary Cruise task removes its transient ORIGIN control file (261.071542ms)
+✔ launcher runs commit observation around the hosted session before deleting scratch (220.662542ms)
+✔ the run-one-goal seam does not replace ORIGIN.md (243.041625ms)
+✔ a supervised Goal stall maps to exit code 3 (210.8255ms)
+✔ a fresh failed Goal never records an unchanged prior Flight as current (261.811667ms)
+cruise: Codex never started the native Goal turn within 10ms (thread=thread-timeout, model=gpt-5.6-sol, goal=active, elapsed=12ms).
+✔ a native Goal bootstrap timeout maps to exit code 4 (245.007583ms)
+cruise: transport inactivity observed
+✔ transport inactivity maps to exit code 5 (221.89275ms)
+✔ Claude start receives an exact runtime directory and removes terminal control files (211.665083ms)
+✔ Claude resume preserves a blocked original request and does not reinvoke the Goal skill (450.256708ms)
+✔ Claude non-Goal runs reserve the workspace without activating Goal supervision (209.082208ms)
+✔ Codex Doctor checks transport, version, and effective installed Cruise content (0.559875ms)
+✔ Codex plugin freshness detects same-version source and cache drift (11.864125ms)
+✔ Claude Doctor checks the CLI, plugin, and authentication (0.246042ms)
+✔ native reviewer CLI is request-scoped and limited to Codex Goal and worker (0.61775ms)
+✔ launcher forwards injected native reviewer defaults and overrides to Goal and worker (2456.379291ms)
+ℹ tests 54
+ℹ suites 0
+ℹ pass 54
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12821.573084
