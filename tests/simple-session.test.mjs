@@ -111,6 +111,7 @@ test('Goal auto-advances each completed active turn until native completion', as
       if (method === 'thread/start') {
         return { thread: { id: 'thread-goal' }, model: 'gpt-test', reasoningEffort: 'medium' };
       }
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
@@ -207,6 +208,114 @@ test('Goal auto-advances each completed active turn until native completion', as
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.sandboxPolicy.type, 'workspaceWrite');
 });
 
+async function idleBootstrapFixture(t, { readMode = 'idle', holdStart = false, ackBeforeNotification = false, prompt = 'Repair and verify the report.' } = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-idle-bootstrap-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class Client extends EventEmitter {
+    goal = null;
+    calls = [];
+    stopped = false;
+    async start() {}
+    async stop() { this.stopped = true; }
+    complete(id) {
+      this.emit('notification', { method: 'turn/started', params: { threadId: 'idle-goal', turn: { id } } });
+      this.goal = { ...this.goal, status: 'complete' };
+      this.emit('notification', { method: 'turn/completed', params: { threadId: 'idle-goal', turn: { id, status: 'completed' } } });
+    }
+    async request(method, params = {}) {
+      this.calls.push({ method, params });
+      if (method === 'thread/start') return { thread: { id: 'idle-goal' }, model: 'native-default' };
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: this.goal };
+      if (method === 'thread/goal/set') {
+        this.goal = { objective: params.objective, status: params.status };
+        return { goal: this.goal };
+      }
+      if (method === 'thread/read') {
+        assert.equal(params.includeTurns, false);
+        if (readMode === 'hang') return new Promise(() => {});
+        if (readMode === 'race') this.complete('native-race');
+        if (readMode === 'active') setImmediate(() => this.complete('native-active'));
+        return { thread: { id: readMode === 'wrong-id' ? 'foreign' : 'idle-goal', status: { type: readMode === 'active' ? 'active' : 'idle' } } };
+      }
+      if (method === 'turn/start') {
+        if (holdStart) return new Promise(() => {});
+        const count = this.calls.filter((call) => call.method === 'turn/start').length;
+        const id = `explicit-${count}`;
+        const finish = () => {
+          this.emit('notification', { method: 'turn/started', params: { threadId: 'idle-goal', turn: { id } } });
+          if (count === 2) this.goal = { ...this.goal, status: 'complete' };
+          this.emit('notification', { method: 'turn/completed', params: { threadId: 'idle-goal', turn: { id, status: 'completed' } } });
+        };
+        if (ackBeforeNotification) setTimeout(finish, 45);
+        else queueMicrotask(finish);
+        return { turn: { id } };
+      }
+      throw new Error(`unexpected request ${method}`);
+    }
+  }
+  const client = new Client();
+  const session = new SimpleCruiseSession({
+    client, cwd: root, skill: 'goal', skillPath: '/tmp/goal/SKILL.md', prompt,
+    output: { write() {} }, errorOutput: { write() {} },
+    locateTrace: async () => null, firstTurnDeadlineMs: 30, firstTurnCleanupDeadlineMs: 30,
+  });
+  return { client, session };
+}
+
+test('idle Goal metadata starts one Plan turn and then executes in Default mode', async (t) => {
+  const { client, session } = await idleBootstrapFixture(t);
+  assert.equal((await session.run()).status, 'complete');
+  const turns = client.calls.filter(({ method }) => method === 'turn/start').map(({ params }) => params);
+  assert.equal(turns.length, 2);
+  assert.equal(turns[0].collaborationMode.mode, 'plan');
+  assert.equal(turns[0].sandboxPolicy.type, 'readOnly');
+  assert.equal(turns[0].input[0].type, 'skill');
+  assert.match(turns[0].input[1].text, /Repair and verify the report/u);
+  assert.equal(turns[1].collaborationMode.mode, 'default');
+  assert.equal(turns[1].sandboxPolicy.type, 'workspaceWrite');
+  assert.equal(client.stopped, true);
+});
+
+test('a read-only Plan bootstrap does not turn an execution Goal into planning-only success', async (t) => {
+  const { client, session } = await idleBootstrapFixture(t, {
+    prompt: 'Use a brief read-only Plan turn, then execute the repair in Default mode.',
+  });
+  assert.equal((await session.run()).status, 'complete');
+  assert.deepEqual(client.calls.filter(({ method }) => method === 'turn/start')
+    .map(({ params }) => params.collaborationMode.mode), ['plan', 'default']);
+});
+
+test('an accepted initial turn cancels the startup deadline before delayed notifications', async (t) => {
+  const { client, session } = await idleBootstrapFixture(t, { ackBeforeNotification: true });
+  assert.equal((await session.run()).status, 'complete');
+  assert.equal(client.calls.filter(({ method, params }) => method === 'thread/goal/set' && params.status === 'paused').length, 0);
+});
+
+for (const readMode of ['active', 'race']) {
+  test(`Goal bootstrap adopts native work without duplication (${readMode})`, async (t) => {
+    const { client, session } = await idleBootstrapFixture(t, { readMode });
+    assert.equal((await session.run()).status, 'complete');
+    assert.equal(client.calls.filter(({ method }) => method === 'turn/start').length, 0);
+  });
+}
+
+for (const options of [{ readMode: 'hang' }, { holdStart: true }]) {
+  test(`Goal bootstrap bounds an unresponsive native request (${JSON.stringify(options)})`, async (t) => {
+    const { client, session } = await idleBootstrapFixture(t, options);
+    await assert.rejects(session.run(), { code: 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT' });
+    assert.equal(client.goal.status, 'paused');
+    assert.equal(client.stopped, true);
+  });
+}
+
+test('Goal bootstrap cannot start a turn for a mismatched thread response', async (t) => {
+  const { client, session } = await idleBootstrapFixture(t, { readMode: 'wrong-id' });
+  await assert.rejects(session.run(), /different Goal thread/u);
+  assert.equal(client.calls.filter(({ method }) => method === 'turn/start').length, 0);
+  assert.equal(client.stopped, true);
+});
+
 test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never starts a turn', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-timeout-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -226,6 +335,7 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
       if (method === 'thread/start') {
         return { thread: { id: 'thread-no-turn' }, model: 'gpt-test' };
       }
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
@@ -283,7 +393,8 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
     assert.equal(error.threadId, 'thread-no-turn');
     assert.equal(error.model, 'gpt-test');
     assert.equal(error.goalStatus, 'active');
-    assert.ok(error.elapsedMs >= 20);
+    assert.equal(error.deadlineMs, 20);
+    assert.ok(Number.isInteger(error.elapsedMs) && error.elapsedMs >= 0);
     assert.match(error.message, /never started the native Goal turn within 20ms/u);
     assert.match(error.message, /thread=thread-no-turn/u);
     assert.match(error.message, /model=gpt-test/u);
@@ -329,6 +440,7 @@ test('Goal bootstrap timeout cannot hang in diagnostic cleanup', async (t) => {
       if (method === 'thread/start') {
         return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-test' };
       }
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
@@ -383,6 +495,7 @@ test('interrupt cancels a hung bootstrap diagnostic without leaking its cleanup 
 
     async request(method, params = {}) {
       if (method === 'thread/start') return { thread: { id: 'thread-cleanup-interrupt' } };
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
@@ -438,6 +551,7 @@ test('app-server exit cancels a hung bootstrap diagnostic cleanup timer', async 
 
     async request(method, params = {}) {
       if (method === 'thread/start') return { thread: { id: 'thread-cleanup-exit' } };
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
@@ -491,6 +605,7 @@ test('a native Goal turn just before the deadline cancels the timer without chan
       if (method === 'thread/start') {
         return { thread: { id: 'thread-just-in-time' }, model: 'gpt-test' };
       }
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
@@ -576,6 +691,7 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') return { thread: { id: 'thread-stalled' } };
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
@@ -720,6 +836,7 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') return { thread: { id: 'thread-invalid-flight' } };
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
@@ -882,6 +999,7 @@ test('interrupting an activation pauses a Goal that became active in flight', as
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') return { thread: { id: 'thread-interrupt' } };
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set' && params.status === 'active') {
@@ -941,6 +1059,7 @@ test('a plan-only Goal completes after its native Plan turn without implementati
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') return { thread: { id: 'thread-plan-only' } };
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {

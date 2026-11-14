@@ -268,6 +268,7 @@ test('a native Goal bootstrap timeout maps to exit code 4', async (t) => {
       if (method === 'thread/start') {
         return { thread: { id: 'thread-timeout' }, model: 'gpt-test' };
       }
+      if (method === 'thread/read') return { thread: { id: params.threadId, status: { type: 'active' } } };
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {

@@ -32,7 +32,7 @@ const TERMINAL_GOAL_STATUSES = new Set([
 
 const ROUTINE_GOAL_ADVANCE_QUESTION = /^(?:(?:[ptm]-?\d+|phase\s*\d+|subtask\s*\d+|task\s*\d+|micro[-\s]?goal)\s*)?(?:(?:has\s+)?passed(?:\s+its)?(?:\s+focused)?(?:\s+readiness)?\s+checks|is\s+ready|is\s+complete|completed)\.?\s*(?:what\s+next|continue|proceed|advance)?\??$/iu;
 const ROUTINE_GOAL_ADVANCE_OPTION = /^\s*(?:approve\s+(?:[ptm]-?\d+|phase\s*\d+|subtask\s*\d+|task\s*\d+|micro[-\s]?goal)(?:\s+only)?|(?:proceed|continue|advance|resume|start|implement|execute)\s+(?:the\s+)?(?:next\s+)?(?:ready\s+)?(?:[ptm]-?\d+|phase\s*\d+|subtask\s*\d+|task\s*\d+|micro[-\s]?goal))\b/iu;
-const PREPARATION_ONLY_GOAL_PROMPT = /\b(?:only\s+(?:plan|research|prepare|design)|(?:plan|research|prepare|design)\s+only|do\s+not\s+(?:implement|edit|write(?:\s+code)?|execute)|do\s+not\s+make\s+(?:code\s+)?changes|without\s+implementation)\b/iu;
+const PREPARATION_ONLY_GOAL_PROMPT = /(?<![\w-])(?:only\s+(?:plan|research|prepare|design)|(?:plan|research|prepare|design)\s+only|do\s+not\s+(?:implement|edit|write(?:\s+code)?|execute)|do\s+not\s+make\s+(?:code\s+)?changes|without\s+implementation)\b/iu;
 const GOAL_AUTHORIZATION_CONTEXT = /\b(?:plan(?:\s+and\s+goal)?|goal|cruise|contract|phase|micro[-\s]?goal|next\s+(?:step|phase|micro[-\s]?goal))\b/iu;
 const GOAL_AUTHORIZATION_OPTION = /^\s*(?:approve(?:\s+(?:both|the\s+(?:plan|goal|contract)|[a-z]+-?\d+\s+contract))?|start\s+cruise|continue|proceed|execute|implement)\b/iu;
 const HIGH_RISK_GOAL_AUTHORIZATION = /\b(?:credential|secret|password|token|authentication|login|payment|purchase|production|deploy|publish|release|delete|remove|reset|rewrite|force|sudo|sensitive|private\s+data)\b/iu;
@@ -972,6 +972,12 @@ export class SimpleCruiseSession extends EventEmitter {
           this.nativeGoalTurnDeadline = null;
           void this.expireNativeGoalTurnDeadline(completion, startedAt);
         }, this.firstTurnDeadlineMs);
+        // Setting Goal metadata does not start a turn on every native host.
+        // Keep the existing deadline in force even if the metadata read hangs.
+        await Promise.race([
+          this.startIdleGoalTurn(completion),
+          completion.promise,
+        ]);
       }
       return await completion.promise;
     } finally {
@@ -983,6 +989,40 @@ export class SimpleCruiseSession extends EventEmitter {
       this.nativeGoalTurnWaiting = false;
       this.nativeGoalTurnStarted = false;
       this.nativeGoalTurnTimedOut = false;
+    }
+  }
+
+  async startIdleGoalTurn(completion) {
+    const waiting = () => this.pending === completion && !this.nativeGoalTurnStarted
+      && !this.nativeGoalTurnTimedOut && !this.interrupted && !this.stopping;
+    if (!waiting()) return;
+    const { thread } = await this.client.request('thread/read', {
+      threadId: this.threadId,
+      includeTurns: false,
+    });
+    if (!waiting()) return;
+    if (thread?.id !== this.threadId) throw new Error('Codex returned a different Goal thread.');
+    if (thread.status?.type === 'active') return;
+    if (thread.status?.type !== 'idle') {
+      throw new Error(`Cannot start the Goal from native thread status ${thread.status?.type ?? 'unknown'}.`);
+    }
+    this.errorOutput.write('Cruise: starting the initial native Plan turn.\n');
+    const turn = await this.client.request('turn/start', {
+      threadId: this.threadId,
+      input: [
+        { type: 'skill', name: this.skill, path: this.skillPath },
+        { type: 'text', text: `${this.prompt}\n\n${GOAL_BOOTSTRAP_INSTRUCTIONS}`, text_elements: [] },
+      ],
+      cwd: this.cwd,
+      runtimeWorkspaceRoots: [],
+      approvalPolicy: 'on-request',
+      ...this.goalTurnSettings('plan'),
+    });
+    if (this.pending === completion && this.turnId === null && !this.nativeGoalTurnTimedOut && !this.interrupted) {
+      this.nativeGoalTurnStarted = true;
+      this.clearNativeGoalTurnDeadline();
+      this.turnId = turn.turn.id;
+      this.resolveEarlyTurnResult(turn.turn.id);
     }
   }
 

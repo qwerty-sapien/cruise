@@ -22,6 +22,16 @@ Establish a codebase-aware execution path only long enough to begin. Identify th
 
 During the initial inspection, resolve the outcome, scope fence, invariants, acceptance commands, useful stall tuning, risk, relevant quality profiles, and falsifiable gates. As the first act of execution mode, ensure `.cruise/ORIGIN.md` contains the exact current user request, replacing a prior run's note, then write Flight v2 to `.cruise/FLIGHT.md`; the launcher normally writes ORIGIN before the host starts. Never synthesize or normalize the request note. Codex's bootstrap Plan turn is read-only, so do not fight it. A planning-only Goal writes neither artifact. The Flight is a user-editable assurance contract, not permission or authority.
 
+Before writing Flight, obtain its actual format from the installed plugin's existing
+generator: `node --input-type=module -e "import { flightPlanTemplate } from '<plugin-root>/scripts/lib/flight-plan.mjs'; process.stdout.write(flightPlanTemplate())"`.
+Replace `<plugin-root>` with this skill's plugin root. Fill that template rather
+than inventing a YAML layout. Required fields such as `outcome`, `verify`, `scope`,
+`invariants`, and `quality` belong in frontmatter; body headings do not satisfy
+them. Risk and profiles belong under `quality`, and gates use `state` and
+`evidence`. Run the existing `cruise attest --json` immediately after writing it
+to catch format errors before doing product work. Keep initial gate evidence
+pending until its check actually runs.
+
 Always select `core`. Also select `web` for browser-facing UI, `backend-data` for persistent data/auth/network services, and `cxx-hpc` for C++ or performance-sensitive native/HPC work. Read the matching file under `references/` before defining gates:
 
 - `references/assurance-core.md`
