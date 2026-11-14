@@ -10,7 +10,6 @@ const QUEUE_KEYS = new Set(['version', 'milestones']);
 const MILESTONE_KEYS = new Set([
   'id',
   'status',
-  'stop_scope',
   'outcome',
   'verify',
   'depends',
@@ -192,12 +191,6 @@ function normalizeMilestone(raw, index, version = 1) {
     nonGoals: stringList(raw.non_goals ?? raw.nonGoals ?? [], `milestones[${index}].non_goals`),
     invariants: stringList(raw.invariants ?? [], `milestones[${index}].invariants`),
   };
-  if (raw.stop_scope !== undefined) {
-    if (![null, 'local', 'global'].includes(raw.stop_scope)) {
-      throw new TypeError(`milestones[${index}].stop_scope is invalid`);
-    }
-    milestone.stop_scope = raw.stop_scope;
-  }
   if (version >= 2) {
     const risk = raw.risk ?? 'medium';
     if (!RISKS.has(risk)) throw new TypeError(`milestones[${index}].risk is invalid`);
@@ -322,7 +315,6 @@ function serializableQueue(queue) {
     return {
       id: normalized.id,
       status: normalized.status,
-      ...(normalized.stop_scope !== undefined ? { stop_scope: normalized.stop_scope } : {}),
       outcome: normalized.outcome,
       verify: normalized.verify,
       depends: normalized.depends,
@@ -429,9 +421,8 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
   }, 0, 2);
   if (typeof queueBody !== 'string') throw new TypeError('queue body must be a string');
   const inherited = queueBody.trim()
-    ? '\n\nInherited cross-milestone detail remains in `.cruise/QUEUE.md`; open only the applicable obligation.'
-    : '';
-  const affectedSurface = normalized.touchpoints.length ? normalized.touchpoints : ['.'];
+    ? `\n\n## Inherited queue context\n\n${queueBody.trim()}`
+    : '\n\n## Inherited queue context\n\nNo additional cross-milestone obligations were recorded.';
   return {
     version: 2,
     status: 'active',
@@ -451,7 +442,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
           dimension: 'intent',
           criterion: `The delivered milestone satisfies: ${normalized.outcome}`,
           oracle: 'Compare the final behavior and diff with the milestone outcome and inherited queue context',
-          surface: ['.'],
           severity: 'high',
           state: 'pending',
           evidence: null,
@@ -461,7 +451,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
           dimension: 'functional-correctness',
           criterion: 'The changed behavior works across its stated acceptance cases',
           oracle: normalized.verify.join(' && ') || 'Run a focused behavioral check derived from the outcome',
-          surface: affectedSurface,
           severity: 'high',
           state: 'pending',
           evidence: null,
@@ -471,7 +460,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
           dimension: 'regression',
           criterion: 'Existing behavior and listed invariants remain intact',
           oracle: 'Run the relevant regression suite and inspect affected contracts',
-          surface: affectedSurface,
           severity: 'high',
           state: 'pending',
           evidence: null,
@@ -481,7 +469,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
           dimension: 'failure-paths',
           criterion: 'Relevant invalid, boundary, and failure cases behave deliberately',
           oracle: 'Exercise or review the smallest discriminating failure-path probes',
-          surface: affectedSurface,
           severity: 'medium',
           state: 'pending',
           evidence: null,
@@ -491,7 +478,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
           dimension: 'completion-review',
           criterion: 'A skeptical final review finds no unresolved in-scope quality gap',
           oracle: 'Review the final diff, test evidence, and remaining risks against every Flight gate',
-          surface: ['.'],
           severity: 'high',
           state: 'pending',
           evidence: null,
@@ -503,7 +489,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
             dimension,
             criterion: `The ${dimension} quality dimension is satisfied for this milestone`,
             oracle: `Apply the ${profile} assurance profile and run a discriminating ${dimension} check`,
-            surface: affectedSurface,
             severity: normalized.risk,
             state: 'pending',
             evidence: null,
@@ -514,7 +499,6 @@ export function milestoneToFlightPlan(milestone, queueBody = '') {
               dimension: 'independent-review',
               criterion: 'An independent skeptical review finds no unresolved high-risk issue',
               oracle: 'Run a bounded independent review against the final diff and Flight evidence',
-              surface: ['.'],
               severity: normalized.risk,
               state: 'pending',
               evidence: null,

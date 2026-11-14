@@ -39,8 +39,6 @@ docs/*
 
 # Local Cruise request note
 /.cruise/
-/_CHANGELOG.md
-/_FOR_USER_REFERENCE.md
 
 # Local audits and raw evaluation output
 /codex-history/
@@ -76,3 +74,6 @@ prompts/*
 docs/*
 evals/*
 !docs/*.md
+
+# Agent-owned context stays local and outside model conversation history.
+/agents/

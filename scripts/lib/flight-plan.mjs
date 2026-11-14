@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { normalizeQuality, serializeQuality } from './assurance.mjs';
 
 export const FLIGHT_FILE = '.cruise/FLIGHT.md';
-export const FLIGHT_MAX_BYTES = 8 * 1024;
 export const DEFAULT_STALL = Object.freeze({ quietTurns: 3, sameFailure: 3 });
 
 const STATUSES = new Set(['active', 'complete', 'blocked']);
@@ -39,8 +38,6 @@ quality:
       dimension: intent
       criterion: <the result still matches the original request>
       oracle: <review method>
-      surface:
-        - .
       severity: high
       state: pending
       evidence: null
@@ -49,8 +46,6 @@ quality:
       dimension: functional-correctness
       criterion: <the changed behavior works across acceptance cases>
       oracle: <focused behavioral check>
-      surface:
-        - <path-or-glob>
       severity: high
       state: pending
       evidence: null
@@ -59,8 +54,6 @@ quality:
       dimension: regression
       criterion: <existing behavior and invariants remain intact>
       oracle: <regression check>
-      surface:
-        - <path-or-glob>
       severity: high
       state: pending
       evidence: null
@@ -69,8 +62,6 @@ quality:
       dimension: failure-paths
       criterion: <relevant failures and boundaries behave deliberately>
       oracle: <failure-path probe>
-      surface:
-        - <path-or-glob>
       severity: medium
       state: pending
       evidence: null
@@ -79,8 +70,6 @@ quality:
       dimension: completion-review
       criterion: <skeptical final review finds no unresolved in-scope gap>
       oracle: <final diff and evidence review>
-      surface:
-        - .
       severity: high
       state: pending
       evidence: null
@@ -245,7 +234,7 @@ function normalize(raw, body = '') {
 
 function parseFlightPlanStrict(text) {
   if (typeof text !== 'string') throw new TypeError('flight plan must be text');
-  if (Buffer.byteLength(text) > FLIGHT_MAX_BYTES) throw new Error('flight plan exceeds 8 KB');
+  if (text.length > 1_000_000) throw new Error('flight plan exceeds 1 MB');
   const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
   if (lines[0]?.trim() !== '---') throw new Error('line 1: missing opening --- frontmatter fence');
   const closing = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
@@ -407,9 +396,6 @@ export async function writeFlightPlan(cwd, plan) {
     if (error?.code !== 'ENOENT') throw error;
   }
   const text = `---\n${serializeObject(frontmatter).join('\n')}\n---\n${normalized.body}`;
-  if (Buffer.byteLength(text) > FLIGHT_MAX_BYTES) {
-    throw new Error('flight plan exceeds 8 KB; keep the body concise and link detailed evidence');
-  }
   await writeFile(path, text, { encoding: 'utf8', mode: 0o600 });
   return normalized;
 }

@@ -109,11 +109,7 @@ class HostileAppServer extends EventEmitter {
     }
     if (message.method === 'thread/start') {
       if (this.mode === 'B_no_thread_start') return;
-      this.respond(message, {
-        thread: { id: 'thread-hostile' },
-        model: 'gpt-5.6-sol',
-        reasoningEffort: 'high',
-      });
+      this.respond(message, { thread: { id: 'thread-hostile' }, model: 'gpt-fake' });
       return;
     }
     if (message.method === 'thread/settings/update') {
@@ -122,14 +118,6 @@ class HostileAppServer extends EventEmitter {
     }
     if (message.method === 'thread/goal/get') {
       this.respond(message, { goal: this.goal });
-      return;
-    }
-    if (message.method === 'thread/read') {
-      this.respond(message, { thread: { status: { type: this.activeTurn ? 'active' : 'idle' } } });
-      return;
-    }
-    if (message.method === 'thread/turns/list') {
-      this.respond(message, { data: this.activeTurn ? [this.activeTurn] : [] });
       return;
     }
     if (message.method === 'thread/goal/set') {
@@ -155,7 +143,7 @@ class HostileAppServer extends EventEmitter {
       return;
     }
     if (message.method === 'turn/start') {
-      if (['H_turn_start_no_reply', 'C_goal_no_turn'].includes(this.mode)) return;
+      if (this.mode === 'H_turn_start_no_reply') return;
       const turn = this.startTurn({
         complete: ['fast', 'G2_question_held_open'].includes(this.mode),
         question: ['G_question_no_stdin', 'G2_question_held_open'].includes(this.mode),

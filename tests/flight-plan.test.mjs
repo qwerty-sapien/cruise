@@ -7,7 +7,6 @@ import test from 'node:test';
 import {
   DEFAULT_STALL,
   FLIGHT_FILE,
-  FLIGHT_MAX_BYTES,
   flightPlanTemplate,
   inspectFlightPlan,
   parseFlightPlan,
@@ -16,7 +15,6 @@ import {
 } from '../scripts/lib/flight-plan.mjs';
 import { parseHookFlightPlan } from '../hooks/stop-supervisor.mjs';
 import {
-  computeFlightAssuranceContext,
   computeFlightContextFingerprint,
   evaluateFlightAssurance,
 } from '../scripts/lib/assurance.mjs';
@@ -44,9 +42,6 @@ function coreV2Plan() {
         dimension,
         criterion: `Close ${dimension}`,
         oracle: `Review ${dimension}`,
-        surface: ['intent', 'completion-review'].includes(dimension)
-          ? ['.']
-          : [`src/${id}.mjs`],
         severity: 'high',
         state: 'pending',
         evidence: null,
@@ -141,15 +136,6 @@ test('parseFlightPlan never throws on pathological text', () => {
     '---\n__proto__:\n  polluted: true\n---\n',
   ];
   for (const input of inputs) assert.doesNotThrow(() => parseFlightPlan(input));
-});
-
-test('Flight input and serialized output fail closed above 8 KB', async (t) => {
-  assert.equal(parseFlightPlan(`${flightPlanTemplate()}${'x'.repeat(FLIGHT_MAX_BYTES)}`), null);
-  const cwd = await mkdtemp(join(tmpdir(), 'cruise-flight-cap-'));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  const plan = coreV2Plan();
-  plan.body = 'x'.repeat(FLIGHT_MAX_BYTES);
-  await assert.rejects(writeFlightPlan(cwd, plan), /exceeds 8 KB/u);
 });
 
 test('the canonical template stays aligned across both strict parser copies', () => {
@@ -343,94 +329,6 @@ test('context binding changes with request, product state, or gate contract but 
     workspaceFingerprint: 'a'.repeat(64),
     originText: 'Exact request',
   }), baseline);
-});
-
-test('scoped gate receipts survive unrelated edits and stale only the changed surface', () => {
-  const plan = coreV2Plan();
-  const surfaceFingerprints = Object.fromEntries(
-    plan.quality.gates
-      .filter(({ dimension }) => !['intent', 'completion-review'].includes(dimension))
-      .map(({ id }) => [id, `${id}:stable`]),
-  );
-  const baseline = computeFlightAssuranceContext(plan, {
-    workspaceFingerprint: 'a'.repeat(64),
-    originText: 'Exact request',
-    surfaceFingerprints,
-  });
-  for (const gate of plan.quality.gates) {
-    gate.state = 'passed';
-    gate.evidence = {
-      summary: `${gate.id} passed`,
-      contextFingerprint: baseline.gateFingerprints[gate.id],
-      observedAt: 1,
-      source: gate.dimension === 'completion-review' ? 'review' : 'command',
-      rationale: '',
-      waivedBy: '',
-    };
-  }
-  assert.equal(evaluateFlightAssurance(plan, baseline).metrics.fresh, 5);
-
-  const unrelated = computeFlightAssuranceContext(plan, {
-    workspaceFingerprint: 'b'.repeat(64),
-    originText: 'Exact request',
-    surfaceFingerprints,
-  });
-  const unrelatedAssessment = evaluateFlightAssurance(plan, unrelated);
-  assert.equal(unrelatedAssessment.metrics.fresh, 3);
-  assert.deepEqual(
-    unrelatedAssessment.gates.filter(({ fresh }) => fresh).map(({ id }) => id).sort(),
-    ['core.failure-paths', 'core.functional', 'core.regression'],
-  );
-
-  const functionalEdit = computeFlightAssuranceContext(plan, {
-    workspaceFingerprint: 'c'.repeat(64),
-    originText: 'Exact request',
-    surfaceFingerprints: { ...surfaceFingerprints, 'core.functional': 'functional:changed' },
-  });
-  const functionalAssessment = evaluateFlightAssurance(plan, functionalEdit);
-  assert.equal(functionalAssessment.gates.find(({ id }) => id === 'core.functional').fresh, false);
-  assert.equal(functionalAssessment.gates.find(({ id }) => id === 'core.regression').fresh, true);
-});
-
-test('request or outcome changes stale scoped receipts even after global gates are reviewed again', () => {
-  const plan = coreV2Plan();
-  const surfaceFingerprints = Object.fromEntries(
-    plan.quality.gates
-      .filter(({ dimension }) => !['intent', 'completion-review'].includes(dimension))
-      .map(({ id }) => [id, `${id}:stable`]),
-  );
-  const baseline = computeFlightAssuranceContext(plan, {
-    workspaceFingerprint: 'a'.repeat(64),
-    originText: 'Original request',
-    surfaceFingerprints,
-  });
-  for (const gate of plan.quality.gates) {
-    gate.state = 'passed';
-    gate.evidence = {
-      summary: `${gate.id} passed`,
-      contextFingerprint: baseline.gateFingerprints[gate.id],
-      observedAt: 1,
-      source: gate.dimension === 'completion-review' ? 'review' : 'command',
-      rationale: '',
-      waivedBy: '',
-    };
-  }
-  plan.outcome = 'Changed outcome';
-  const changed = computeFlightAssuranceContext(plan, {
-    workspaceFingerprint: 'b'.repeat(64),
-    originText: 'Changed request',
-    surfaceFingerprints,
-  });
-  for (const gate of plan.quality.gates.filter(({ dimension }) =>
-    ['intent', 'completion-review'].includes(dimension))) {
-    gate.evidence.contextFingerprint = changed.gateFingerprints[gate.id];
-  }
-  const assessment = evaluateFlightAssurance(plan, changed);
-  assert.equal(assessment.allowsCompletion, false);
-  assert.deepEqual(
-    assessment.gates.filter(({ fresh }) => !fresh).map(({ id }) => id).sort(),
-    ['core.failure-paths', 'core.functional', 'core.regression'],
-  );
 });
 
 test('high-risk assurance requires a freshly passed independent review', () => {

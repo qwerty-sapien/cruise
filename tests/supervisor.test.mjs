@@ -105,7 +105,7 @@ test('signature-only supervision recovers when failure evidence changes or clear
   assert.equal(cleared.recordTurn({ fingerprint: null, failureSignature: null }).level, 'ok');
 });
 
-test('an undeclared non-Git workspace fingerprint is unavailable', async () => {
+test('workspace fingerprinting is disabled without a git repository', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-no-git-'));
   try {
     assert.equal(await captureWorkspaceFingerprint(cwd), null);
@@ -182,60 +182,6 @@ test('product fingerprints include HEAD and exact untracked contents', async (t)
     await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
     secondLink,
   );
-  await writeFile(join(cwd, '_FOR_USER_REFERENCE.md'), 'private user reference one\n', 'utf8');
-  const userReferenceExcluded = await captureWorkspaceFingerprint(cwd, {
-    excludeFlightPlan: true,
-  });
-  await writeFile(join(cwd, '_FOR_USER_REFERENCE.md'), 'private user reference two\n', 'utf8');
-  assert.equal(
-    await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
-    userReferenceExcluded,
-  );
-  await writeFile(join(cwd, '_PRIVATE.MD'), 'uppercase extension one\n', 'utf8');
-  const uppercaseUserDocumentExcluded = await captureWorkspaceFingerprint(cwd, {
-    excludeFlightPlan: true,
-  });
-  await writeFile(join(cwd, '_PRIVATE.MD'), 'uppercase extension two\n', 'utf8');
-  assert.equal(
-    await captureWorkspaceFingerprint(cwd, { excludeFlightPlan: true }),
-    uppercaseUserDocumentExcluded,
-  );
-});
-
-test('surface fingerprints ignore edits outside their repository-relative paths', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-surface-'));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  await mkdir(join(cwd, 'src'));
-  await mkdir(join(cwd, 'docs'));
-  await writeFile(join(cwd, 'src', 'owner.mjs'), 'export const value = 1;\n', 'utf8');
-  await writeFile(join(cwd, 'docs', 'note.md'), 'first\n', 'utf8');
-  assert.equal(spawnSync('git', ['init', '--quiet'], { cwd }).status, 0);
-  assert.equal(spawnSync('git', ['add', '.'], { cwd }).status, 0);
-  const baseline = await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] });
-  await writeFile(join(cwd, 'docs', 'note.md'), 'second\n', 'utf8');
-  assert.equal(await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] }), baseline);
-  await writeFile(join(cwd, 'src', 'owner.mjs'), 'export const value = 2;\n', 'utf8');
-  assert.notEqual(await captureWorkspaceFingerprint(cwd, { paths: ['src/**'] }), baseline);
-});
-
-test('workspace fingerprints exclude tracked and untracked secret files before content hashing', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-secret-exclusion-'));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  await mkdir(join(cwd, 'config'));
-  await writeFile(join(cwd, 'safe.txt'), 'safe one\n', 'utf8');
-  await writeFile(join(cwd, '.env'), 'API_KEY=MINIREPO_ONE\n', 'utf8');
-  await writeFile(join(cwd, 'config', 'credentials.json'), '{"token":"MINIREPO_TWO"}\n', 'utf8');
-  assert.equal(spawnSync('git', ['init', '--quiet'], { cwd }).status, 0);
-  assert.equal(spawnSync('git', ['add', '-f', 'safe.txt', '.env', 'config/credentials.json'], { cwd }).status, 0);
-  const baseline = await captureWorkspaceFingerprint(cwd);
-
-  await writeFile(join(cwd, '.env'), 'API_KEY=MINIREPO_CHANGED\n', 'utf8');
-  await writeFile(join(cwd, 'config', 'credentials.json'), '{"token":"MINIREPO_CHANGED"}\n', 'utf8');
-  await writeFile(join(cwd, 'local-secret.txt'), 'MINIREPO_UNTRACKED_CHANGED\n', 'utf8');
-  assert.equal(await captureWorkspaceFingerprint(cwd), baseline);
-
-  await writeFile(join(cwd, 'safe.txt'), 'safe two\n', 'utf8');
-  assert.notEqual(await captureWorkspaceFingerprint(cwd), baseline);
 });
 
 test('failure signatures ignore paths, line numbers, hex values, and whitespace', () => {

@@ -94,7 +94,7 @@ export class AppServerClient extends EventEmitter {
     onNotification = null,
     onError = null,
     inactivityTimeoutMs,
-    initializeTimeoutMs,
+    initializeTimeoutMs = DEFAULT_INITIALIZE_TIMEOUT_MS,
     stderrTailBytes = DEFAULT_STDERR_TAIL_BYTES,
     terminationTimeoutMs = DEFAULT_TERMINATION_TIMEOUT_MS,
     env = process.env,
@@ -122,10 +122,10 @@ export class AppServerClient extends EventEmitter {
         : inactivityTimeoutMs,
       DEFAULT_INACTIVITY_TIMEOUT_MS,
     );
-    const initializeOverride = initializeTimeoutMs ?? env?.CRUISE_INITIALIZE_TIMEOUT_MS;
-    this.initializeTimeoutMs = initializeOverride === 0 || initializeOverride === '0'
-      ? 0
-      : positiveIntegerOrDefault(initializeOverride, DEFAULT_INITIALIZE_TIMEOUT_MS);
+    this.initializeTimeoutMs = positiveIntegerOrDefault(
+      initializeTimeoutMs,
+      DEFAULT_INITIALIZE_TIMEOUT_MS,
+    );
     this.stderrTailBytes = positiveIntegerOrDefault(
       stderrTailBytes,
       DEFAULT_STDERR_TAIL_BYTES,
@@ -604,18 +604,13 @@ export class AppServerClient extends EventEmitter {
     this.state = "stopped";
     this._disableInactivityWatchdog();
 
-    const stderrTail = compactDiagnostic(this._stderrTail.toString("utf8")).slice(-1024);
-    const permissionHint = /\b(?:EPERM|operation not permitted|permission denied)\b/iu.test(stderrTail)
-      ? " Stderr reports a permission error. If the parent native sandbox blocked this control-plane launch, request native escalation for the exact command and bounded task; do not retry automatically or bypass host approval."
-      : "";
-    const diagnostic = stderrTail ? ` (codex-stderr-tail=${stderrTail})${permissionHint}` : "";
     const processError =
       cause instanceof AppServerProcessError
         ? cause
         : new AppServerProcessError(
-            (cause
-              ? `Codex app-server failed: ${compactDiagnostic(cause.message ?? String(cause)).slice(-1024)}`
-              : `Codex app-server exited${code == null ? "" : ` with code ${code}`}`) + diagnostic,
+            cause
+              ? `Codex app-server failed: ${cause.message ?? String(cause)}`
+              : `Codex app-server exited${code == null ? "" : ` with code ${code}`}`,
             { code, signal, cause },
           );
 
@@ -706,7 +701,6 @@ function waitFor(promise, timeoutMs) {
 }
 
 function waitWithin(promise, timeoutMs, timeoutError) {
-  if (timeoutMs === 0) return Promise.resolve(promise);
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (callback, value) => {

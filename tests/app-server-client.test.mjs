@@ -270,77 +270,11 @@ test("process exit rejects every pending request", async () => {
   assert.equal(client.state, "stopped");
 });
 
-test("pending initialize retains permission evidence without retrying the launch", async () => {
-  for (const detail of [
-    "WARNING PATH aliases: Operation not permitted\nError: Operation not permitted (os error 1)",
-    "Error: EPERM",
-    "Error: permission denied",
-  ]) {
-    const { child, spawnCalls, spawnFn } = createHarness();
-    const client = new AppServerClient({ spawnFn });
-    const starting = client.start();
-    child.stderr.write(detail);
-    child.emit("exit", 1, null);
-    await assert.rejects(starting, (error) => {
-      assert.ok(error instanceof AppServerProcessError);
-      assert.equal(error.code, 1);
-      assert.equal(error.signal, null);
-      assert.match(error.message, /exited with code 1/);
-      assert.ok(error.message.includes(detail.replace(/\n/g, " ")));
-      assert.match(error.message, /request native escalation for the exact command and bounded task/);
-      assert.match(error.message, /do not retry automatically or bypass host approval/);
-      assert.doesNotMatch(error.message, /reviewer rejection/);
-      return true;
-    });
-    assert.equal(spawnCalls.length, 1);
-    assert.deepEqual(child.kills, []);
-    assert.equal(client.state, "stopped");
-  }
-});
-
-test("startup exit diagnostics are bounded and unrelated exits have no permission hint", async () => {
-  for (const detail of ["", "configuration invalid", "雪\n\u0000".repeat(20_000) + " invalid option"]) {
-    const { child, spawnFn } = createHarness();
-    const client = new AppServerClient({ spawnFn });
-    const starting = client.start();
-    child.stderr.write(detail);
-    child.emit("exit", 1, null);
-    await assert.rejects(starting, (error) => {
-      assert.equal(error.code, 1);
-      assert.ok(error.message.length < 1200);
-      assert.ok(Buffer.byteLength(error.message) < 4200);
-      assert.doesNotMatch(error.message, /[\u0000-\u001f\u007f]/u);
-      assert.doesNotMatch(error.message, /permission|sandbox|escalation|authorization/i);
-      if (detail) assert.match(error.message, /codex-stderr-tail=/);
-      if (detail.length > 1000) assert.match(error.message, /invalid option/);
-      return true;
-    });
-  }
-});
-
-test("process errors preserve the original cause alongside compact stderr", async () => {
-  const { child, spawnFn } = createHarness();
-  const client = new AppServerClient({ spawnFn });
-  const starting = client.start();
-  const cause = Object.assign(new Error("spawn failed"), { code: "EIO" });
-  child.stderr.write("transport unavailable\n");
-  child.emit("error", cause);
-  await assert.rejects(starting, (error) => {
-    assert.equal(error.cause, cause);
-    assert.equal(error.cause.code, "EIO");
-    assert.match(error.message, /spawn failed.*transport unavailable/);
-    assert.doesNotMatch(error.message, /permission|escalation/i);
-    return true;
-  });
-  child.emit("exit", 1, null);
-});
-
 test("stop closes stdin and waits for a graceful app-server exit", async () => {
   const { child, spawnFn } = createHarness();
   const client = new AppServerClient({ spawnFn });
   await startHarness(client, child);
 
-  child.stderr.write("Earlier warning: Operation not permitted\n");
   const exit = await client.stop({ timeoutMs: 100 });
 
   assert.equal(child.stdin.writableEnded, true);

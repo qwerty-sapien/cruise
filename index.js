@@ -9,9 +9,6 @@ import { main } from './scripts/cruise.mjs';
 export * from './scripts/cruise.mjs';
 export * from './scripts/lib/claude-cli.mjs';
 export * from './scripts/lib/provider.mjs';
-export * from './scripts/lib/migration-config.mjs';
-export * from './scripts/lib/migration-controller.mjs';
-export * from './scripts/lib/migration-policy.mjs';
 
 const ENTRY_PATH = fileURLToPath(import.meta.url);
 

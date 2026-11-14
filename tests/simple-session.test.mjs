@@ -1,53 +1,19 @@
-import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
 import test from 'node:test';
-import { AppServerRpcError } from '../scripts/lib/app-server-client.mjs';
-import { createNativeAuthNormalizer } from '../scripts/lib/auth-recovery-runtime.mjs';
 
 import {
   automaticGoalAuthorization,
-  automaticMigrationCommandApproval,
   automaticRoutineGoalAdvance,
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
 } from '../scripts/lib/simple-session.mjs';
 import { parseFlightPlan, flightPlanTemplate } from '../scripts/lib/flight-plan.mjs';
-import { pickOne } from '../scripts/lib/picker.mjs';
-import {
-  cleanupRuntimeSession,
-  createRuntimeSession,
-} from '../scripts/lib/runtime-state.mjs';
 
 const TRACE_THREAD_ID = '019f855b-527e-77d1-bf9b-bca4c89da49e';
-
-test('ordinary local Goal access includes option descriptions and values in effect checks', () => {
-  const safe = { id: 'local', question: 'May I search an authorized local folder?',
-    options: [{ label: 'Proceed', description: 'Read only ordinary source files', value: 'proceed' }] };
-  assert.ok(automaticGoalAuthorization({ questions: [safe] }));
-  assert.equal(automaticGoalAuthorization({ questions: [safe] }, { nativeApprovalDenied: true }), null);
-  for (const field of ['description', 'value']) {
-    for (const effect of ['Upload actual medical records to an unapproved external provider',
-      'Delete the production database', 'Send actual medical records',
-      'Copy the source to https://example.invalid/collect']) {
-      const question = { ...safe, options: [{ ...safe.options[0], [field]: effect }] };
-      assert.equal(automaticGoalAuthorization({ questions: [question] }), null, `${field}: ${effect}`);
-    }
-  }
-  const denied = { id: 'denied', question: 'Host denied reading the host-access-approved local folder for this Goal. May I proceed with local source access?',
-    options: [{ label: 'Proceed', value: 'proceed' }] };
-  assert.equal(automaticGoalAuthorization({ questions: [denied] }), null);
-});
-
-async function sessionRuntime(t, cwd, sessionId) {
-  const runtime = await createRuntimeSession({ cwd, sessionId });
-  t.after(() => cleanupRuntimeSession(runtime).catch(() => {}));
-  return runtime;
-}
 
 class FakeClient extends EventEmitter {
   async start() {}
@@ -68,86 +34,6 @@ class FakeClient extends EventEmitter {
     throw new Error(`unexpected request ${method}`);
   }
 }
-
-test('session auth boundaries recover reads but never replay ambiguous startup or turns', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'cruise-auth-session-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  for (const mode of ['recovered', 'paused', 'repeated', 'ambiguous', 'effect', 'denial', 'non-auth']) {
-    const client = new FakeClient();
-    let reads = 0, threads = 0, turns = 0, recoveries = 0;
-    const revoked = () => new AppServerRpcError({ code: -32603,
-      message: 'HTTP 401 Unauthorized, body: {"error":{"code":"token_revoked"}}' }, { method: 'account/rateLimits/read' });
-    const request = client.request.bind(client);
-    client.stop = async () => { client.stopped = true; };
-    client.request = async (method, params) => {
-      if (method === 'account/rateLimits/read') {
-        reads++;
-        if (mode === 'non-auth') throw new Error('HTTP 401 token_revoked');
-        if (mode === 'repeated' || (['recovered', 'paused'].includes(mode) && reads === 1)) throw revoked();
-        return {};
-      }
-      if (method === 'thread/start') { threads++; if (mode === 'ambiguous') throw revoked(); }
-      if (method === 'turn/start') {
-        turns++;
-        if (['effect', 'denial'].includes(mode)) {
-          client.emit('notification', { method: 'turn/started', params: { threadId: TRACE_THREAD_ID, turn: { id: 'turn-1' } } });
-          client.emit('notification', mode === 'denial'
-            ? { method: 'item/autoApprovalReview/completed', params: { threadId: TRACE_THREAD_ID, turnId: 'turn-1', review: { status: 'denied' } } }
-            : { method: 'item/started', params: { threadId: TRACE_THREAD_ID, item: { type: 'commandExecution' } } });
-          throw revoked();
-        }
-      }
-      return request(method, params);
-    };
-    const handoff = { kind: 'login', action: { command: 'codex', args: ['login'] } };
-    const session = new SimpleCruiseSession({ client, cwd: root, skill: 'quick', skillPath: '/tmp/quick.md',
-      prompt: 'Inspect ordinary source.', input: { isTTY: false }, traceHome: root,
-      output: { write() {} }, errorOutput: { write() {} }, locateTrace: async () => null,
-      authRecovery: { normalize: createNativeAuthNormalizer(), async recover(input) {
-        recoveries++; assert.equal(input.interactive, false);
-        return mode === 'paused' ? { status: 'paused', handoff } : { status: 'recovered' };
-      } } });
-    if (mode === 'recovered') assert.equal((await session.run()).status, 'complete');
-    else await assert.rejects(session.run(), error => {
-      if (mode === 'paused') assert.deepEqual(error.authRecovery.handoff, handoff);
-      if (['ambiguous', 'effect'].includes(mode)) assert.equal(error.authRecovery.status, 'recovered');
-      if (mode === 'repeated') assert.equal(error.authRecovery.reason, 'recovery-already-attempted');
-      if (mode === 'denial') assert.ok(error instanceof AppServerRpcError);
-      return true;
-    });
-    assert.equal(recoveries, ['denial', 'non-auth'].includes(mode) ? 0 : 1, mode);
-    assert.equal(reads, ['recovered', 'repeated'].includes(mode) ? 2 : 1, mode);
-    assert.equal(threads, ['paused', 'repeated', 'non-auth'].includes(mode) ? 0 : 1, mode);
-    assert.equal(turns, ['recovered', 'effect', 'denial'].includes(mode) ? 1 : 0, mode);
-    assert.equal(session.pending, null); assert.equal(client.stopped, true);
-    for (const event of ['notification', 'request', 'exit']) assert.equal(client.listenerCount(event), 0);
-  }
-});
-
-test('Goal ordinary turns and mode settings preserve the explicit sandbox selection', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'cruise-sandbox-session-'));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  for (const externalSandbox of [false, true]) {
-    const client = new FakeClient();
-    const calls = [];
-    const request = client.request.bind(client);
-    client.request = async (method, params) => { calls.push({ method, params }); return request(method, params); };
-    const session = new SimpleCruiseSession({ client, cwd, externalSandbox,
-      prompt: 'Inspect ordinary source.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
-      output: { write() {} }, errorOutput: { write() {} } });
-    session.threadId = TRACE_THREAD_ID;
-    client.on('notification', session.onNotification);
-    t.after(() => client.off('notification', session.onNotification));
-    assert.equal((await session.startTurn([{ type: 'text', text: 'Continue.', text_elements: [] }])).status, 'completed');
-    const expectedWrite = externalSandbox ? { type: 'externalSandbox', networkAccess: 'restricted' }
-      : { type: 'workspaceWrite', writableRoots: [cwd] };
-    assert.deepEqual(calls[0].params.sandboxPolicy, expectedWrite);
-    assert.equal(calls[0].params.approvalPolicy, 'on-request');
-    assert.deepEqual(session.goalTurnSettings('default').sandboxPolicy, expectedWrite);
-    assert.deepEqual(session.goalTurnSettings('plan').sandboxPolicy, externalSandbox
-      ? expectedWrite : { type: 'readOnly' });
-  }
-});
 
 test('simple sessions send one normal skill turn without control-plane instructions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-simple-session-'));
@@ -203,90 +89,11 @@ test('simple sessions send one normal skill turn without control-plane instructi
   assert.match(await readFile(join(root, '.cruise', '.gitignore'), 'utf8'), /^LAST-RUN\.json$/mu);
 });
 
-for (const profile of ['relaxed', 'business-critical']) {
-for (const skill of ['goal', 'quick', 'debug', 'build']) {
-test(`${profile} ${skill} resolves operational questions without opening user input`, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'cruise-silent-delegation-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  class CoordinationClient extends EventEmitter {
-    async start() {}
-    async stop() {}
-    async request(method, params) {
-      if (method === 'thread/start') {
-        assert.match(params.developerInstructions, /relaxed and business-critical/u);
-        assert.match(params.developerInstructions, /silently without a user permission question/u);
-        return { thread: { id: 'coordination-thread' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
-      }
-      if (method === 'thread/settings/update') return {};
-      if (method === 'thread/goal/get') return { goal: this.goal };
-      if (method === 'thread/goal/set' || method === 'turn/start') {
-        if (method === 'thread/goal/set') this.goal = { objective: params.objective, status: 'active' };
-        queueMicrotask(() => {
-          this.emit('notification', { method: 'turn/started', params: {
-            threadId: 'coordination-thread', turn: { id: 'coordination-turn', status: 'inProgress' },
-          } });
-          this.emit('request', { id: 1, method: 'item/tool/requestUserInput', params: {
-            threadId: 'coordination-thread', turnId: 'coordination-turn', questions: [{
-              id: 'delegate',
-              question: `${profile}: Shall I allow you to refer this task to another newly spawned sub-agent?`,
-            }],
-          } });
-        });
-        return method === 'thread/goal/set' ? { goal: this.goal } : { turn: { id: 'coordination-turn' } };
-      }
-      throw new Error(`unexpected method ${method}`);
-    }
-    respond(id, result) {
-      assert.match(result.answers.delegate.answers[0], /without asking/u);
-      this.answered = true;
-      this.goal = { ...this.goal, status: 'complete' };
-      this.emit('notification', { method: 'turn/completed', params: {
-        threadId: 'coordination-thread', turn: { id: 'coordination-turn', status: 'completed' },
-      } });
-    }
-    respondError(id, error) { throw error; }
-  }
-  const client = new CoordinationClient();
-  const session = new SimpleCruiseSession({
-    client, cwd: root, skill, skillPath: `/tmp/${skill}-skill.md`,
-    prompt: `Use the ${profile} profile to review this patch.`,
-    pickOne: async () => { throw new Error('operational question reached the picker'); },
-    readLine: async () => { throw new Error('operational question reached free-text input'); },
-    output: { write() {} }, errorOutput: { write() {} },
-    locateTrace: async () => null, traceHome: root,
-  });
-  assert.equal((await session.run()).status, 'complete');
-  assert.equal(client.answered, true);
-});
-}
-}
-
-test('mixed question batches surface only the material product decision', async () => {
-  const client = new FakeClient();
-  let reply;
-  client.respond = (id, result) => { reply = result; };
-  const questionsShown = [];
-  const session = new SimpleCruiseSession({
-    client, cwd: '/tmp', skill: 'debug', skillPath: '/tmp/debug-skill.md', prompt: 'Review the change.',
-    pickOne: async ({ title }) => { questionsShown.push(title); return { value: 'keep' }; },
-    readLine: async () => { throw new Error('unexpected free-text question'); },
-    output: { write() {} }, errorOutput: { write() {} },
-  });
-  await session.handleRequest({ id: 1, method: 'item/tool/requestUserInput', params: { questions: [
-    { id: 'delegate', question: 'May I spawn a sub-agent to review this patch?' },
-    { id: 'retention', question: 'Which option should we use for product retention?', options: [{ label: 'Keep 30 days', value: 'keep' }] },
-  ] } });
-  assert.deepEqual(questionsShown, ['Which option should we use for product retention?']);
-  assert.match(reply.answers.delegate.answers[0], /without asking/u);
-  assert.deepEqual(reply.answers.retention.answers, ['keep']);
-});
-
 test('Goal auto-advances each completed active turn until native completion', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-simple-goal-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, '.cruise'));
   await writeFile(join(root, '.cruise', '.supervisor.json'), '{"stale":true}\n', 'utf8');
-  const runtimeDirectory = await sessionRuntime(t, root, 'goal-auto-advance');
   class GoalClient extends EventEmitter {
     constructor() {
       super();
@@ -302,7 +109,7 @@ test('Goal auto-advances each completed active turn until native completion', as
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-goal' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
+        return { thread: { id: 'thread-goal' }, model: 'gpt-test', reasoningEffort: 'medium' };
       }
       if (method === 'thread/settings/update') return {};
       if (method === 'thread/goal/get') return { goal: this.goal };
@@ -363,13 +170,12 @@ test('Goal auto-advances each completed active turn until native completion', as
       throw new Error('routine Goal progression must not open the picker');
     },
     readLine: async () => '',
-    runtimeDirectory,
   });
   const result = await session.run();
 
   assert.equal(result.status, 'complete');
   assert.equal(client.turns, 1);
-  const scratch = JSON.parse(await readFile(join(runtimeDirectory, 'supervisor.json'), 'utf8'));
+  const scratch = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
   assert.equal(scratch.host, 'codex');
   assert.equal(scratch.turns_observed, 0);
   assert.equal(Object.hasOwn(scratch, 'final_report'), false);
@@ -380,24 +186,15 @@ test('Goal auto-advances each completed active turn until native completion', as
   const continuation = client.calls.find(({ method }) => method === 'turn/start').params.input;
   const objective = client.calls.find(({ method }) => method === 'thread/goal/set').params.objective;
   const developerInstructions = client.calls.find(({ method }) => method === 'thread/start').params.developerInstructions;
-  assert.ok(developerInstructions.includes(INDEPENDENT_RELEASE_INSTRUCTIONS));
-  assert.match(developerInstructions, /functionally distinct before publication\s+using bounded source and contract inspection and verification evidence/u);
-  assert.match(developerInstructions, /public routes, navigation, buttons, APIs,\s+and indirect entry points through their transitive dependencies/u);
-  assert.match(developerInstructions, /Propagate each blocker to every functionally connected or dependent unit/u);
-  assert.match(developerInstructions, /Establish the readiness of mocked prerequisites\s+separately before treating an outcome as ready/u);
-  assert.match(developerInstructions, /payment channel B requires booking endpoint C,\s+a broken C blocks B and C and every publicly exposed flow or entry point/u);
-  assert.match(developerInstructions, /An explicitly owner-authorized bounded fallback[\s\S]*Apply the same dependency, exposure, and readiness checks/u);
   assert.match(developerInstructions, /Goal work may also maintain.*\.cruise\/FLIGHT\.md/u);
-  assert.match(developerInstructions, /seeking-alpha only for an explicit novelty/u);
-  assert.match(developerInstructions, /write-only user references/u);
   assert.match(objective, /sole read-only Plan-mode bootstrap/u);
   assert.match(objective, /\.cruise\/FLIGHT\.md/u);
   assert.match(objective, /implement, verify, realign, and continue/u);
   assert.equal(continuation.some((item) => item.type === 'skill'), false);
   assert.match(continuation[0].text, /next ready micro-goal/u);
-  assert.match(continuation[0].text, /immediately implement/iu);
+  assert.match(continuation[0].text, /immediately implement/u);
   assert.match(continuation[0].text, /independent breakage probes/u);
-  assert.match(continuation[0].text, /compact handoff, next work item, quota state, and unresolved assurance/u);
+  assert.match(continuation[0].text, /flight plan/u);
   const [planSettings, executionSettings] = client.calls
     .filter(({ method }) => method === 'thread/settings/update')
     .map(({ params }) => params);
@@ -408,305 +205,6 @@ test('Goal auto-advances each completed active turn until native completion', as
   assert.equal(executionSettings.sandboxPolicy.type, 'workspaceWrite');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.collaborationMode.mode, 'default');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.sandboxPolicy.type, 'workspaceWrite');
-});
-
-for (const scenario of [
-  { name: 'unsupported pause', recover: true },
-  { name: 'plain subagent permission question', plainDelegation: true, recover: true },
-  { name: 'Cruise integrity drift waiver', integrityDrift: true, recover: true },
-  { name: 'native denial', reviewStatus: 'denied', recover: false },
-  { name: 'duplicate native denial', reviewStatus: 'denied', repeatReview: true, recover: false },
-  { name: 'native approval', reviewStatus: 'approved', recover: true },
-  { name: 'other thread denial', reviewStatus: 'denied', reviewThreadId: 'other-thread', recover: true },
-  { name: 'replayed prior turn denial', reviewStatus: 'denied', reviewTurnId: 'prior-turn', recover: true },
-  { name: 'repeated unsupported pause stops after one correction', repeatPause: true, recover: true },
-]) {
-test(`Goal disclosure transcript: ${scenario.name}`, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'cruise-worker-authorization-recovery-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  class StubbornAuthorizationClient extends EventEmitter {
-    constructor() {
-      super();
-      this.calls = [];
-      this.goal = null;
-    }
-
-    async start() {}
-    async stop() {}
-
-    async request(method, params = {}) {
-      this.calls.push({ method, params });
-      if (method === 'thread/start') {
-        return { thread: { id: 'thread-auth-recovery' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
-      }
-      if (method === 'thread/settings/update') return {};
-      if (method === 'thread/goal/get') return { goal: this.goal };
-      if (method === 'thread/goal/set') {
-        this.goal = { objective: params.objective, status: params.status };
-        queueMicrotask(() => {
-          this.emit('notification', {
-            method: 'turn/started',
-            params: { threadId: 'thread-auth-recovery', turn: { id: 'turn-stubborn', status: 'inProgress' } },
-          });
-          if (scenario.reviewStatus) {
-            const review = {
-              method: 'item/autoApprovalReview/completed',
-              params: {
-                threadId: scenario.reviewThreadId ?? 'thread-auth-recovery',
-                turnId: scenario.reviewTurnId ?? 'turn-stubborn',
-                reviewId: 'review-smoke',
-                targetItemId: 'smoke-command',
-                action: { type: 'command', command: 'node smoke.mjs', cwd: root, source: 'unifiedExec' },
-                startedAtMs: 1,
-                completedAtMs: 2,
-                decisionSource: 'agent',
-                review: { status: scenario.reviewStatus, rationale: 'Destination-specific authorization required.' },
-              },
-            };
-            this.emit('notification', review);
-            if (scenario.repeatReview) this.emit('notification', review);
-          }
-          this.emit('notification', {
-            method: 'item/agentMessage/delta',
-            params: {
-              threadId: 'thread-auth-recovery',
-              delta: scenario.plainDelegation
-                ? 'Shall I allow you to refer this task to another newly spawned sub-agent?'
-                : scenario.integrityDrift
-                  ? 'Preflight failed because the frozen source hashes to 2f2871, while the reinstalled Goal skill hashes to 767e89. Under the cruise:goal integrity rules, proceeding requires an explicit waiver.'
-                : [
-                'The host blocked v4 before process creation because Terra would receive the full private patched Cruise Goal source. ',
-                'Do you explicitly authorize sending the complete current contents of skills/goal/SKILL.md to gpt-5.6-terra at xhigh? ',
-                'No credentials or .env data will be included.',
-              ].join(''),
-            },
-          });
-          if (!scenario.recover) this.goal = { ...this.goal, status: 'blocked' };
-          this.emit('notification', {
-            method: 'turn/completed',
-            params: { threadId: 'thread-auth-recovery', turn: { id: 'turn-stubborn', status: 'completed' } },
-          });
-        });
-        return { goal: this.goal };
-      }
-      if (method === 'turn/start') {
-        const text = params.input.map((item) => item.text ?? '').join('\n');
-        if (scenario.integrityDrift) {
-          assert.match(text, /exceptional internal recovery event, not a waiver/u);
-          assert.match(text, /selectively revert or rework only Cruise-owned code changes/u);
-          assert.match(text, /Preserve Markdown and other non-code artifacts/u);
-        } else {
-          assert.match(text, /Check the preceding disclosure-authorization pause against the actual host\/tool result/u);
-          assert.match(text, /actual denial must be honored/u);
-        }
-        assert.match(text, /Never read, search, summarize, fingerprint/u);
-        assert.doesNotMatch(text, /API_KEY=MINIREPO/u);
-        this.goal = { ...this.goal, status: scenario.repeatPause ? 'blocked' : 'complete' };
-        queueMicrotask(() => {
-          this.emit('notification', {
-            method: 'item/agentMessage/delta',
-            params: {
-              threadId: 'thread-auth-recovery',
-              delta: scenario.repeatPause
-                ? 'Do you explicitly authorize sending the Goal source to Terra?'
-                : 'Bounded safe worker completed.',
-            },
-          });
-          this.emit('notification', {
-            method: 'turn/completed',
-            params: { threadId: 'thread-auth-recovery', turn: { id: 'turn-recovered', status: 'completed' } },
-          });
-        });
-        return { turn: { id: 'turn-recovered' } };
-      }
-      throw new Error(`unexpected request ${method}`);
-    }
-  }
-
-  const client = new StubbornAuthorizationClient();
-  let diagnostics = '';
-  const session = new SimpleCruiseSession({
-    client,
-    cwd: root,
-    prompt: 'Run the bounded Terra harness without reading .env or secret files.',
-    skill: 'goal',
-    skillPath: '/tmp/goal-skill.md',
-    pickOne: async () => {
-      throw new Error('the invalid worker disclosure pause must not reach the user');
-    },
-    readLine: async () => '',
-    output: { write() {} },
-    errorOutput: { write(value) { diagnostics += value; } },
-    locateTrace: async () => null,
-    traceHome: root,
-    captureFingerprint: async () => 'stable',
-    continuationContextReader: async () => 'No bounded handoff is available.',
-  });
-
-  const result = await session.run();
-  assert.equal(result.status, scenario.recover && !scenario.repeatPause ? 'complete' : 'blocked');
-  assert.equal(client.calls.filter(({ method }) => method === 'turn/start').length, scenario.recover ? 1 : 0);
-  const recoveryDiagnostic = scenario.integrityDrift
-    ? /suppressed an unnecessary Cruise integrity-drift waiver/u
-    : /suppressed a speculative Codex-worker disclosure authorization pause/u;
-  assert.equal(recoveryDiagnostic.test(diagnostics), scenario.recover);
-  if (!scenario.recover) {
-    const question = { questions: [{ id: 'launch', question: 'Authorize sending bounded Codex worker context to Terra?' }] };
-    assert.notEqual(automaticGoalAuthorization(question), null);
-    assert.equal(automaticGoalAuthorization(question, {
-      nativeApprovalDenied: session.turnNativeApprovalDenied,
-    }), null);
-  }
-});
-}
-
-test('native approval responses cannot be replaced by Cruise consent and reset on a new turn', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'cruise-native-denial-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const client = new FakeClient();
-  client.respond = () => {};
-  const session = new SimpleCruiseSession({
-    client, cwd: root, prompt: 'Run a bounded worker.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
-    pickOne: async () => ({ value: 'decline' }), readLine: async () => '',
-    output: { write() {} }, errorOutput: { write() {} },
-    locateTrace: async () => null, traceHome: root,
-  });
-  session.threadId = TRACE_THREAD_ID;
-  session.turnId = 'turn-denied';
-  for (const method of [
-    'item/commandExecution/requestApproval',
-    'item/fileChange/requestApproval',
-    'item/permissions/requestApproval',
-  ]) {
-    session.turnNativeApprovalDenied = false;
-    await session.handleRequest({
-      id: method, method,
-      params: { threadId: TRACE_THREAD_ID, turnId: 'turn-denied', command: 'node smoke.mjs' },
-    });
-    assert.equal(session.turnNativeApprovalDenied, true, method);
-  }
-  client.on('notification', (message) => session.handleNotification(message));
-  await session.startTurn([{ type: 'text', text: 'Use a materially safer alternative.' }]);
-  await session.traceLookup;
-  assert.equal(session.turnNativeApprovalDenied, false);
-});
-
-test('root approval EOF reports a channel error without a response or fabricated denial', async () => {
-  for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval']) {
-    for (const reviewerDenied of [false, true]) {
-      const responses = [];
-      const errors = [];
-      const rejected = [];
-      const watchdog = [];
-      const client = new EventEmitter();
-      client.respond = (...args) => responses.push(args);
-      client.respondError = (_id, error) => errors.push(error);
-      client.pauseInactivityWatchdog = () => watchdog.push('pause');
-      client.resumeInactivityWatchdog = () => watchdog.push('resume');
-      const session = new SimpleCruiseSession({
-        client, cwd: process.cwd(), skill: 'goal', skillPath: '/tmp/goal-skill.md', prompt: 'Inspect source.',
-        pickOne, input: Readable.from([]), output: { write() {} }, errorOutput: { write() {} },
-      });
-      session.threadId = 'approval-thread';
-      session.turnId = 'approval-turn';
-      session.pending = { reject: (error) => rejected.push(error) };
-      if (reviewerDenied) session.handleNotification({
-        method: 'item/autoApprovalReview/completed',
-        params: { threadId: session.threadId, turnId: session.turnId, review: { status: 'denied' } },
-      });
-      session.enqueueRequest({ id: 'approval', method, params: {
-        threadId: session.threadId, turnId: session.turnId,
-        permissions: { network: { enabled: true } },
-      } });
-      await session.interactions;
-      assert.deepEqual(responses, [], method);
-      assert.equal(errors.length, 1);
-      assert.equal(errors[0].code, 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE');
-      assert.equal(errors[0].category, 'approval-channel-unavailable');
-      assert.equal(errors[0].reason, 'eof');
-      assert.match(errors[0].message, /stdin\/host picker.*interactive approval channel.*existing task authorization/u);
-      assert.deepEqual(rejected, errors);
-      assert.equal(session.turnNativeApprovalDenied, reviewerDenied);
-      assert.deepEqual(watchdog, ['pause', 'resume']);
-    }
-  }
-});
-
-test('root native explicit decline and cancellation remain authoritative through the picker', async () => {
-  for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval']) {
-    for (const [line, decision] of [['2\n', 'decline'], ['3\n', 'cancel'], ['q\n', 'cancel'], ['\u001b\n', 'cancel'], ['\u0003\n', 'cancel']]) {
-      const responses = [];
-      const client = new EventEmitter();
-      client.respond = (_id, result) => responses.push(result);
-      const session = new SimpleCruiseSession({
-        client, cwd: process.cwd(), skill: 'goal', skillPath: '/tmp/goal-skill.md', prompt: 'Inspect source.',
-        approvalsReviewer: 'user', pickOne, input: Readable.from([line]), output: { write() {} }, errorOutput: { write() {} },
-      });
-      session.threadId = 'approval-thread';
-      session.turnId = 'approval-turn';
-      await session.handleRequest({ id: 'approval', method, params: {
-        threadId: session.threadId, turnId: session.turnId,
-        availableDecisions: ['accept', 'decline', 'cancel'], permissions: { network: { enabled: true } },
-      } });
-      assert.deepEqual(responses, [method === 'item/permissions/requestApproval'
-        ? { permissions: {}, scope: 'turn' } : { decision }]);
-      assert.equal(session.turnNativeApprovalDenied, true);
-    }
-  }
-});
-
-test('root session propagates approval-channel failure and stops its client', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'cruise-approval-eof-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  class ApprovalClient extends FakeClient {
-    errors = [];
-    responses = [];
-    stopped = false;
-    async stop() { this.stopped = true; }
-    respond(...args) { this.responses.push(args); }
-    respondError(_id, error) { this.errors.push(error); }
-    async request(method, params) {
-      if (method !== 'turn/start') return super.request(method, params);
-      queueMicrotask(() => this.emit('request', {
-        id: 'approval', method: 'item/commandExecution/requestApproval',
-        params: { threadId: TRACE_THREAD_ID, turnId: 'turn-1', command: 'node check.mjs' },
-      }));
-      return { turn: { id: 'turn-1' } };
-    }
-  }
-  const client = new ApprovalClient();
-  const session = new SimpleCruiseSession({
-    client, cwd: root, prompt: 'Inspect source.', skill: 'quick', skillPath: '/tmp/quick-skill.md',
-    pickOne, input: Readable.from([]), output: { write() {} }, errorOutput: { write() {} },
-    traceHome: root, locateTrace: async () => null,
-  });
-  await assert.rejects(session.run(), { code: 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE', reason: 'eof' });
-  assert.equal(client.stopped, true);
-  assert.deepEqual(client.responses, []);
-  assert.equal(client.errors[0].code, 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE');
-  assert.equal(session.turnNativeApprovalDenied, false);
-});
-
-test('root structured native decisions have readable labels and preserve their exact payload', async () => {
-  for (const decision of [
-    { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['node', 'check.mjs'] } },
-    { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.invalid', action: 'allow' } } },
-  ]) {
-    let response;
-    let rendered = '';
-    const client = new EventEmitter();
-    client.respond = (_id, result) => { response = result; };
-    const session = new SimpleCruiseSession({
-      client, cwd: process.cwd(), skill: 'goal', skillPath: '/tmp/goal-skill.md', prompt: 'Inspect source.', pickOne,
-      input: Readable.from(['2\n']), errorOutput: { write(text) { rendered += text; } },
-    });
-    await session.handleRequest({ id: 'approval', method: 'item/commandExecution/requestApproval',
-      params: { availableDecisions: ['accept', decision, 'cancel'] } });
-    assert.equal(response.decision, decision);
-    assert.match(rendered, /2\. (Accept with command|Apply network) policy amendment:/u);
-    assert.doesNotMatch(rendered, /\[object Object\]/u);
-    assert.equal(session.turnNativeApprovalDenied, false);
-  }
 });
 
 test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never starts a turn', async (t) => {
@@ -726,11 +224,9 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
     async request(method, params = {}) {
       this.calls.push({ method, params });
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-no-turn' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
+        return { thread: { id: 'thread-no-turn' }, model: 'gpt-test' };
       }
       if (method === 'thread/settings/update') return {};
-      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
-      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
         this.goal = { objective: params.objective, status: params.status };
@@ -785,20 +281,19 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
     assert.equal(error.name, 'CruiseGoalBootstrapTimeoutError');
     assert.equal(error.code, 'CRUISE_GOAL_BOOTSTRAP_TIMEOUT');
     assert.equal(error.threadId, 'thread-no-turn');
-    assert.equal(error.model, 'gpt-5.6-sol');
+    assert.equal(error.model, 'gpt-test');
     assert.equal(error.goalStatus, 'active');
     assert.ok(error.elapsedMs >= 20);
     assert.match(error.message, /never started the native Goal turn within 20ms/u);
     assert.match(error.message, /thread=thread-no-turn/u);
-    assert.match(error.message, /model=gpt-5\.6-sol/u);
+    assert.match(error.message, /model=gpt-test/u);
     assert.match(error.message, /goal=active/u);
   }
 
   assert.equal(output, '');
   assert.equal(errorOutput, [
     'Cruise: app-server started.',
-    'Cruise: native approvals reviewer=auto_review; selection is not an approval result.',
-    'Cruise: thread thread-no-turn started (model gpt-5.6-sol).',
+    'Cruise: thread thread-no-turn started (model gpt-test).',
     `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-no-turn.`,
     'Cruise: goal activated.',
     'Cruise: waiting for the native Goal turn.',
@@ -832,11 +327,9 @@ test('Goal bootstrap timeout cannot hang in diagnostic cleanup', async (t) => {
 
     async request(method, params = {}) {
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
+        return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-test' };
       }
       if (method === 'thread/settings/update') return {};
-      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
-      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
         if (this.goalReads === 1) return { goal: null };
@@ -891,8 +384,6 @@ test('interrupt cancels a hung bootstrap diagnostic without leaking its cleanup 
     async request(method, params = {}) {
       if (method === 'thread/start') return { thread: { id: 'thread-cleanup-interrupt' } };
       if (method === 'thread/settings/update') return {};
-      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
-      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
         if (this.goalReads === 1) return { goal: null };
@@ -948,8 +439,6 @@ test('app-server exit cancels a hung bootstrap diagnostic cleanup timer', async 
     async request(method, params = {}) {
       if (method === 'thread/start') return { thread: { id: 'thread-cleanup-exit' } };
       if (method === 'thread/settings/update') return {};
-      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
-      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
         if (this.goalReads === 1) return { goal: null };
@@ -1000,11 +489,9 @@ test('a native Goal turn just before the deadline cancels the timer without chan
 
     async request(method, params = {}) {
       if (method === 'thread/start') {
-        return { thread: { id: 'thread-just-in-time' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
+        return { thread: { id: 'thread-just-in-time' }, model: 'gpt-test' };
       }
       if (method === 'thread/settings/update') return {};
-      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
-      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
         this.goal = { objective: params.objective, status: params.status };
@@ -1061,8 +548,7 @@ test('a native Goal turn just before the deadline cancels the timer without chan
   assert.equal(output, 'healthy transcript\n');
   assert.equal(errorOutput, [
     'Cruise: app-server started.',
-    'Cruise: native approvals reviewer=auto_review; selection is not an approval result.',
-    'Cruise: thread thread-just-in-time started (model gpt-5.6-sol).',
+    'Cruise: thread thread-just-in-time started (model gpt-test).',
     `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-just-in-time.`,
     'Cruise: goal activated.',
     'Cruise: waiting for the native Goal turn.',
@@ -1129,7 +615,6 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
   }
 
   const client = new StalledGoalClient();
-  const runtimeDirectory = await sessionRuntime(t, root, 'stalled-goal');
   let report = '';
   const session = new SimpleCruiseSession({
     client,
@@ -1143,7 +628,6 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
     errorOutput: { write(value) { report += value; } },
     captureFingerprint: async () => 'fixed-fingerprint',
     readPlan: async () => ({ stall: { quietTurns: 1, sameFailure: 9 } }),
-    runtimeDirectory,
   });
   const result = await session.run();
 
@@ -1164,7 +648,7 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
   assert.match(report, /native Goal is paused/u);
   assert.match(report, /Suggested next actions/u);
 
-  const persisted = JSON.parse(await readFile(join(runtimeDirectory, 'supervisor.json'), 'utf8'));
+  const persisted = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
   assert.equal(persisted.host, 'codex');
   assert.equal(persisted.ladder, 'stalled');
   assert.deepEqual(persisted.interventions.map(({ level }) => level), [
@@ -1178,7 +662,6 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
   assert.equal(stalledPointer.thread_id, 'thread-stalled');
 
   const pauseFailureClient = new StalledGoalClient({ pauseFails: true });
-  const pauseFailureRuntime = await sessionRuntime(t, root, 'stalled-goal-pause-failure');
   let pauseFailureReport = '';
   const pauseFailureResult = await new SimpleCruiseSession({
     client: pauseFailureClient,
@@ -1192,14 +675,13 @@ test('Goal supervision realigns, runs one final experiment, then pauses with a r
     errorOutput: { write(value) { pauseFailureReport += value; } },
     captureFingerprint: async () => 'fixed-fingerprint',
     readPlan: async () => ({ stall: { quietTurns: 1, sameFailure: 9 } }),
-    runtimeDirectory: pauseFailureRuntime,
   }).run();
   assert.equal(pauseFailureResult.status, 'stalled');
   assert.equal(pauseFailureResult.goal.status, 'active');
   assert.match(pauseFailureReport, /pause could not be confirmed: pause transport unavailable/u);
   assert.match(pauseFailureReport, /Suggested next actions/u);
   const pauseFailureState = JSON.parse(await readFile(
-    join(pauseFailureRuntime, 'supervisor.json'),
+    join(root, '.cruise', '.supervisor.json'),
     'utf8',
   ));
   assert.deepEqual(pauseFailureState.pause_outcome, {
@@ -1219,7 +701,9 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
   const root = await mkdtemp(join(tmpdir(), 'cruise-invalid-flight-goal-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, '.cruise'));
-  const pilot = 'status: active\nstall:\n  quiet_turns: 3\n  same_failure: 3\n';
+  const pilot = await readFile(resolve(
+    'tests/fixtures/fenceless-flight.md',
+  ), 'utf8');
   await writeFile(join(root, '.cruise', 'FLIGHT.md'), pilot, 'utf8');
 
   class InvalidFlightGoalClient extends EventEmitter {
@@ -1268,7 +752,6 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
   }
 
   const client = new InvalidFlightGoalClient();
-  const runtimeDirectory = await sessionRuntime(t, root, 'invalid-flight');
   let stderr = '';
   const fingerprintOptions = [];
   const result = await new SimpleCruiseSession({
@@ -1285,7 +768,6 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
       fingerprintOptions.push(options);
       return 'fixed-fingerprint';
     },
-    runtimeDirectory,
   }).run();
 
   assert.equal(result.status, 'stalled');
@@ -1302,7 +784,7 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
   assert.equal((stderr.match(/supervision degraded/gu) ?? []).length, 6);
   assert.equal(fingerprintOptions.every(({ excludeFlightPlan }) => excludeFlightPlan), true);
   assert.match(stderr, /stalled after 6 supervised continuation turns/u);
-  const state = JSON.parse(await readFile(join(runtimeDirectory, 'supervisor.json'), 'utf8'));
+  const state = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
   assert.deepEqual(state.interventions.map(({ level }) => level), [
     'corrective',
     'realign',
@@ -1317,7 +799,6 @@ test('invalid flight state gets one corrective Codex turn without resetting supe
 test('a progressing Codex turn leaves a zero-intervention supervisor trail', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-progress-trail-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const runtimeDirectory = await sessionRuntime(t, root, 'progress-trail');
   const session = new SimpleCruiseSession({
     client: new EventEmitter(),
     cwd: root,
@@ -1332,11 +813,10 @@ test('a progressing Codex turn leaves a zero-intervention supervisor trail', asy
       contentHash: 'valid-flight-hash',
       plan: { stall: { quietTurns: 3, sameFailure: 3 } },
     }),
-    runtimeDirectory,
   });
 
   assert.equal((await session.superviseGoalTurn('turn-progress')).level, 'ok');
-  const state = JSON.parse(await readFile(join(runtimeDirectory, 'supervisor.json'), 'utf8'));
+  const state = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
   assert.equal(state.host, 'codex');
   assert.equal(state.turns_observed, 1);
   assert.deepEqual(state.interventions, []);
@@ -1347,7 +827,6 @@ test('a progressing Codex turn leaves a zero-intervention supervisor trail', asy
 test('a repaired Codex flight keeps its correction in the active ladder', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-repaired-flight-trail-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const runtimeDirectory = await sessionRuntime(t, root, 'repaired-flight');
   const inspections = [
     { state: 'invalid', contentHash: 'bad-flight', reason: 'missing opening fence' },
     {
@@ -1370,13 +849,12 @@ test('a repaired Codex flight keeps its correction in the active ladder', async 
       return 'unchanged-product-work';
     },
     readPlan: async () => inspections.shift(),
-    runtimeDirectory,
   });
 
   assert.equal((await session.superviseGoalTurn('repair-turn')).level, 'corrective');
   assert.equal((await session.superviseGoalTurn('valid-turn')).level, 'realign');
   assert.equal(fingerprintOptions.every(({ excludeFlightPlan }) => excludeFlightPlan), true);
-  const state = JSON.parse(await readFile(join(runtimeDirectory, 'supervisor.json'), 'utf8'));
+  const state = JSON.parse(await readFile(join(root, '.cruise', '.supervisor.json'), 'utf8'));
   assert.deepEqual(state.interventions.map(({ level }) => level), ['corrective', 'realign']);
 });
 
@@ -1544,7 +1022,7 @@ test('Codex completion assessment rejects stale gates and accepts fresh Flight v
     gate.state = 'passed';
     gate.evidence = {
       summary: `${gate.id} passed`,
-      contextFingerprint: incomplete.gateFingerprints[gate.id],
+      contextFingerprint: incomplete.contextFingerprint,
       observedAt: 1,
       source: gate.dimension === 'completion-review' ? 'review' : 'command',
       rationale: '',
@@ -1639,144 +1117,12 @@ test('Goal invocation authorizes routine Plan, Goal, and contract transitions wi
   }), null);
   assert.equal(automaticGoalAuthorization({
     questions: [{
-      id: 'risky-production-migration',
-      header: 'Cruise migration',
-      question: 'Choose whether to authorize-production for this exact risky production migration or route it through sandbox.',
-      options: [
-        { label: 'Authorize exact production migration', value: 'authorize-production' },
-        { label: 'Sandbox then auto-promote', value: 'sandbox-auto' },
-      ],
-    }],
-  }), null);
-  assert.equal(automaticGoalAuthorization({
-    questions: [{
       id: 'scope',
       header: 'Plan and Goal',
       question: 'Should the next micro-goal add analytics that was not requested?',
       options: [{ label: 'Implement the next micro-goal', value: 'implement' }],
     }],
   }), null);
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'terra-launch',
-      header: 'Terra launch',
-      question: 'Approve sending the full private Cruise Goal-skill source and sanitized prompt excerpts to gpt-5.6-terra?',
-      options: [
-        { label: 'Launch Terra', value: 'launch-terra' },
-        { label: 'Stop', value: 'stop' },
-      ],
-    }],
-  }), {
-    answers: {
-      'terra-launch': {
-        answers: [
-          'Launch the Codex worker with only the minimum bounded task context; no new Cruise authorization gate is required.',
-        ],
-      },
-    },
-  });
-  assert.equal(automaticGoalAuthorization({
-    questions: [{
-      id: 'non-admin-cloud-table',
-      header: 'Cloud table',
-      question: 'Update the production bookings table; inspection confirmed non-admin users are present?',
-      options: [{ label: 'Approve', value: 'approve' }],
-    }],
-  }), null);
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'admin-only-cloud-table',
-      header: 'Cloud table',
-      question: 'Update the production bookings table, which contains only approved administrators?',
-      options: [{ label: 'Proceed', value: 'proceed' }],
-    }],
-  }), {
-    answers: { 'admin-only-cloud-table': { answers: ['proceed'] } },
-  });
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'unknown-cloud-table',
-      header: 'Cloud table',
-      question: 'Approve updating the Supabase bookings table before checking its users?',
-      options: [{ label: 'Approve', value: 'approve' }],
-    }],
-  }), {
-    answers: {
-      'unknown-cloud-table': {
-        answers: [
-          'Inspect only the minimum role and identifier fields needed to determine whether non-admin users are present, then continue without asking unless they are confirmed.',
-        ],
-      },
-    },
-  });
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'massive-surface',
-      header: 'Large request',
-      question: 'Approve a repository-wide rewrite affecting hundreds of files?',
-      options: [{ label: 'Approve', value: 'approve' }],
-    }],
-  }), {
-    answers: {
-      'massive-surface': {
-        answers: [
-          'Break the work into the smallest aligned, reviewable tasks and continue; ask only if the decomposition requires a material product-scope decision.',
-        ],
-      },
-    },
-  });
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'explicit-no-read',
-      header: 'Cloud table',
-      question: 'The user explicitly requested that we do not read the remote users table; approve reading it?',
-      options: [{ label: 'Approve', value: 'approve' }],
-    }],
-  }), {
-    answers: {
-      'explicit-no-read': {
-        answers: [
-          'Do not read the specified table; the user explicitly requested the whole-table no-read safeguard.',
-        ],
-      },
-    },
-  });
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'credential-code',
-      header: 'Plan and Goal',
-      question: 'Approve the Plan and Goal for credential validation?',
-      options: [{ label: 'Approve both', value: 'approve-both' }],
-    }],
-  }), {
-    answers: { 'credential-code': { answers: ['approve-both'] } },
-  });
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'sandbox-trust-digest',
-      header: 'Sandbox migration',
-      question: 'The sandbox migrations are ready. Do you authorize updating the model-egress trust digest so I can apply them and continue sandbox testing?',
-      options: [{ label: 'Proceed', value: 'proceed' }, { label: 'Stop', value: 'stop' }],
-    }],
-  }), {
-    answers: { 'sandbox-trust-digest': { answers: ['proceed'] } },
-  });
-  assert.deepEqual(automaticGoalAuthorization({
-    questions: [{
-      id: 'cruise-integrity-drift',
-      header: 'Cruise preflight',
-      question: 'The frozen source hashes to 2f2871 while the reinstalled Goal skill hashes to 767e89. Under cruise:goal integrity rules, do you grant an explicit waiver?',
-      options: [{ label: 'Waive', value: 'waive' }, { label: 'Stop', value: 'stop' }],
-    }],
-  }), {
-    answers: {
-      'cruise-integrity-drift': {
-        answers: [
-          'Treat the Cruise source mismatch as an exceptional internal recovery event. Compare the bounded non-secret Cruise diff, selectively invalidate and redo only affected Cruise-owned code work, preserve unaffected work, refresh derived integrity evidence, and continue without a waiver.',
-        ],
-      },
-    },
-  });
 });
 
 test('Goal session answers an in-scope contract gate without opening the picker', async (t) => {
@@ -1819,154 +1165,4 @@ test('Goal session answers an in-scope contract gate without opening the picker'
     id: 'contract-review',
     result: { answers: { m02: { answers: ['approved'] } } },
   }]);
-});
-
-test('only the dedicated fail-closed Cruise migration command bypasses redundant native approval', async (t) => {
-  assert.equal(automaticMigrationCommandApproval({
-    command: 'cruise migrate apply --target sandbox --path supabase/migrations/040.sql',
-    availableDecisions: ['accept', 'decline'],
-  }), 'accept');
-  assert.equal(automaticMigrationCommandApproval({
-    command: 'node scripts/cruise.mjs migrate query --target prod --file queries/status.sql',
-    availableDecisions: ['acceptForSession', 'decline'],
-  }), 'acceptForSession');
-  for (const command of [
-    'supabase db push --linked',
-    'psql production < migration.sql',
-    'cruise migrate apply --target prod --authorize-digest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'cruise migrate apply --target prod --sandbox-first auto',
-    'cruise migrate route --sandbox-first auto',
-    'cruise migrate apply --target sandbox; rm something',
-    'cruise migrate apply --target sandbox --db-url postgres://secret',
-  ]) assert.equal(automaticMigrationCommandApproval({ command }), null, command);
-
-  const root = await mkdtemp(join(tmpdir(), 'cruise-migration-command-approval-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const client = new EventEmitter();
-  const responses = [];
-  client.respond = (id, result) => responses.push({ id, result });
-  client.respondError = (id, error) => { throw error; };
-  const session = new SimpleCruiseSession({
-    client,
-    cwd: root,
-    prompt: 'Apply the sandbox migration.',
-    skill: 'goal',
-    skillPath: '/tmp/goal-skill.md',
-    pickOne: async () => { throw new Error('validated migration command must not open the picker'); },
-    readLine: async () => { throw new Error('validated migration command must not read input'); },
-  });
-  await session.handleRequest({
-    id: 'migration-command',
-    method: 'item/commandExecution/requestApproval',
-    params: {
-      command: 'cruise migrate apply --target sandbox --path supabase/migrations/040.sql',
-      availableDecisions: ['accept', 'decline'],
-    },
-  });
-  assert.deepEqual(responses, [{ id: 'migration-command', result: { decision: 'accept' } }]);
-});
-
-for (const [isTTY, override, expected] of [
-  [true, undefined, 'user'], [false, undefined, 'auto_review'],
-  [false, 'user', 'user'], [true, 'auto_review', 'auto_review'],
-  [false, 'guardian_subagent', 'guardian_subagent'],
-]) {
-  test(`native Goal reviewer ${isTTY}/${override} survives explicit Plan, execution, continuation and reactivation`, async (t) => {
-    const cwd = await mkdtemp(join(tmpdir(), 'cruise-reviewer-goal-'));
-    t.after(() => rm(cwd, { recursive: true, force: true }));
-    class ReviewerClient extends EventEmitter {
-      calls = [];
-      turns = 0;
-      goal = null;
-      async start() {}
-      async stop() { this.stopped = true; }
-      async request(method, params) {
-        this.calls.push({ method, params });
-        if (method === 'thread/start') return { thread: { id: 'reviewer-thread' } };
-        if (method === 'thread/settings/update') return {};
-        if (method === 'thread/goal/get') return { goal: this.goal };
-        if (method === 'thread/goal/set') {
-          this.goal = { objective: params.objective, status: params.status };
-          return { goal: this.goal };
-        }
-        if (method === 'thread/read') return { thread: { status: { type: 'idle' } } };
-        if (method === 'thread/turns/list') return { data: [] };
-        if (method === 'turn/start') {
-          const id = `reviewer-turn-${++this.turns}`;
-          queueMicrotask(() => {
-            if (this.turns >= 3) this.goal = { ...this.goal, status: 'complete' };
-            this.emit('notification', { method: 'turn/completed', params: {
-              threadId: 'reviewer-thread', turn: { id, status: 'completed' },
-            } });
-          });
-          return { turn: { id } };
-        }
-        throw new Error(`unexpected request ${method}`);
-      }
-    }
-    const client = new ReviewerClient();
-    let diagnostic = '';
-    const session = new SimpleCruiseSession({
-      client, cwd, prompt: 'Implement the bounded source change.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
-      input: { isTTY }, approvalsReviewer: override,
-      output: { write() {} }, errorOutput: { write(text) { diagnostic += text; } },
-      locateTrace: async () => null, traceHome: cwd,
-      continuationContextReader: async () => 'Fixture continuation context.',
-    });
-    let assessments = 0;
-    session.assessCompletion = async () => (++assessments === 1 ? {
-      allowsCompletion: false, reasons: ['Fixture assurance correction.'], progressFingerprint: 'correction',
-    } : { allowsCompletion: true, level: 'legacy-unattested' });
-    assert.equal((await session.run()).status, 'complete');
-    assert.equal(client.stopped, true);
-    assert.equal(client.turns, 4);
-    const nativeCalls = client.calls.filter(({ method }) => ['thread/start', 'thread/settings/update', 'turn/start'].includes(method));
-    for (const { method, params } of nativeCalls) {
-      assert.equal(params.approvalsReviewer, expected, method);
-      assert.equal(params.approvalPolicy, 'on-request', method);
-      const instructions = params.developerInstructions ?? params.collaborationMode.settings.developer_instructions;
-      assert.ok(instructions.includes(`Native Codex approvals reviewer: ${expected}.`));
-    }
-    const modes = client.calls.filter(({ method }) => method === 'turn/start').map(({ params }) => params.collaborationMode.mode);
-    assert.deepEqual(modes, ['plan', 'default', 'default', 'default']);
-    for (const [index, { method }] of client.calls.entries()) {
-      if (method !== 'thread/goal/set') continue;
-      const setting = client.calls.slice(0, index).findLast(call => call.method === 'thread/settings/update');
-      assert.equal(setting.params.approvalsReviewer, expected);
-      assert.equal(setting.params.collaborationMode.mode, index === client.calls.findIndex(call => call.method === 'thread/goal/set') ? 'plan' : 'default');
-    }
-    assert.match(diagnostic, /selection is not an approval result/u);
-  });
-}
-
-test('native Goal reviewer rejection surfaces without fallback and before activation when settings fail', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'cruise-reviewer-rejected-'));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  for (const rejectedMethod of ['thread/start', 'thread/settings/update', 'turn/start']) {
-    const calls = [];
-    const client = new FakeClient();
-    let stopped = false;
-    client.stop = async () => { stopped = true; };
-    client.request = async (method, params) => {
-      calls.push({ method, params });
-      if (method === rejectedMethod) throw new Error('unsupported approvalsReviewer: guardian_subagent');
-      if (method === 'thread/start') return { thread: { id: TRACE_THREAD_ID } };
-      if (method === 'thread/settings/update') return {};
-      if (method === 'thread/goal/get') return { goal: null };
-      if (method === 'thread/goal/set') return { goal: { objective: params.objective, status: 'active' } };
-      if (method === 'thread/read') return { thread: { status: { type: 'idle' } } };
-      if (method === 'thread/turns/list') return { data: [] };
-      throw new Error(`unexpected request ${method}`);
-    };
-    const session = new SimpleCruiseSession({
-      client, cwd, prompt: 'Inspect source.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
-      approvalsReviewer: 'guardian_subagent', output: { write() {} }, errorOutput: { write() {} },
-      locateTrace: async () => null, traceHome: cwd,
-    });
-    await assert.rejects(session.run(), /unsupported approvalsReviewer: guardian_subagent/u);
-    assert.equal(stopped, true);
-    assert.equal(calls.filter(({ method }) => method === rejectedMethod).length, 1);
-    if (rejectedMethod !== 'turn/start') assert.equal(calls.some(({ method }) => method === 'thread/goal/set'), false);
-    assert.ok(calls.filter(({ params }) => 'approvalsReviewer' in params).every(({ params }) => params.approvalsReviewer === 'guardian_subagent'));
-  }
 });

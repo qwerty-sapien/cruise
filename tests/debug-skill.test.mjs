@@ -14,9 +14,9 @@ test('Debug exposes focused and swarm modes for reproducible and pathless work',
   assert.match(skill, /\*\*Focused mode:\*\*/u);
   assert.match(skill, /\*\*Swarm mode:\*\*/u);
   assert.match(skill, /symptom lacks a reliable reproduction/u);
-  assert.match(skill, /broad bug-hunt request does not by itself justify repository-wide inventory/u);
+  assert.match(skill, /general debug, bug hunt, CI pass, quality-control pass/u);
   assert.match(skill, /Do not force Swarm mode after a clear low-risk reproduction/u);
-  assert.match(skill, /never exceed three active workers/u);
+  assert.match(skill, /two waves that each use every safely available subagent slot/u);
 });
 
 test('Debug exposes bounded request-scoped swarm controls', async () => {
@@ -26,7 +26,7 @@ test('Debug exposes bounded request-scoped swarm controls', async () => {
     assert.equal(skill.includes('`' + control + '`'), true, `missing ${control} control`);
   }
   assert.match(skill, /default to at most 2, and never exceed 4 even when asked/u);
-  assert.match(skill, /Another wave requires a confirmed cause or a documented uncovered user path/u);
+  assert.match(skill, /default to two waves that each use every safely available subagent slot/u);
   assert.match(skill, /Keep swarm depth separate from `cruise worker --level <1-7>`/u);
   assert.match(skill, /Never persist or globally enforce them/u);
 });
@@ -38,7 +38,7 @@ test('Debug preserves evidence, repair authority, and causal clustering', async 
   assert.match(skill, /Reproduce it independently or obtain equivalent deterministic evidence/u);
   assert.match(skill, /Cluster symptoms only when evidence supports the same causal mechanism/u);
   assert.match(skill, /Derive a causal signature from the confirmed defect/u);
-  assert.match(skill, /Search for semantic siblings only within the changed mechanism and affected interfaces/u);
+  assert.match(skill, /Search the codebase for semantic siblings/u);
   assert.match(skill, /Treat semantic similarity as a lead, never as proof/u);
   assert.match(skill, /Include related bugs only when they are in scope, independently confirmed/u);
   assert.match(skill, /Keep discovery workers read-only with respect to product and repository state by default/u);
