@@ -13,6 +13,7 @@ import { homedir, hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { atomicWriteText, ensureCruiseScratch } from './supervisor.mjs';
+import { ACCOUNT_ROUTING_GUIDANCE, classifyWorkerFailure } from './simple-worker.mjs';
 
 export const DEFAULT_WEEKLY_DELTA_CAP_PERCENT = 9.0;
 export const DEFAULT_GOAL_RESERVATION_PERCENT = 2.25;
@@ -390,7 +391,11 @@ export class QuotaGuard {
     try {
       window = await this.readAuthority(client);
     } catch (error) {
-      if (this.strictBudget) await this.pause(`weekly quota authority unavailable: ${error.message}`);
+      if (this.strictBudget) {
+        const guidance = classifyWorkerFailure(error).category === 'account-routing'
+          ? ` (account-routing). ${ACCOUNT_ROUTING_GUIDANCE}` : '';
+        await this.pause(`weekly quota authority unavailable: ${error.message}${guidance}`);
+      }
       return { metered: false, reason: String(error?.message ?? error) };
     }
     if (!window) {

@@ -1,0 +1,740 @@
+
+> cruise-code@0.4.3 validate
+> npm test
+
+
+> cruise-code@0.4.3 test
+> node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/runtime-state.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/authorization-policy.test.mjs tests/git-sync-policy.test.mjs tests/migration-config.test.mjs tests/migration-policy.test.mjs tests/migration-controller.test.mjs tests/migration-cli.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/changelog-observer.test.mjs tests/user-reference.test.mjs tests/release-push.test.mjs tests/usage-meter.test.mjs tests/compaction-controller.test.mjs tests/quota-guard.test.mjs tests/context-runtime.test.mjs tests/quota-cli.test.mjs tests/context-router.test.mjs tests/context-view.test.mjs tests/worker-dispatcher.test.mjs tests/root-session-policy.test.mjs tests/context-economy-packaging.test.mjs tests/mock-efficiency-benchmark.test.mjs tests/skill-trigger-policy.test.mjs tests/context-economy-audit.test.mjs tests/staged-handoff.test.mjs tests/bootstrap-resilience.test.mjs tests/doctor-probe-timeout.test.mjs tests/non-git-assurance.test.mjs
+
+✔ start spawns configured command and performs initialize/initialized handshake (5.000792ms)
+✔ request resolves results, rejects RPC errors, and notify writes JSONL (1.771958ms)
+✔ server requests and notifications are dispatched to callbacks (5.609542ms)
+✔ EventEmitter API exposes request, notification, stderr, and exit (1.143125ms)
+✔ reply and error write valid bidirectional RPC responses (0.731333ms)
+✔ process exit rejects every pending request (0.453583ms)
+✔ pending initialize retains permission evidence without retrying the launch (0.808417ms)
+✔ startup exit diagnostics are bounded and unrelated exits have no permission hint (1.668542ms)
+✔ process errors preserve the original cause alongside compact stderr (0.30775ms)
+✔ stop closes stdin and waits for a graceful app-server exit (0.46ms)
+✔ stop escalates an unresponsive app-server from SIGTERM to bounded SIGKILL (11.83ms)
+✔ malformed input is reported without crashing the stream reader (1.978458ms)
+✔ inactivity timeout is request-scoped and invalid overrides fall back to the default (0.361583ms)
+✔ initialize has an independent handshake deadline and leaves no watchdog timer (30.376875ms)
+✔ watchdog resets on responses, notifications, and server requests (137.412ms)
+✔ transport inactivity rejects pending RPCs with bounded stderr and session context (27.304792ms)
+✔ stop, child exit, and interrupt clear the inactivity timer (1.098125ms)
+✔ read clauses can name software operations without granting those effects (18.155708ms)
+✔ local authorization accepts bounded aliases, casing and ordinary domain labels without delegation (5.391833ms)
+✔ local questions include option descriptions and values without cross-option exclusions (3.047667ms)
+✔ ordinary local vocabulary cannot grant material effects or bypass native denials (0.950084ms)
+✔ delegation options cannot hide material effects in descriptions or values (0.155541ms)
+✔ both profiles silently handle routine delegation without product decisions (2.954583ms)
+✔ delegation never authorizes a consequential effect or expands user scope (0.264708ms)
+✔ approved local context and bounded Codex workers are pre-authorized (0.189292ms)
+✔ Astra bounded worker coordination is auto-resolved while material Astra effects remain gated (0.252916ms)
+✔ worker disclosure pauses are suppressed while sensitive paths are skipped without being read (1.5425ms)
+✔ mid-job Cruise integrity drift self-recovers without a waiver or blanket rollback (0.211542ms)
+✔ cloud-table authorization depends on evidenced administrator membership (4.294125ms)
+✔ evidenced sensitive material and massive surface stay distinct (0.675292ms)
+✔ sandbox migrations, read-only production SQL, and derived digest refreshes do not invent authorization gates (0.613583ms)
+✔ classification is deterministic across repeated mixed boundaries (0.597666ms)
+✔ all public Cruise skills state the evidence-based authorization boundary (9.788834ms)
+✔ sensitive functionality source is distinct from actual data in each requested object (1.277584ms)
+✔ source mentions and exclusions cannot authorize other actual sensitive objects (1.051583ms)
+✔ source review does not override secret paths, material effects, or mixed questions (0.418125ms)
+✔ exclusions bind to individual objects and explicit lists (1.749875ms)
+✔ hashing software topics do not authorize actual hashing-related secrets (5.373542ms)
+✔ operation distance counts the gap after the complete token (4.954917ms)
+✔ sentence punctuation and quotes preserve sensitive filename boundaries (1.444458ms)
+✔ exclusion lists retain software object extents and contained path mentions (1.216708ms)
+✔ long exclusion lists preserve scope without reopening contained sensitive mentions (6.563333ms)
+✔ startup deadline is bounded by default and preserves explicit long/off limits (1.260334ms)
+✔ initial Goal carries user provenance and observes early native completion (false) (15.193291ms)
+✔ initial Goal carries user provenance and observes early native completion (true) (9.881583ms)
+✔ idle Goal metadata schedules exactly one explicit read-only Plan bootstrap (7.492ms)
+✔ cancelling default unlimited native startup pauses automatically and settles once (11.939708ms)
+✔ already running native turn is adopted and a lost completion is recovered from history (255.577958ms)
+✔ completion without a started event is recovered from notification (7.083583ms)
+✔ completion without a started event is recovered from history (7.164834ms)
+✔ ambiguous turn/start acceptance is reconciled without resubmission (255.662ms)
+✔ concrete authentication cause surfaces promptly from start rejection (4.892958ms)
+✔ concrete authentication cause surfaces promptly from nonretrying error (5.742375ms)
+✔ concrete authentication cause surfaces promptly from failed completion (3.775209ms)
+✔ retrying and foreign-thread errors do not replace native completion (4.503ms)
+✔ a missing activation reply cannot hide bootstrap timeout (26.251458ms)
+✔ a missing activation reply cannot hide bootstrap error (5.01025ms)
+✔ cancel settles an ambiguous bootstrap once and clears reconciliation (8.278167ms)
+✔ exit settles an ambiguous bootstrap once and clears reconciliation (10.228791ms)
+✔ reactivation ignores the consumed turn and explicitly starts the default-mode correction (external=false) (1.735291ms)
+✔ reactivation ignores the consumed turn and explicitly starts the default-mode correction (external=true) (1.613958ms)
+✔ explicit Plan bootstrap advances to execution and a managed dispatch with persisted handoff (external=false) (15.560375ms)
+✔ explicit Plan bootstrap advances to execution and a managed dispatch with persisted handoff (external=true) (15.089916ms)
+✔ CLI exposes explicit timeout and requires a complete Codex-only handoff pair (2.536ms)
+✔ initialize handshake is independently configurable without conflating shutdown waits (0.264791ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread ready-thread started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-parent-GIWeH2/sessions; resume: codex resume ready-thread.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread ready-thread; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-parent-GIWeH2/sessions; resume: codex resume ready-thread.
+✔ staged launcher: accept keeps parent ownership until fresh acceptance (746.735083ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+✔ staged launcher: cancel keeps parent ownership until fresh acceptance (27.87925ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+✔ staged launcher: exit keeps parent ownership until fresh acceptance (20.148458ms)
+✔ cancellation settles stalled initialize setup without waiting for an RPC deadline (0.872833ms)
+✔ cancellation settles stalled thread/start setup without waiting for an RPC deadline (6.606167ms)
+✔ cancellation settles stalled thread/settings/update setup without waiting for an RPC deadline (8.246ms)
+✔ large fresh handoff stays in collaboration instructions and not the bounded Goal objective (4.796875ms)
+✔ staged setup defers quota authority and usage writes until parent acceptance (11.419167ms)
+✔ cancellation after an early native start cannot hang behind activation or interrupt RPCs (28.242792ms)
+✔ worktree edits without a commit launch no worker and write no changelog (188.703792ms)
+✔ a midflight commit starts parallel inference and terminal flush waits for its targeted write (549.650125ms)
+✔ multiple commits between observations are recorded chronologically once each (698.490916ms)
+✔ the first commit in an unborn repository is observed (478.998125ms)
+✔ an amended commit is recorded while checkout and reset remain excluded (835.388083ms)
+Switched to a new branch 'side'
+Switched to branch 'main'
+Rebasing (1/1)
+Successfully rebased and updated refs/heads/main.
+✔ a rebase records the chronological commits introduced into rewritten HEAD (1794.168334ms)
+✔ a checkout or reset is not misreported as a newly created commit (353.343792ms)
+✔ invalid parallel output falls back without failing the commit write (498.085375ms)
+✔ summary tasks contain bounded evidence but no repository or underscore-document instruction (0.396625ms)
+✔ summary parser rejects paths outside the frozen inventory (0.5875ms)
+✔ Claude changelog accepts structured source evidence with the shared instruction guards (3.978959ms)
+✔ Claude sessions load the plugin and invoke the slash-command skill natively (1.031167ms)
+✔ the published package contains both plugin manifests and only the active runtime closure (4.010917ms)
+✔ Claude changelog workers are captured, read-only, and detached from Goal hook state (2.190708ms)
+✔ Claude worker levels map to Claude model aliases and native effort values (0.27ms)
+✔ Claude CLI transport inherits the native TUI and returns its exit status (0.399042ms)
+✔ Claude Goal sessions pass exact session-scoped runtime state to hooks and children (366.89775ms)
+✔ Claude process exit zero cannot masquerade as Goal completion (1309.144208ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+▶ real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup
+  ✔ goal (1327.426625ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ goal-error (2545.654042ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+cruise: weekly quota authority unavailable: workspace routing discovery failed (account-routing). Check authenticated account/backend connectivity. On macOS inside an outer sandbox, check resolver access to the canonical /private/var/run/mDNSResponder Unix socket (docs/EXTERNAL_SANDBOX.md). This generic error does not establish a local workspace-root problem or prove DNS failure. Resolve the cause before resuming; do not weaken policy or retry a denial.
+  ✔ goal-routing (785.105959ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+  ✔ staged (1218.961959ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+  ✔ debug (1073.580167ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+
+  ✔ standalone (311.076542ms)
+✔ real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup (7263.388083ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+▶ managed CLI rejects invalid parent bindings before capsule writes or transport creation
+  ✔ missing-runtime (252.78625ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ missing-session (239.863416ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ wrong-session (215.300708ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ wrong-cwd (258.994959ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ unregistered (239.619375ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ stale-lease (191.6665ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ expired-runtime (226.173583ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ inactive-runtime (276.568167ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ tampered-manifest (256.8925ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ worker-parent (212.283208ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ unsafe-runtime (171.407917ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ symlink-runtime (168.665458ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ foreign-inherited-runtime (218.624792ms)
+✔ managed CLI rejects invalid parent bindings before capsule writes or transport creation (2930.545041ms)
+✔ ordinary local access cannot authorize a separate copy to an external URL (5.744417ms)
+✔ worker request handler auto-answers authorized local work without a human picker or delegation wording (12.59925ms)
+✔ worker handler preserves option effects, explicit denial evidence and native approval requests (1.721709ms)
+✔ worker handler skips secret paths and resolves each question independently (0.540541ms)
+✔ the npm package entry runs the Cruise CLI (122.283084ms)
+✔ app-server stderr is attributed across chunk boundaries (0.22875ms)
+✔ the public CLI accepts direct requests and rejects retired control-plane flags (0.833167ms)
+✔ the release exposes four public skills plus the internal context policy (2.033625ms)
+✔ attest is a prompt-free inspection command with machine-readable output (1.054292ms)
+✔ provider selectors are request-scoped, mutually exclusive, and default to Codex (0.147875ms)
+✔ workers receive ordinary text and an explicit, request-scoped level (160.173458ms)
+✔ external sandbox is explicit, Codex-only, and limited to Goal and worker commands (0.765ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+
+✔ external sandbox CLI option reaches hosted Goals and managed workers (358.232833ms)
+Cruise worker: requested level=auto; routed minimum=L7; selected=L7.
+
+Cruise worker: requested level=7; routed minimum=L6; selected=L7.
+
+Cruise worker: requested level=7; routed minimum=L6; selected=L7.
+
+✔ managed CLI routing requires explicit reasoning evidence for an L6-to-L7 transition (509.754625ms)
+✔ reasoning escalation evidence rejects incomplete or non-Codex worker routes (0.59325ms)
+✔ reference command delegates deterministic user-document writing without reading outputs (2.014292ms)
+✔ direct changelog command delegates one exact commit through isolated scratch (0.668584ms)
+✔ Claude workers use the Claude adapter without touching Codex app-server (156.1235ms)
+Cruise: thread thread started (model unknown).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread.
+Cruise: trace unresolved for thread thread; sessions: /Users/agent/.codex/sessions; resume: codex resume thread.
+✔ a completed ordinary Cruise task removes its transient ORIGIN control file (172.701792ms)
+✔ launcher runs commit observation around the hosted session before deleting scratch (160.40075ms)
+✔ the run-one-goal seam does not replace ORIGIN.md (178.090375ms)
+✔ a supervised Goal stall maps to exit code 3 (195.49625ms)
+✔ a fresh failed Goal never records an unchanged prior Flight as current (168.882125ms)
+cruise: Codex never started the native Goal turn within 10ms (thread=thread-timeout, model=gpt-5.6-sol, goal=active, elapsed=11ms).
+✔ a native Goal bootstrap timeout maps to exit code 4 (189.28425ms)
+cruise: transport inactivity observed
+✔ transport inactivity maps to exit code 5 (180.630541ms)
+✔ Claude start receives an exact runtime directory and removes terminal control files (167.2675ms)
+✔ Claude resume preserves a blocked original request and does not reinvoke the Goal skill (407.151083ms)
+✔ Claude non-Goal runs reserve the workspace without activating Goal supervision (189.948875ms)
+✔ Codex Doctor checks transport, version, and effective installed Cruise content (0.450708ms)
+✔ Codex plugin freshness detects same-version source and cache drift (12.153625ms)
+✔ Claude Doctor checks the CLI, plugin, and authentication (0.132667ms)
+✔ native reviewer CLI is request-scoped and limited to Codex Goal and worker (0.578458ms)
+✔ launcher forwards injected native reviewer defaults and overrides to Goal and worker (1724.880833ms)
+✔ context pressure uses the configured warn, compact, and split thresholds (0.974333ms)
+✔ compaction waits for a completed turn and the full contextCompaction item lifecycle (2.076666ms)
+✔ the next model call verifies compaction pressure before another attempt (0.345125ms)
+✔ audit, templates, skill caps, index, and mock benchmark agree (6.299208ms)
+✔ audit validation fails closed when a resource target is weakened (0.685416ms)
+✔ context-economy policy files stay within one bounded file window (7.15475ms)
+✔ npm package ships the context-economy policy and runtime modules (663.391875ms)
+✔ stage defaults preserve their semantic levels on the new ladder (1.407542ms)
+✔ generic evidenced escalation follows the non-monotonic ladder (0.910958ms)
+✔ Goal root is explicitly Sol high and weaker overrides require a diagnostic record (1.449583ms)
+✔ every L1 through L7 mapping is exact (0.924458ms)
+✔ complexity routing is deterministic and every consequence trigger floors at L5 (1.676667ms)
+✔ escalation requires narrow new evidence, rejects transport causes, and permits later de-escalation (0.465041ms)
+✔ L7 requires an explicit exceptional-consequence record (0.342375ms)
+✔ token notifications persist usage fields without replacing legacy LAST-RUN fields (18.468167ms)
+✔ contextCompaction items are not implementation progress or stall observations (1.174584ms)
+✔ the pre-compaction handoff retains compact task state without restating the request (7.81575ms)
+✔ quota reservation precedes session start and continuation checks are explicit (10.244333ms)
+✔ context map honors exclusions and every command emits a digest and raw artifact (2618.2465ms)
+✔ large ranged reads stay within both caps and preserve full raw evidence (1055.305792ms)
+✔ search groups visible results but preserves every filtered match in the raw artifact (867.562959ms)
+✔ tracked-file cache invalidates by current Git blob hash (577.530417ms)
+✔ mini-repository excludes dotenv and secret paths before every retrieval route (1393.017375ms)
+✔ named sibling files and search roots work independently of Git and edit ownership (797.74925ms)
+✔ named reads retain ignore, sensitive, underscore-root, and symlink exclusions (791.979292ms)
+✔ read-only permission sandbox returns capped extraction without any filesystem write allowance (490.435875ms)
+✔ non-Git enumeration fails at a hard entry cap and tiny visible caps stay bounded (793.03625ms)
+✔ Debug exposes focused and swarm modes for reproducible and pathless work (3.461583ms)
+✔ Debug exposes bounded request-scoped swarm controls (0.749542ms)
+✔ Debug preserves evidence, repair authority, and causal clustering (0.809375ms)
+✔ Doctor probe wait is operator-configurable, including no deadline (0.924708ms)
+✔ Doctor preserves delayed successful output when its deadline is disabled (122.009458ms)
+✔ Doctor still bounds a genuinely unresponsive probe when a deadline is selected (34.736ms)
+✔ public Doctor CLI uses the real probe binding and reports structured failures (438.754ms)
+✔ missing optional fields receive advisory defaults (1.996791ms)
+✔ write and read round-trip the pinned schema and unknown extensions (11.217458ms)
+✔ malformed or invalid frontmatter returns null (1.179ms)
+✔ parseFlightPlan never throws on pathological text (0.348ms)
+✔ Flight input and serialized output fail closed above 8 KB (3.518209ms)
+✔ the canonical template stays aligned across both strict parser copies (0.794125ms)
+✔ both strict parser copies agree on numeric edge cases (0.331292ms)
+✔ inspection distinguishes absent, invalid, and valid flight state with reasons (6.892541ms)
+✔ Flight v2 round-trips quality gates and requires fresh profile-complete evidence (3.734833ms)
+✔ Flight v2 rejects decorative profiles, duplicate gates, and unknown versions (0.53375ms)
+✔ context binding changes with request, product state, or gate contract but not receipts (0.741416ms)
+✔ scoped gate receipts survive unrelated edits and stale only the changed surface (0.481ms)
+✔ request or outcome changes stale scoped receipts even after global gates are reviewed again (0.336416ms)
+✔ high-risk assurance requires a freshly passed independent review (0.320833ms)
+✔ legacy, missing-origin, decorative, and whitespace evidence cannot claim assurance (0.38525ms)
+✔ the shared policy preserves preview-before-integration semantics (1.008125ms)
+✔ every direct root skill routes to the shared policy (4.707083ms)
+✔ queues every CRLF/LF line and the final unterminated line (3.092792ms)
+✔ pending reads resolve in FIFO order when one chunk contains many answers (2.125333ms)
+✔ question writes its prompt and shares the same queued stream (0.442917ms)
+✔ cancel settles pending and future reads with a typed reason (0.36225ms)
+✔ cancel overrides prefetched EOF and discards queued answers (3.433125ms)
+✔ one aborted read does not cancel the shared reader (0.963666ms)
+✔ constructing against an already-ended stream settles as EOF (0.323917ms)
+✔ input errors reject pending and future reads (0.455125ms)
+✔ migration CLI parses dedicated commands and rejects ambiguous or secret-bearing escape flags (2.428958ms)
+✔ config show emits normalized non-secret policy state (4.220917ms)
+✔ migration command delegates only structured target and path inputs (1.546583ms)
+✔ session-only route is kept under the private runtime directory (4.061375ms)
+✔ missing config selects the relaxed fast profile (25.695125ms)
+✔ business-critical config normalizes targets, domains, checks, and flows (16.9425ms)
+✔ config rejects credentials, connection strings, secret paths, and symlinks (27.946292ms)
+✔ config requires unique, verified-shape target identities (18.31175ms)
+✔ shipped relaxed and business-critical examples remain valid (5.908416ms)
+✔ mini repository applies sandbox migration without reading unreadable dotenv (26.217959ms)
+✔ safe production migration performs strict analysis and auto-applies once (18.397667ms)
+✔ risky production migration routes through sandbox and auto-promotes after checks (11.048458ms)
+✔ risky production migration does not choose a sandbox route on the user’s behalf (4.846583ms)
+✔ failed sandbox validation retains sandbox and never touches production (5.488084ms)
+✔ manual sandbox route promotes only through a live session token (7.781917ms)
+✔ a profile can force an explicitly chosen automatic sandbox route to await manual confirmation (7.913125ms)
+✔ exact production authorization is single-use and target-bound (5.750042ms)
+✔ unverified targets and sensitive SQL paths fail before execution (5.020375ms)
+✔ read-only query and diagnostics expose no credentials (7.609417ms)
+✔ target drift between inspection and execution blocks both writes and reads (5.887584ms)
+✔ derived digest refresh failure never becomes a pre-apply authorization gate (6.632542ms)
+✔ local additive proof skips secret canaries and detects whole-row API dependencies (9.10825ms)
+✔ Supabase adapter rejects dry-run drift and wraps queries in a bounded read-only transaction (5.074542ms)
+✔ every migration on a verified sandbox target auto-applies (1.805583ms)
+✔ production read-only SQL auto-runs only with server enforcement and minimum columns (2.361542ms)
+✔ allowlisted noncritical production domain auto-applies after policy checks (1.377084ms)
+✔ unmapped additive production changes require and honor strict dependency proof (0.589917ms)
+✔ a failed configured data-policy check becomes an informed production choice (0.25ms)
+✔ strict additive heuristics never merge multiple unproven database classes into one minor change (0.209458ms)
+✔ risky, ambiguous, cross-domain, and constrained migrations require exact authorization (2.354958ms)
+✔ comments and literals cannot disguise destructive SQL (0.307791ms)
+✔ deterministic mock benchmark passes every efficiency and correctness gate without model calls (3.9845ms)
+✔ benchmark rejects correctness loss even when optimized credits are lower (0.99225ms)
+✔ benchmark rejects uncapped large context items and campaign over-reservation (0.937375ms)
+✔ benchmark rejects a credit regression above the level threshold (0.797916ms)
+✔ benchmark rejects impossible token and reservation telemetry (1.702709ms)
+✔ non-Git attestation moves from unavailable scope to fresh context without bypassing pending gates (289.973292ms)
+✔ product edits and deletion invalidate affected evidence while another surface stays fresh (229.791625ms)
+✔ unrelated files and runtime/control updates leave declared evidence fresh; request edits do not (226.6815ms)
+✔ touchpoint and gate surface expansion invalidate exactly their contract scope (419.96325ms)
+✔ empty declarations remain unavailable; explicit missing and empty surfaces are deterministic (210.164417ms)
+✔ glob membership and filesystem ordering produce deterministic bounded snapshots (297.996292ms)
+✔ sensitive, ignored, underscore, control and symlink paths are never opened (404.404875ms)
+✔ symlinked Flight, origin and ignore policies fail closed without reading targets (88.006792ms)
+✔ unsupported selectors, ignore syntax, oversized inputs and depth bounds stay unavailable (295.758208ms)
+✔ entry and aggregate byte bounds never return a partial product fingerprint (3808.503542ms)
+✔ invalid Git metadata is not reclassified as a valid filesystem workspace (20.396916ms)
+✔ ORIGIN.md is the sole prompt-only Cruise record (9.304375ms)
+✔ the prompt note does not follow a pre-existing symlink (10.955792ms)
+✔ reducer wraps Up and Down without mutating state (1.791875ms)
+✔ Enter and Space normalize to selection (0.225417ms)
+✔ digits 1-9 select immediately when in range and ignore invalid positions (0.2295ms)
+✔ q, Escape, and Ctrl-C normalize to distinct cancellation reasons (0.213625ms)
+✔ numbered parser accepts full integers and cancellation controls (0.220584ms)
+✔ renderer wraps every title and option word into redraw-safe rows (1.045708ms)
+✔ wrapper preserves an overlong word and handles extremely narrow columns (0.170417ms)
+✔ TTY picker navigates, selects, and restores raw and paused state (1.467875ms)
+✔ TTY picker preserves an already-raw, already-flowing input on cancel (0.346791ms)
+✔ TTY picker falls back to a sane width when the PTY reports zero columns (0.374458ms)
+✔ an external resolution aborts one TTY picker and restores terminal state (0.282959ms)
+✔ TTY picker restores raw mode and paused state when rendering fails (0.464625ms)
+✔ non-TTY fallback numbers options, retries invalid input, and selects (1.667625ms)
+✔ non-TTY fallback supports q cancellation and EOF cancellation (1.062ms)
+✔ one shared line reader preserves picker, free-text, and picker answers (0.322417ms)
+✔ native approvals drain queued decisions before reporting real closed-stream EOF (1.458625ms)
+✔ TTY native approval selection keeps structured values and explicit Escape cancellation (0.3785ms)
+✔ queue parse/write round-trips the pinned schema and unknown keys (11.244458ms)
+✔ nextReadyMilestone selects the first dependency-satisfied pending item (0.640333ms)
+✔ dependency cycles produce no ready milestone and a concrete warning (0.153209ms)
+✔ milestoneToFlightPlan carries scope and verification plus inherited obligations (0.623459ms)
+✔ Queue v2 carries risk and profiles into domain-aware Flight gates (0.441333ms)
+✔ queue parsing never throws and rejects malformed advisory data (0.43825ms)
+✔ queue CLI parsing and status output require an explicit queue action (5.3965ms)
+✔ queue run preserves advisory edits and stops honestly on a stalled milestone (504.320375ms)
+✔ queue run records a blocked milestone and never advances past it (23.027458ms)
+✔ queue run records flight compilation failures instead of leaving active state (18.554167ms)
+✔ the real queue Goal adapter requires Flight v2 as well as the Claude terminal handshake (0.498333ms)
+✔ queue execution rejects terminal transitions for milestones it did not run (22.55725ms)
+✔ queue execution rejects terminal Flight substitution (391.073292ms)
+✔ queue execution restores deletion of an unexecuted milestone (33.027208ms)
+✔ terminal or interrupted queues never masquerade as successful completion (10.436708ms)
+✔ queue continues independent work after blocked and retains dependent work (752.021ms)
+✔ queue continues independent work after stalled and retains dependent work (965.821416ms)
+✔ queue resumes independent work with an existing blocker without declaring total completion (919.330334ms)
+✔ queue stops independent work on budget-paused (28.896166ms)
+✔ queue stops independent work on failed (24.906375ms)
+✔ queue stops independent work on interrupted (28.031292ms)
+✔ queue stops independent work on contract-mutation (29.057959ms)
+✔ queue stops independent work on unassured (38.318167ms)
+✔ historical blocked without local provenance stops independent work (3.172667ms)
+✔ historical stalled without local provenance stops independent work (3.396333ms)
+✔ global stop survives status-only edits until explicit reconciliation (951.333ms)
+✔ non-active depends weakening restores contracts and persists a global stop (29.995375ms)
+✔ non-active verify weakening restores contracts and persists a global stop (31.698375ms)
+✔ non-active invariants weakening restores contracts and persists a global stop (29.038708ms)
+✔ deletion of M1 restores its checkpoint and persists a global stop (62.180458ms)
+✔ rename of M1 restores its checkpoint and persists a global stop (52.451125ms)
+✔ deletion of M2 restores its checkpoint and persists a global stop (54.176625ms)
+✔ rename of M2 restores its checkpoint and persists a global stop (56.980666ms)
+✔ deleting the only active milestone restores it before returning and across resume (21.853375ms)
+✔ budget CLI and environment overrides are validated (1.766541ms)
+✔ usage reports an absent local meter without contacting a model (4.379625ms)
+✔ budget output is sanitized and uses only the mock account transcript (2.196958ms)
+✔ worker reservation completes before the mock worker is spawned (436.107292ms)
+Cruise worker: requested level=2; routed minimum=L5; selected=L5.
+
+✔ managed worker writes a bounded capsule before quota and persists its compact handoff (595.314959ms)
+✔ worker cleanup surfaces a quota reservation release failure (624.084625ms)
+✔ weekly selection chooses the window closest to 10,080 minutes (0.716209ms)
+✔ sparse rate-limit notifications merge without clearing prior values (0.17725ms)
+✔ a reset epoch establishes a new campaign baseline (18.294416ms)
+✔ two concurrent processes reserve atomically without oversubscription (63.352125ms)
+✔ dead old-process reservations are marked stale before a new reservation (17.948417ms)
+✔ the guard pauses before the cap and writes a resumable report (17.088917ms)
+✔ strict mode refuses an unmetered Goal (5.381292ms)
+▶ strict authority failures preserve pause containment and qualify routing guidance narrowly
+  ✔ account/read: workspace routing discovery failed (6.224958ms)
+  ✔ account/read: workspace routing discovery failed: authentication required (11.255084ms)
+  ✔ account/read: workspace routing discovery failed: invalid configuration (6.91525ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed (5.325ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed: authentication required (3.824625ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed: invalid configuration (3.864458ms)
+✔ strict authority failures preserve pause containment and qualify routing guidance narrowly (38.603541ms)
+✔ release push collapses intermediates, preserves later commits, and keeps the final tree (3531.62675ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread root-thread started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-root-policy-zM9u6g/codex-home/sessions; resume: codex resume root-thread.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread root-thread; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-root-policy-zM9u6g/codex-home/sessions; resume: codex resume root-thread.
+✔ Goal requests and persists a non-default root effort before compact continuation (24.051875ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: trace unresolved for thread degraded-root; sessions: /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-root-degraded-VSC2Q6/codex-home/sessions; resume: codex resume degraded-root.
+✔ Goal fails closed when the host reports a weaker root resolution (6.846958ms)
+✔ runtime sessions use a private manifest-driven layout and deterministic cleanup (46.180292ms)
+✔ the janitor removes only expired valid sessions and skips unsafe entries (16.4575ms)
+✔ runtime validation and promotion reject symlinks and promote regular deliverables atomically (14.368167ms)
+✔ persistent control cleanup is class- and terminal-status-driven (21.270708ms)
+✔ ordinary local Goal access includes option descriptions and values in effect checks (19.549792ms)
+✔ Goal ordinary turns and mode settings preserve the explicit sandbox selection (10.555833ms)
+✔ simple sessions send one normal skill turn without control-plane instructions (16.048125ms)
+✔ relaxed goal resolves operational questions without opening user input (14.58825ms)
+✔ relaxed quick resolves operational questions without opening user input (12.911917ms)
+✔ relaxed debug resolves operational questions without opening user input (9.073375ms)
+✔ relaxed build resolves operational questions without opening user input (7.0725ms)
+✔ business-critical goal resolves operational questions without opening user input (9.3775ms)
+✔ business-critical quick resolves operational questions without opening user input (13.684125ms)
+✔ business-critical debug resolves operational questions without opening user input (13.873042ms)
+✔ business-critical build resolves operational questions without opening user input (8.2965ms)
+✔ mixed question batches surface only the material product decision (1.497416ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread thread-goal started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-goal.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread thread-goal; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-goal.
+✔ Goal auto-advances each completed active turn until native completion (20.780292ms)
+✔ Goal disclosure transcript: unsupported pause (9.947833ms)
+✔ Goal disclosure transcript: plain subagent permission question (11.21125ms)
+✔ Goal disclosure transcript: Cruise integrity drift waiver (17.776042ms)
+✔ Goal disclosure transcript: native denial (14.776167ms)
+✔ Goal disclosure transcript: duplicate native denial (22.885416ms)
+✔ Goal disclosure transcript: native approval (16.967375ms)
+✔ Goal disclosure transcript: other thread denial (12.28ms)
+✔ Goal disclosure transcript: replayed prior turn denial (14.763166ms)
+✔ Goal disclosure transcript: repeated unsupported pause stops after one correction (37.349333ms)
+✔ native approval responses cannot be replaced by Cruise consent and reset on a new turn (6.137167ms)
+✔ root approval EOF reports a channel error without a response or fabricated denial (4.70175ms)
+✔ root native explicit decline and cancellation remain authoritative through the picker (2.287166ms)
+✔ root session propagates approval-channel failure and stops its client (10.121292ms)
+✔ root structured native decisions have readable labels and preserve their exact payload (1.400917ms)
+✔ Goal bootstrap deadline reports diagnostics and pauses a Goal that never starts a turn (29.854792ms)
+✖ Goal bootstrap timeout cannot hang in diagnostic cleanup (164.943584ms)
+✔ interrupt cancels a hung bootstrap diagnostic without leaking its cleanup timer (30.573291ms)
+✔ app-server exit cancels a hung bootstrap diagnostic cleanup timer (19.906625ms)
+✔ a native Goal turn just before the deadline cancels the timer without changing stdout (99.698625ms)
+✔ Goal supervision realigns, runs one final experiment, then pauses with a report (279.563042ms)
+✔ invalid flight state gets one corrective Codex turn without resetting supervision (80.41875ms)
+✔ a progressing Codex turn leaves a zero-intervention supervisor trail (14.213875ms)
+Cruise warning: supervision degraded: invalid .cruise/FLIGHT.md (missing opening fence).
+✔ a repaired Codex flight keeps its correction in the active ladder (12.970541ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread thread-interrupt started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-interrupt.
+Cruise: trace unresolved for thread thread-interrupt; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-interrupt.
+✔ interrupting an activation pauses a Goal that became active in flight (10.922834ms)
+Cruise: app-server started.
+Cruise: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise: thread thread-plan-only started (model gpt-5.6-sol).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-plan-only.
+Cruise: goal activated.
+Cruise: waiting for the native Goal turn.
+Cruise: trace unresolved for thread thread-plan-only; sessions: /Users/agent/.codex/sessions; resume: codex resume thread-plan-only.
+✔ a plan-only Goal completes after its native Plan turn without implementation (7.154666ms)
+✔ Codex completion assessment rejects stale gates and accepts fresh Flight v2 receipts (15.987958ms)
+✔ Goal automatically accepts unmistakable routine phase gates but not risky choices (1.744083ms)
+✔ Goal invocation authorizes routine Plan, Goal, and contract transitions without a copied phrase (6.550833ms)
+✔ Goal session answers an in-scope contract gate without opening the picker (2.707625ms)
+✔ only the dedicated fail-closed Cruise migration command bypasses redundant native approval (1.884375ms)
+✔ native Goal reviewer true/undefined survives explicit Plan, execution, continuation and reactivation (30.770875ms)
+✔ native Goal reviewer false/undefined survives explicit Plan, execution, continuation and reactivation (30.449291ms)
+✔ native Goal reviewer false/user survives explicit Plan, execution, continuation and reactivation (26.808417ms)
+✔ native Goal reviewer true/auto_review survives explicit Plan, execution, continuation and reactivation (27.575292ms)
+✔ native Goal reviewer false/guardian_subagent survives explicit Plan, execution, continuation and reactivation (32.128542ms)
+✔ native Goal reviewer rejection surfaces without fallback and before activation when settings fail (12.678417ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=user; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ worker questions keep routine delegation internal in both profiles and mixed batches (67.739042ms)
+✔ worker native denials remain host decisions (0.647625ms)
+✔ worker approval EOF and missing selections never synthesize decisions or permissions (11.846458ms)
+✔ worker native decisions roundtrip and explicit permission choices remain effective (11.478959ms)
+✔ worker failures report observed transport categories without inventing DNS (2.399625ms)
+✔ only the exact generic routing error receives account-routing guidance (45.815334ms)
+✔ generic account-routing startup failure stops the client without retry or model turn (5.027125ms)
+✔ startup exit rejection is observed before start settles without masking the startup error (59.732458ms)
+✔ a pre-effect upstream failure retries once without durable retry state (2.364916ms)
+✔ model selection is untouched without an explicit level (1.152333ms)
+✔ worker forwards an explicit native output schema and omits it by default (1.162208ms)
+✔ worker transcript routes coordination internally and carries native evidence to its request handler (2.117917ms)
+✔ worker permissions channel failure propagates without a grant, denial, or retry (1.245667ms)
+✔ worker launch rejects secret material and sensitive-file access before starting a client (14.702333ms)
+✔ internal read-only workers cannot mutate the product workspace (8.12225ms)
+✔ worker external sandbox is request-scoped (readOnly=false) (2.15425ms)
+✔ worker external sandbox is request-scoped (readOnly=true) (5.291709ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ internal workers have a bounded execution timeout (9.711875ms)
+✔ every explicit level overrides the worker with its exact model and effort (7.833125ms)
+✔ L7 launch requests distinguish direct exceptional work from an evidenced L6 reasoning escalation (0.938666ms)
+✔ an explicit Astra level fails closed when Astra is absent from the catalog (1.347ms)
+✔ a stream failure after tool activity is reported, not silently duplicated or blocked (1.42825ms)
+✔ canonical final text is collected without deltas and commentary is streaming only (1.739375ms)
+✔ legacy null-phase and delta-only streams remain supported without conflating item IDs (1.593542ms)
+✔ partial answers and normalized progress text do not contaminate a canonical final handoff (0.77125ms)
+✔ conflicting or ambiguous final streams fail closed (3.646959ms)
+✔ read-only worker requests no-persist retrieval without writable product roots (0.567ms)
+✔ changelog source evidence is data while instruction and credential checks remain active (5.144375ms)
+✔ native worker reviewer true/undefined is forwarded without changing approval policy (0.803792ms)
+✔ native worker reviewer false/undefined is forwarded without changing approval policy (0.611375ms)
+✔ native worker reviewer false/user is forwarded without changing approval policy (0.553417ms)
+✔ native worker reviewer true/auto_review is forwarded without changing approval policy (0.311375ms)
+✔ native worker reviewer false/guardian_subagent is forwarded without changing approval policy (0.425792ms)
+✔ invalid worker reviewer fails before transport creation (0.491666ms)
+✔ native worker reviewer rejection propagates without fallback or retry (0.938375ms)
+✔ native reviewer denial prevents an unchanged worker retry after a transport failure (0.683583ms)
+✔ broad skills stay inactive for ordinary bounded engineering (1.369834ms)
+✔ each skill activates only at its named decision boundary (1.057792ms)
+✔ APPI enforcement obeys the selected scan and avoids recursive debug after a pass (1.082875ms)
+✔ Codex and Claude host instructions consume the narrow trigger policy (0.339125ms)
+✔ wait publishes transport readiness and accepts only the later handoff without workspace writes (81.337041ms)
+▶ capsule identity, parent relinquishment, schema and string fields fail closed
+  ✔ session (17.310166ms)
+  ✔ thread (16.948958ms)
+  ✔ workspace (16.418958ms)
+  ✔ parent ownership (22.296458ms)
+  ✔ version (17.854583ms)
+  ✔ unknown key (11.601125ms)
+  ✔ nested array value (18.737875ms)
+  ✔ control characters (36.490334ms)
+  ✔ missing array (27.414125ms)
+✔ capsule identity, parent relinquishment, schema and string fields fail closed (187.386ms)
+▶ malformed, oversized and invalid UTF-8 capsules fail closed
+  ✔ malformed (11.433917ms)
+  ✔ oversized (10.627917ms)
+  ✔ invalid UTF-8 (15.829084ms)
+✔ malformed, oversized and invalid UTF-8 capsules fail closed (38.604208ms)
+▶ preexisting ready/capsule files and symlinks are never overwritten or accepted
+  ✔ ready (3.146333ms)
+  ✔ capsule (4.129792ms)
+  ✔ ready symlink (4.064ms)
+  ✔ capsule symlink (5.41875ms)
+✔ preexisting ready/capsule files and symlinks are never overwritten or accepted (17.486958ms)
+✔ capsule symlink published after ready is rejected without reading its target (9.355125ms)
+✔ old capsule renamed after ready is rejected as stale (14.286625ms)
+▶ paths must be distinct absolute JSON paths outside the canonical workspace
+  ✔ relative (2.648292ms)
+  ✔ extension (2.587917ms)
+  ✔ same (1.955167ms)
+  ✔ inside (1.705375ms)
+  ✔ parent symlink (1.9045ms)
+  ✔ missing parent (1.374583ms)
+✔ paths must be distinct absolute JSON paths outside the canonical workspace (13.079709ms)
+✔ abort before readiness creates no marker or workspace files (2.734542ms)
+▶ abort preserves interruption and transport Error reasons by identity
+  ✔ before ready (2.960334ms)
+  ✔ after ready (9.162416ms)
+✔ abort preserves interruption and transport Error reasons by identity (12.595584ms)
+▶ abort after readiness and explicit cleanup stop waiting and remove only owned marker
+  ✔ signal (8.04175ms)
+  ✔ cleanup (8.175875ms)
+✔ abort after readiness and explicit cleanup stop waiting and remove only owned marker (16.714917ms)
+▶ cleanup preserves a foreign replacement or edited ready marker
+  ✔ edited in place (15.953625ms)
+  ✔ replacement (12.228292ms)
+✔ cleanup preserves a foreign replacement or edited ready marker (28.64175ms)
+✔ heartbeat and poll intervals are bounded and heartbeat errors clean up (22.252167ms)
+✔ quiet evidence climbs through continuation, realignment, final experiment, then bounded allow (1830.49925ms)
+✔ missing and legacy flights are corrected while blocked endpoints are labelled (1698.60725ms)
+✔ an absent executable flight receives a bounded corrective block (440.680583ms)
+✔ a fresh active plan is inert outside a launcher-marked Goal session (78.423125ms)
+✔ one workspace cannot host two concurrent Cruise Goal sessions (1124.085333ms)
+✔ an abandoned workspace lock has a documented bounded recovery lease (725.949584ms)
+✔ an active flight remains supervised across a long resumable session (326.0595ms)
+✔ changing flight-plan metadata cannot reset the supervision cycle (543.055916ms)
+✔ a resumed session starts with a clean supervisor baseline after a stall report (936.528166ms)
+✔ same normalized failure can trigger realignment without git evidence (341.566666ms)
+✔ corrupt scratch state fails open with an allow report and exit zero (406.175833ms)
+✔ runtime scratch does not write through a symlinked .cruise directory (253.902958ms)
+✔ host-specific plugin hooks activate and supervise Goal sessions (1.126667ms)
+✔ Codex prompt activation is exact and ignores non-Codex or non-Goal prompts (0.638375ms)
+✔ unsafe stall integers are invalid instead of defeating the block cap (0.770959ms)
+✔ malformed or schema-invalid frontmatter never activates supervision (0.309083ms)
+✔ the fenceless pilot artifact receives one bounded corrective intervention (337.763084ms)
+✔ a successful invalid-flight repair preserves its correction and block budget (367.471833ms)
+✔ invalid rewrites earn one correction each until the hard block cap (529.595666ms)
+✔ a valid repair after an unseen invalid hash at the cap cannot reset the exhausted cycle (569.166083ms)
+✔ Claude and Codex scratch files satisfy one bounded supervisor schema (328.918333ms)
+✔ adding the Claude host field preserves an existing pre-field supervision cycle (401.787792ms)
+✔ Flight v2 completion blocks stale gates, never executes oracle text, and allows fresh assurance (470.48725ms)
+✔ Flight contract churn cannot evade the absolute unassured-completion cap (573.172417ms)
+✔ new workspace evidence is progress and resets an active ladder (1.476917ms)
+✔ quiet turns climb once through realign, final experiment, and stall (0.71725ms)
+✔ an absolute completion-attempt cap cannot be reset by fingerprint churn (0.304875ms)
+✔ an invalid-flight correction replaces rather than duplicates a ladder intervention (0.403125ms)
+✔ returning to an earlier fingerprint is named as oscillation (0.1915ms)
+✔ repeated failures supervise a non-git workspace independently (0.200583ms)
+✔ signature-only supervision recovers when failure evidence changes or clears (0.193125ms)
+✔ an undeclared non-Git workspace fingerprint is unavailable (27.538542ms)
+✔ invalid flight rewrites do not hide real workspace progress (485.242875ms)
+✔ product fingerprints include HEAD and exact untracked contents (1156.126ms)
+✔ surface fingerprints ignore edits outside their repository-relative paths (251.603333ms)
+✔ workspace fingerprints exclude tracked and untracked secret files before content hashing (251.996583ms)
+✔ failure signatures ignore paths, line numbers, hex values, and whitespace (1.026834ms)
+✔ Codex supervisor state is schema-valid and bounds every retained history (1.044792ms)
+✔ supervisor scratch uses temp-then-rename atomic replacement (0.537167ms)
+✔ failed supervisor replacement cleans its unique temp file (0.590791ms)
+✔ CODEX_HOME overrides the default Codex home (11.963417ms)
+✔ rollout lookup globs the id suffix and its session_meta id matches (126.509584ms)
+✔ rollout lookup widens once, stays bounded, and treats missing trees as normal (30.021209ms)
+✔ A-H hostile matrix bounds every silent transport path and preserves C/F (713.05925ms)
+✔ a streaming long turn keeps resetting inactivity without a wall-clock ceiling (162.462333ms)
+✔ an unanswered human prompt remains suspended past the watchdog window (117.275083ms)
+✔ a normal fast run keeps stdout stable and leaves no Timeout resource (26.629542ms)
+✔ cumulative usage adds only positive high-watermark deltas (1.434458ms)
+✔ cached input and reasoning subsets are priced exactly once (1.163375ms)
+✔ Astra is recognized but has no speculative credit estimate (0.158625ms)
+✔ invalid invariants preserve raw evidence and make local accounting unknown (10.714708ms)
+✔ Goal outcomes map to the five user-facing lifecycle states (0.929375ms)
+To /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-user-reference-remote-z64jEc
+ * [new branch]      main -> main
+✔ user references append chronologically and changelog is a concise script-only inferred inventory (1191.928791ms)
+✔ missing upstream is reported truthfully while the detected commit remains visible (341.73975ms)
+✔ renames crossing the script boundary use new and delete actions (429.201042ms)
+✔ commit-triggered changelog update does not append a Goal reference (382.972875ms)
+✔ aborted and refused work appends only a content-free tombstone (115.375375ms)
+✔ write-only reference append refuses a symlink without altering its target (101.554041ms)
+✔ reference append is independent from an unsafe changelog target (102.873083ms)
+✔ commit-triggered changelog update refuses a symlink without touching its target (295.044083ms)
+✔ malformed and legacy regions recover without losing bytes or duplicating recovery blocks (234.869833ms)
+✔ valid legacy markers retain replacement behavior and surrounding bytes (10.482083ms)
+✔ recovery respects both existing and resulting document size bounds (40.152542ms)
+To /var/folders/25/mfwfyswn3fv3xk0pqjykygbc0000gn/T/cruise-user-reference-remote-G3VG2g
+ * [new branch]      main -> main
+✔ Git evidence excludes sensitive script paths before collecting patches (484.968ms)
+✔ capsules and schema-constrained handoffs enforce byte caps (4.72375ms)
+✔ bounded detailed worker findings retain a compact root continuation (9.009917ms)
+✔ a completed worker may report no blocker and its outcome survives continuation formatting (5.050167ms)
+✔ worker capsules fail closed before sensitive paths or credential material can be dispatched (2.227ms)
+✔ root handoff retains only the compact continuation contract (4.850292ms)
+✔ managed dispatch writes capsule, reserves quota, runs a fresh level, persists handoff, and releases (2.182916ms)
+✔ managed dispatch never exceeds three active workers and debug probes deduplicate (56.03775ms)
+✔ managed dispatch propagates the required L7 exceptional-consequence record (0.512833ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ shared dispatch ledger enforces three workers and evidence-gated debug waves across instances (103.27675ms)
+✔ managed dispatch surfaces reservation release failure (0.478875ms)
+✔ handoff parser rejects malformed, multiple-object, fenced, and trailing-text output (0.27275ms)
+✔ native handoff output schema matches the strict parser contract (0.448166ms)
+✔ managed dispatch consumes canonical final items and retains strict payload parsing (9.409042ms)
+ℹ tests 538
+ℹ suites 0
+ℹ pass 537
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15413.776292
+
+✖ failing tests:
+
+test at tests/simple-session.test.mjs:762:1
+✖ Goal bootstrap timeout cannot hang in diagnostic cleanup (164.943584ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(Date.now() - startedAt < 100)
+  
+      at TestContext.<anonymous> (file:///private/tmp/cruise-workspace-routing/tests/simple-session.test.mjs:816:10)
+      at async Test.run (node:internal/test_runner/test:1125:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

@@ -1,0 +1,27 @@
+[
+  {
+    "variant": "alias-resolver",
+    "pid": 33811,
+    "phase": "account/read",
+    "authenticated": null,
+    "started": false,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "error": "workspace routing discovery failed",
+    "code": -32603,
+    "childExitCode": 0,
+    "childSignal": null
+  },
+  {
+    "variant": "canonical-resolver",
+    "pid": 34145,
+    "phase": "complete",
+    "authenticated": true,
+    "started": true,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "rateLimitsAvailable": true,
+    "childExitCode": 0,
+    "childSignal": null
+  }
+]

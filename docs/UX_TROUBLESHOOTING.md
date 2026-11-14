@@ -47,6 +47,29 @@ reviewer actually rejects the action, preserve and report its stated reason;
 do not blindly retry or route around it. Reconcile existing authority and any
 still-missing decision through normal native approval controls.
 
+## Workspace routing discovery failed
+
+The exact generic `workspace routing discovery failed` error is reported as an
+`account-routing` failure. It is not automatically retried. Check authenticated
+account/backend connectivity first; the wording alone does not identify a local
+workspace-root discovery problem or prove a transient upstream or DNS failure.
+Explicit authentication, configuration and HTTP errors keep their own evidence;
+the generic resolver guidance does not replace those diagnoses.
+
+On macOS inside an outer sandbox, TCP 443 and UDP/TCP 53 access alone may leave
+the system resolver blocked. See [the narrow canonical mDNSResponder socket
+allowance and no-model preflight](EXTERNAL_SANDBOX.md#macos-resolver-access-and-control-plane-preflight).
+Do not broaden workspace roots, permit all Unix sockets, or use loopback TCP as
+a substitute. Preflight the control plane before research, and stop the probe
+transport afterward. Policy changes remain subject to native authorization;
+an actual denial must not be retried unchanged.
+
+`weekly quota authority unavailable` with this exact error means strict budgeting
+could not establish authority. Exit code 6 remains a budget pause, with no model
+launch or new account reservation. Resolve the account/backend or evidenced outer
+sandbox connectivity cause, then reconcile authoritative quota before resuming.
+Do not disable strict budgeting to bypass the pause.
+
 ## An agent asks to read an ordinary folder
 
 Task-relevant ordinary files in an authorized accessible folder do not need a

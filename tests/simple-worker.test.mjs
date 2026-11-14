@@ -110,6 +110,52 @@ test('worker failures report observed transport categories without inventing DNS
   );
 });
 
+test('only the exact generic routing error receives account-routing guidance', () => {
+  const failure = classifyWorkerFailure(Object.assign(new Error('workspace routing discovery failed'), { code: -32603 }));
+  assert.equal(failure.category, 'account-routing');
+  assert.match(workerFailureMessage(failure), /authenticated account\/backend connectivity/u);
+  assert.match(workerFailureMessage(failure), /canonical \/private\/var\/run\/mDNSResponder/u);
+  for (const message of [
+    'workspace routing discovery failed: authentication required',
+    'workspace routing discovery failed: invalid configuration',
+    'authentication failed',
+  ]) {
+    const qualified = classifyWorkerFailure(new Error(message));
+    assert.equal(qualified.category, 'unknown');
+    assert.doesNotMatch(workerFailureMessage(qualified), /mDNSResponder/u);
+  }
+  for (const httpStatusCode of [401, 403, 503]) {
+    const qualified = classifyWorkerFailure({ message: 'workspace routing discovery failed', httpStatusCode });
+    assert.equal(qualified.category, 'upstream');
+    assert.doesNotMatch(workerFailureMessage(qualified), /mDNSResponder/u);
+  }
+});
+
+test('generic account-routing startup failure stops the client without retry or model turn', async () => {
+  let attempts = 0;
+  let stops = 0;
+  const requests = [];
+  class RoutingClient extends EventEmitter {
+    async start() {}
+    async stop() { stops += 1; }
+    async request(method) {
+      requests.push(method);
+      throw Object.assign(new Error('workspace routing discovery failed'), { code: -32603 });
+    }
+  }
+  await assert.rejects(runSimpleWorker({
+    cwd: process.cwd(), task: 'Read the fixture.',
+    clientFactory: () => { attempts += 1; return new RoutingClient(); },
+  }), (error) => {
+    assert.equal(error.category, 'account-routing');
+    assert.equal(error.cause.code, -32603);
+    return true;
+  });
+  assert.equal(attempts, 1);
+  assert.equal(stops, 1);
+  assert.deepEqual(requests, ['thread/start']);
+});
+
 class FakeWorkerClient extends EventEmitter {
   constructor(events, catalog = null) {
     super();

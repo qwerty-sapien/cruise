@@ -1,0 +1,26 @@
+[
+  {
+    "label": "own",
+    "exitCode": 0,
+    "signal": null,
+    "permissionDenied": false
+  },
+  {
+    "label": "sibling",
+    "exitCode": 1,
+    "signal": null,
+    "permissionDenied": true
+  },
+  {
+    "label": "own-write",
+    "exitCode": 0,
+    "signal": null,
+    "permissionDenied": false
+  },
+  {
+    "label": "sibling-write",
+    "exitCode": 1,
+    "signal": null,
+    "permissionDenied": true
+  }
+]

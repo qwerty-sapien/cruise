@@ -1,0 +1,212 @@
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+▶ real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup
+  ✔ goal (503.006167ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ goal-error (440.390791ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+cruise: weekly quota authority unavailable: workspace routing discovery failed (account-routing). Check authenticated account/backend connectivity. On macOS inside an outer sandbox, check resolver access to the canonical /private/var/run/mDNSResponder Unix socket (docs/EXTERNAL_SANDBOX.md). This generic error does not establish a local workspace-root problem or prove DNS failure. Resolve the cause before resuming; do not weaken policy or retry a denial.
+  ✔ goal-routing (147.350041ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+  ✔ staged (434.733958ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+
+  ✔ debug (452.988292ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+
+  ✔ standalone (200.33475ms)
+✔ real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup (2180.152834ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+▶ managed CLI rejects invalid parent bindings before capsule writes or transport creation
+  ✔ missing-runtime (139.146ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ missing-session (134.629042ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ wrong-session (131.080542ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ wrong-cwd (134.535417ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ unregistered (133.912292ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ stale-lease (133.316834ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ expired-runtime (134.941167ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ inactive-runtime (137.83275ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ tampered-manifest (135.27025ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ worker-parent (139.2325ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ unsafe-runtime (151.9175ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ symlink-runtime (144.299875ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+  ✔ foreign-inherited-runtime (151.487167ms)
+✔ managed CLI rejects invalid parent bindings before capsule writes or transport creation (1802.900292ms)
+✔ ordinary local access cannot authorize a separate copy to an external URL (5.696959ms)
+✔ worker request handler auto-answers authorized local work without a human picker or delegation wording (12.14825ms)
+✔ worker handler preserves option effects, explicit denial evidence and native approval requests (1.379417ms)
+✔ worker handler skips secret paths and resolves each question independently (0.492958ms)
+✔ the npm package entry runs the Cruise CLI (122.567625ms)
+✔ app-server stderr is attributed across chunk boundaries (0.243625ms)
+✔ the public CLI accepts direct requests and rejects retired control-plane flags (0.862541ms)
+✔ the release exposes four public skills plus the internal context policy (4.747167ms)
+✔ attest is a prompt-free inspection command with machine-readable output (1.057833ms)
+✔ provider selectors are request-scoped, mutually exclusive, and default to Codex (0.201625ms)
+✔ workers receive ordinary text and an explicit, request-scoped level (143.410292ms)
+✔ external sandbox is explicit, Codex-only, and limited to Goal and worker commands (0.669208ms)
+Cruise worker: requested level=auto; routed minimum=L2; selected=L2.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+
+✔ external sandbox CLI option reaches hosted Goals and managed workers (328.426958ms)
+Cruise worker: requested level=auto; routed minimum=L7; selected=L7.
+
+Cruise worker: requested level=7; routed minimum=L6; selected=L7.
+
+Cruise worker: requested level=7; routed minimum=L6; selected=L7.
+
+✔ managed CLI routing requires explicit reasoning evidence for an L6-to-L7 transition (453.574375ms)
+✔ reasoning escalation evidence rejects incomplete or non-Codex worker routes (0.580083ms)
+✔ reference command delegates deterministic user-document writing without reading outputs (2.31ms)
+✔ direct changelog command delegates one exact commit through isolated scratch (0.819625ms)
+✔ Claude workers use the Claude adapter without touching Codex app-server (143.069583ms)
+Cruise: thread thread started (model unknown).
+Cruise: rollout pending; sessions: /Users/agent/.codex/sessions; resume: codex resume thread.
+Cruise: trace unresolved for thread thread; sessions: /Users/agent/.codex/sessions; resume: codex resume thread.
+✔ a completed ordinary Cruise task removes its transient ORIGIN control file (158.844167ms)
+✔ launcher runs commit observation around the hosted session before deleting scratch (149.296542ms)
+✔ the run-one-goal seam does not replace ORIGIN.md (149.851083ms)
+✔ a supervised Goal stall maps to exit code 3 (143.046375ms)
+✔ a fresh failed Goal never records an unchanged prior Flight as current (147.7865ms)
+cruise: Codex never started the native Goal turn within 10ms (thread=thread-timeout, model=gpt-5.6-sol, goal=active, elapsed=12ms).
+✔ a native Goal bootstrap timeout maps to exit code 4 (164.617375ms)
+cruise: transport inactivity observed
+✔ transport inactivity maps to exit code 5 (145.853542ms)
+✔ Claude start receives an exact runtime directory and removes terminal control files (144.848ms)
+✔ Claude resume preserves a blocked original request and does not reinvoke the Goal skill (309.943958ms)
+✔ Claude non-Goal runs reserve the workspace without activating Goal supervision (144.066583ms)
+✔ Codex Doctor checks transport, version, and effective installed Cruise content (0.449583ms)
+✔ Codex plugin freshness detects same-version source and cache drift (11.171125ms)
+✔ Claude Doctor checks the CLI, plugin, and authentication (0.174875ms)
+✔ native reviewer CLI is request-scoped and limited to Codex Goal and worker (0.578375ms)
+✔ launcher forwards injected native reviewer defaults and overrides to Goal and worker (1363.867166ms)
+✔ weekly selection chooses the window closest to 10,080 minutes (0.592709ms)
+✔ sparse rate-limit notifications merge without clearing prior values (0.134917ms)
+✔ a reset epoch establishes a new campaign baseline (13.219833ms)
+✔ two concurrent processes reserve atomically without oversubscription (58.675291ms)
+✔ dead old-process reservations are marked stale before a new reservation (7.679792ms)
+✔ the guard pauses before the cap and writes a resumable report (9.330833ms)
+✔ strict mode refuses an unmetered Goal (2.419541ms)
+▶ strict authority failures preserve pause containment and qualify routing guidance narrowly
+  ✔ account/read: workspace routing discovery failed (2.572959ms)
+  ✔ account/read: workspace routing discovery failed: authentication required (2.869ms)
+  ✔ account/read: workspace routing discovery failed: invalid configuration (2.76225ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed (2.106625ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed: authentication required (2.108292ms)
+  ✔ account/rateLimits/read: workspace routing discovery failed: invalid configuration (2.08875ms)
+✔ strict authority failures preserve pause containment and qualify routing guidance narrowly (15.168917ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=user; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ worker questions keep routine delegation internal in both profiles and mixed batches (13.017958ms)
+✔ worker native denials remain host decisions (0.156667ms)
+✔ worker approval EOF and missing selections never synthesize decisions or permissions (3.391458ms)
+✔ worker native decisions roundtrip and explicit permission choices remain effective (2.504083ms)
+✔ worker failures report observed transport categories without inventing DNS (0.7505ms)
+✔ only the exact generic routing error receives account-routing guidance (0.345167ms)
+✔ generic account-routing startup failure stops the client without retry or model turn (2.640083ms)
+✔ startup exit rejection is observed before start settles without masking the startup error (51.820667ms)
+✔ a pre-effect upstream failure retries once without durable retry state (1.409375ms)
+✔ model selection is untouched without an explicit level (0.514542ms)
+✔ worker forwards an explicit native output schema and omits it by default (0.56925ms)
+✔ worker transcript routes coordination internally and carries native evidence to its request handler (1.023834ms)
+✔ worker permissions channel failure propagates without a grant, denial, or retry (0.731458ms)
+✔ worker launch rejects secret material and sensitive-file access before starting a client (0.915125ms)
+✔ internal read-only workers cannot mutate the product workspace (0.362667ms)
+✔ worker external sandbox is request-scoped (readOnly=false) (0.545667ms)
+✔ worker external sandbox is request-scoped (readOnly=true) (0.421791ms)
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+Cruise worker: native approvals reviewer=auto_review; selection is not an approval result.
+✔ internal workers have a bounded execution timeout (5.258667ms)
+✔ every explicit level overrides the worker with its exact model and effort (2.856958ms)
+✔ L7 launch requests distinguish direct exceptional work from an evidenced L6 reasoning escalation (0.610417ms)
+✔ an explicit Astra level fails closed when Astra is absent from the catalog (0.451084ms)
+✔ a stream failure after tool activity is reported, not silently duplicated or blocked (0.356ms)
+✔ canonical final text is collected without deltas and commentary is streaming only (0.727459ms)
+✔ legacy null-phase and delta-only streams remain supported without conflating item IDs (0.953583ms)
+✔ partial answers and normalized progress text do not contaminate a canonical final handoff (0.409833ms)
+✔ conflicting or ambiguous final streams fail closed (2.081917ms)
+✔ read-only worker requests no-persist retrieval without writable product roots (0.447416ms)
+✔ changelog source evidence is data while instruction and credential checks remain active (2.553875ms)
+✔ native worker reviewer true/undefined is forwarded without changing approval policy (0.705209ms)
+✔ native worker reviewer false/undefined is forwarded without changing approval policy (0.223959ms)
+✔ native worker reviewer false/user is forwarded without changing approval policy (0.20525ms)
+✔ native worker reviewer true/auto_review is forwarded without changing approval policy (0.186875ms)
+✔ native worker reviewer false/guardian_subagent is forwarded without changing approval policy (0.186459ms)
+✔ invalid worker reviewer fails before transport creation (0.082416ms)
+✔ native worker reviewer rejection propagates without fallback or retry (0.554458ms)
+✔ native reviewer denial prevents an unchanged worker retry after a transport failure (0.3505ms)
+ℹ tests 104
+ℹ suites 0
+ℹ pass 104
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8325.210541

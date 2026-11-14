@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -170,4 +170,39 @@ test('strict mode refuses an unmetered Goal', async (t) => {
   );
   const report = JSON.parse(await readFile(join(root, '.cruise', 'BUDGET-PAUSE.json'), 'utf8'));
   assert.match(report.reason, /weekly rate-limit window is unavailable/u);
+});
+
+test('strict authority failures preserve pause containment and qualify routing guidance narrowly', async (t) => {
+  for (const method of ['account/read', 'account/rateLimits/read']) {
+    for (const message of ['workspace routing discovery failed',
+      'workspace routing discovery failed: authentication required',
+      'workspace routing discovery failed: invalid configuration']) {
+      await t.test(`${method}: ${message}`, async (t) => {
+        const { root, baseDirectory } = await quotaWorkspace(t, 'routing');
+        const guard = new QuotaGuard({ cwd: root, baseDirectory, strictBudget: true });
+        const client = new MockAccountClient(snapshot());
+        const request = client.request.bind(client);
+        client.request = async (name, params) => {
+          if (name === method) {
+            client.calls.push({ method: name, params });
+            throw Object.assign(new Error(message), { code: -32603 });
+          }
+          return request(name, params);
+        };
+        await assert.rejects(guard.start({ client }), (error) => {
+          assert.ok(error instanceof BudgetPauseError);
+          assert.equal(error.exitCode, 6);
+          assert.match(error.message, /weekly quota authority unavailable/u);
+          if (message === 'workspace routing discovery failed') {
+            assert.match(error.message, /account-routing.*authenticated account\/backend connectivity/u);
+          } else assert.doesNotMatch(error.message, /mDNSResponder/u);
+          return true;
+        });
+        assert.deepEqual(client.calls.map(call => call.method), ['account/read', 'account/rateLimits/read']);
+        await assert.rejects(lstat(baseDirectory), { code: 'ENOENT' });
+        await guard.release();
+        assert.equal(client.listenerCount('notification'), 0);
+      });
+    }
+  }
 });

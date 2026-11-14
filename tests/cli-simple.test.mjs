@@ -91,7 +91,7 @@ class ManagedParentTransport extends EventEmitter {
 }
 
 test('real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup', async (t) => {
-  for (const mode of ['goal', 'goal-error', 'staged', 'debug', 'standalone']) await t.test(mode, async (t) => {
+  for (const mode of ['goal', 'goal-error', 'goal-routing', 'staged', 'debug', 'standalone']) await t.test(mode, async (t) => {
     // Canonicalize BEFORE activation: /var and /private/var otherwise hide the conflict on macOS.
     const cwd = await realpath(await mkdtemp(join(tmpdir(), 'cruise-parent-integration-')));
     t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -112,12 +112,25 @@ test('real managed CLI joins Goal, staged and Debug parents with independent lea
       t.after(() => cleanupRuntimeSession(warmRuntime, { cwd, sessionId: parent.session_id }));
     }
     const parentLease = parentRuntime ? await readFile(workspaceLeasePath(cwd), 'utf8') : null;
+    const parentRuntimeSiblings = mode === 'goal-routing' ? await readdir(dirname(parentRuntime)) : null;
     const dispatch = new WorkerDispatchLedger({ cwd });
     let quota;
     let childEnv;
     const budgetClient = new ManagedParentTransport();
     const parentQuota = parentRuntime ? new QuotaGuard({ cwd, baseDirectory: join(cwd, 'quota-fixture'), strictBudget: true }) : null;
     if (parentQuota) await parentQuota.start({ client: budgetClient, goalId: parent.session_id });
+    const parentReservations = parentQuota ? await readFile(parentQuota.ledgerPath(), 'utf8') : null;
+    if (mode === 'goal-routing') {
+      const request = budgetClient.request.bind(budgetClient);
+      budgetClient.requests = [];
+      budgetClient.request = async (method, params) => {
+        if (method === 'account/read') {
+          budgetClient.requests.push({ method, params });
+          throw Object.assign(new Error('workspace routing discovery failed'), { code: -32603 });
+        }
+        return request(method, params);
+      };
+    }
     const workerClient = new ManagedParentTransport({ fail: mode === 'goal-error', onThread: async (params) => {
       assert.notEqual(childEnv.CRUISE_SESSION_ID, parent.session_id);
       assert.notEqual(childEnv.CRUISE_RUNTIME_DIR, parentRuntime);
@@ -165,11 +178,28 @@ test('real managed CLI joins Goal, staged and Debug parents with independent lea
           return quota;
         },
       });
-      if (mode === 'goal-error') await assert.rejects(run, /worker turn ended with status failed/u);
+      if (mode === 'goal-routing') assert.equal(await run, 6);
+      else if (mode === 'goal-error') await assert.rejects(run, /worker turn ended with status failed/u);
       else assert.equal(await run, 0);
     } finally {
       if (priorFlag === undefined) delete process.env.CRUISE_CLAUDE_GOAL;
       else process.env.CRUISE_CLAUDE_GOAL = priorFlag;
+    }
+    if (mode === 'goal-routing') {
+      const pause = JSON.parse(await readFile(join(cwd, '.cruise', 'BUDGET-PAUSE.json'), 'utf8'));
+      assert.match(pause.reason, /weekly quota authority unavailable: workspace routing discovery failed \(account-routing\)/u);
+      assert.deepEqual(workerClient.requests, []);
+      assert.deepEqual(budgetClient.requests.map(entry => entry.method), ['account/read', 'account/rateLimits/read']);
+      assert.equal(budgetClient.stopped, true);
+      assert.equal(budgetClient.listenerCount('notification'), 1); // Parent still owns its listener.
+      assert.deepEqual(JSON.parse(await readFile(dispatch.ledgerPath, 'utf8')).active, []);
+      assert.equal(await readFile(parentQuota.ledgerPath(), 'utf8'), parentReservations);
+      assert.equal(await readFile(workspaceLeasePath(cwd), 'utf8'), parentLease);
+      assert.equal(await readFile(join(parentRuntime, 'drafts', 'parent.txt'), 'utf8'), 'parent artifact');
+      assert.deepEqual(await readdir(dirname(parentRuntime)), parentRuntimeSiblings);
+      if (childEnv) await assert.rejects(lstat(childEnv.CRUISE_RUNTIME_DIR), { code: 'ENOENT' });
+      await parentQuota.release();
+      return;
     }
     assert.deepEqual(workerClient.requests.map(entry => entry.method), ['model/list', 'thread/start', 'turn/start']);
     const turn = workerClient.requests.at(-1).params;

@@ -20,6 +20,7 @@ export function nativeReviewerInstructions(reviewer) {
 const DNS_ERROR = /\b(?:EAI_AGAIN|EAI_NONAME|ENOTFOUND|DNS_PROBE_FINISHED_NXDOMAIN)\b|getaddrinfo/iu;
 const CONNECTION_ERROR = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up)\b|connection (?:closed|reset|refused)/iu;
 const UPSTREAM_ERROR = /response retries exhausted|responseTooManyFailedAttempts|inference stream|upstream/iu;
+export const ACCOUNT_ROUTING_GUIDANCE = 'Check authenticated account/backend connectivity. On macOS inside an outer sandbox, check resolver access to the canonical /private/var/run/mDNSResponder Unix socket (docs/EXTERNAL_SANDBOX.md). This generic error does not establish a local workspace-root problem or prove DNS failure. Resolve the cause before resuming; do not weaken policy or retry a denial.';
 
 function statusFrom(value) {
   for (const candidate of [
@@ -39,6 +40,10 @@ function statusFrom(value) {
 export function classifyWorkerFailure(value) {
   const message = String(value?.message ?? value ?? 'worker failed');
   const httpStatusCode = statusFrom(value);
+  // Only the unqualified generic error: retain explicit auth/config/HTTP evidence.
+  if (message === 'workspace routing discovery failed' && httpStatusCode === null) {
+    return Object.freeze({ category: 'account-routing', httpStatusCode, message });
+  }
   if (DNS_ERROR.test(message) || DNS_ERROR.test(String(value?.code ?? ''))) {
     return Object.freeze({ category: 'dns', httpStatusCode, message });
   }
@@ -53,7 +58,8 @@ export function classifyWorkerFailure(value) {
 
 export function workerFailureMessage(failure) {
   const suffix = failure.httpStatusCode === null ? '' : ` (HTTP ${failure.httpStatusCode})`;
-  return `Worker ${failure.category} failure${suffix}: ${failure.message}.`;
+  const guidance = failure.category === 'account-routing' ? ` ${ACCOUNT_ROUTING_GUIDANCE}` : '';
+  return `Worker ${failure.category} failure${suffix}: ${failure.message}.${guidance}`;
 }
 
 function retryable(failure) {

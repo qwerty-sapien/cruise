@@ -1,0 +1,65 @@
+[
+  {
+    "variant": "normal",
+    "pid": 34235,
+    "phase": "complete",
+    "authenticated": true,
+    "started": true,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "rateLimitsAvailable": true,
+    "childExitCode": 0,
+    "childSignal": null
+  },
+  {
+    "variant": "restricted-empty",
+    "pid": 34985,
+    "phase": "account/read",
+    "authenticated": null,
+    "started": false,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "error": "workspace routing discovery failed",
+    "code": -32603,
+    "childExitCode": 0,
+    "childSignal": null
+  },
+  {
+    "variant": "restricted-explicit",
+    "pid": 35268,
+    "phase": "account/read",
+    "authenticated": null,
+    "started": false,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "error": "workspace routing discovery failed",
+    "code": -32603,
+    "childExitCode": 0,
+    "childSignal": null
+  },
+  {
+    "variant": "restricted-loopback",
+    "pid": 35420,
+    "phase": "account/read",
+    "authenticated": null,
+    "started": false,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "error": "workspace routing discovery failed",
+    "code": -32603,
+    "childExitCode": 0,
+    "childSignal": null
+  },
+  {
+    "variant": "restricted-unix",
+    "pid": 35510,
+    "phase": "complete",
+    "authenticated": true,
+    "started": true,
+    "modelTurns": 0,
+    "catalogModels": 8,
+    "rateLimitsAvailable": true,
+    "childExitCode": 0,
+    "childSignal": null
+  }
+]
