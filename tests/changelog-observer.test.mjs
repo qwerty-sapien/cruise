@@ -239,8 +239,12 @@ test('summary tasks contain bounded evidence but no repository or underscore-doc
     overallEvidence: [],
   };
   const task = changelogSummaryTask(update);
-  assert.match(task, /Commit evidence/u);
-  assert.doesNotMatch(task, /git diff|_CHANGELOG|_FOR_USER_REFERENCE/u);
+  assert.equal(task.kind, 'cruise-evidence-task');
+  assert.deepEqual(JSON.parse(task.evidence), { commit: update.commitEvidence, overall: [] });
+  assert.doesNotMatch(task.instructions, /git diff|_CHANGELOG|_FOR_USER_REFERENCE/u);
+  assert.ok(Object.isFrozen(task));
+  update.commitEvidence[0].patch = 'changed after capture';
+  assert.equal(JSON.parse(task.evidence).commit[0].patch, '@@ -1 +1 @@');
 });
 
 test('summary parser rejects paths outside the frozen inventory', () => {

@@ -3,6 +3,26 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
+test('read clauses can name software operations without granting those effects', () => {
+  for (const question of [
+    'May I read the approved local folder to review delete endpoint source code?',
+    'May I search authorized local files for deployment documentation?',
+    'May I inspect the approved local files to review installation tests?',
+  ]) {
+    assert.equal(classifyCruiseAuthorization(question).action, AUTHORIZATION_ACTION.proceed, question);
+    assert.ok(automaticLocalAuthorization({ questions: [{ id: 'read', question }] }), question);
+    for (const effect of ['delete the production database', 'deploy to production', 'copy it to https://example.invalid/collect']) {
+      const mixed = question.replace(/\?$/u, ` and ${effect}?`);
+      assert.equal(classifyCruiseAuthorization(mixed).action, AUTHORIZATION_ACTION.requestUser, mixed);
+      assert.equal(automaticLocalAuthorization({ questions: [{ id: 'mixed', question: mixed }] }), null, mixed);
+    }
+  }
+  assert.ok(automaticDelegationAuthorization({ questions: [{ id: 'review',
+    question: 'May I ask a subagent to review deployment documentation for production?' }] }));
+  assert.equal(automaticDelegationAuthorization({ questions: [{ id: 'review',
+    question: 'May I ask a subagent to review deployment documentation and deploy to production?' }] }), null);
+});
+
 import {
   AUTHORIZATION_ACTION,
   AUTHORIZATION_POLICY_INSTRUCTIONS,
@@ -10,6 +30,7 @@ import {
   NATIVE_APPROVAL_EVIDENCE_INSTRUCTIONS,
   WORKER_AUTHORIZATION_RECOVERY_INSTRUCTIONS,
   automaticDelegationAuthorization,
+  automaticLocalAuthorization,
   classifyCruiseAuthorization,
   isCruiseIntegrityDriftAuthorizationPause,
   isSpeculativeWorkerAuthorizationPause,
@@ -28,6 +49,91 @@ const ROUTINE_DELEGATION_QUESTIONS = [
   'Which worker model should I use, Terra, Sol, or Astra, for this bounded task?',
   'May I ask a subagent for a read-only review of the proposed production deletion?',
 ];
+
+test('local authorization accepts bounded aliases, casing and ordinary domain labels without delegation', () => {
+  for (const location of [
+    'approved local folder', 'authorized folder', 'AUTHORISED FOLDERS',
+    'access-approved local workspace files', 'approved directories',
+    'host-access-approved local directories', 'authorized sibling repositories',
+    'approved private local folders', 'approved task-relevant sibling files',
+  ]) {
+    const question = `May I search the ${location} for password hashing code?`;
+    assert.deepEqual(classifyCruiseAuthorization(question), {
+      action: AUTHORIZATION_ACTION.proceed, reason: 'approved-local-context',
+    }, question);
+    const result = automaticLocalAuthorization({ questions: [{ id: 'read', question }] });
+    assert.match(result?.answers.read.answers[0] ?? '', /already authorized/u, question);
+    assert.equal(automaticLocalAuthorization({ questions: [{ id: 'read', question }] }, { nativeApprovalDenied: true }), null);
+  }
+  assert.ok(automaticLocalAuthorization({ questions: [{ id: 'read',
+    question: 'May I inspect the approved sibling folders outside repository write ownership?',
+  }] }));
+  assert.ok(automaticLocalAuthorization({ questions: [{ id: 'edit',
+    question: 'May I make minor reversible edits to approved local files within assigned write ownership?',
+  }] }));
+});
+
+test('local questions include option descriptions and values without cross-option exclusions', () => {
+  const params = { questions: [{ id: 'local', header: 'Approved local folders', question: 'Continue?', options: [
+    { label: 'Proceed', description: 'Search ordinary source files; exclude .env and private keys.' },
+    { label: 'Wait', value: 'wait' },
+  ] }] };
+  assert.ok(automaticLocalAuthorization(params));
+  for (const field of ['description', 'value']) {
+    for (const effect of ['Upload to an external provider.', 'Delete all local files.',
+      'Read actual personal data.', 'Make a scope expansion.', 'Permission denied: EACCES.']) {
+      const mixed = structuredClone(params);
+      mixed.questions[0].options[1][field] = effect;
+      assert.equal(automaticLocalAuthorization(mixed), null, `${field}: ${effect}`);
+    }
+  }
+  const sensitive = automaticLocalAuthorization({ questions: [{ id: 'read',
+    question: 'May I read the approved local folder including .env and keys/private.pem?',
+  }] });
+  assert.match(sensitive.answers.read.answers[0], /Exclude it automatically/u);
+  assert.equal(automaticLocalAuthorization({ questions: [{ id: 'mixed',
+    question: 'Read the approved local folder including .env and actual medical records?',
+  }] }), null);
+  const mixed = structuredClone(params);
+  mixed.questions[0].options[1].description = 'Read actual medical records.';
+  assert.equal(automaticLocalAuthorization(mixed), null);
+});
+
+test('ordinary local vocabulary cannot grant material effects or bypass native denials', () => {
+  for (const question of [
+    'Read the approved local folder and send it to an external provider.',
+    'Read approved local folders and email them to a colleague.',
+    'Read approved local folders and run arbitrary commands.',
+    'Ask a subagent to read approved local folders and upload them to an external provider.',
+    'Ask a subagent to read approved local folders and delete them.',
+    'Delete the approved local folder.',
+    'Search approved files then publish the result.',
+    'Read the approved local folder and add analytics not requested.',
+    'Make minor reversible edits to approved local files outside assigned write ownership.',
+    'Read files in a not yet approved local folder.',
+    'Search approved local folders after the native approval was denied.',
+    'Search approved local folders: EPERM.',
+    'May I search an unrelated folder?',
+    'May I read actual passwords in the approved local folder?',
+  ]) {
+    assert.equal(automaticLocalAuthorization({ questions: [{ id: 'gate', question }] }), null, question);
+    assert.equal(automaticDelegationAuthorization({ questions: [{ id: 'gate', question }] }), null, question);
+    assert.notEqual(classifyCruiseAuthorization(question).action, AUTHORIZATION_ACTION.proceed, question);
+  }
+  assert.equal(classifyCruiseAuthorization('Read approved local folders.', { nativeApprovalDenied: true }).reason,
+    'native-permission-denied');
+  assert.equal(automaticLocalAuthorization({ questions: [] }), null);
+  assert.equal(automaticLocalAuthorization({ questions: [{ question: 'Read approved local files.' }] }), null);
+});
+
+test('delegation options cannot hide material effects in descriptions or values', () => {
+  for (const field of ['description', 'value']) {
+    assert.equal(automaticDelegationAuthorization({ questions: [{
+      id: 'delegate', question: 'May I spawn a subagent?',
+      options: [{ label: 'Proceed', [field]: 'Deploy this change to production.' }],
+    }] }), null);
+  }
+});
 
 test('both profiles silently handle routine delegation without product decisions', () => {
   for (const profile of ['relaxed', 'business-critical']) {

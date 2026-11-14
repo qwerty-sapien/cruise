@@ -126,6 +126,7 @@ async function acquireWorkspace(input, now = Date.now(), baseDirectory) {
 export async function reserveCruiseWorkspace(input, {
   now = Date.now(),
   baseDirectory,
+  kind = 'goal',
 } = {}) {
   if (!workspaceMarkerPath(input) || typeof input?.session_id !== 'string' || !input.session_id) {
     return false;
@@ -151,6 +152,7 @@ export async function reserveCruiseWorkspace(input, {
       runtimeDirectory = await createRuntimeSession({
         cwd: input.cwd,
         sessionId: input.session_id,
+        kind,
         now,
         baseDirectory,
       });
@@ -164,6 +166,44 @@ export async function reserveCruiseWorkspace(input, {
     throw error;
   }
   return runtimeDirectory;
+}
+
+// Joining is read-only: a child must never refresh or release the root lease.
+export async function validateCruiseWorkerParent({ cwd, session_id: sessionId, runtime_dir: runtimeDirectory }, {
+  now = Date.now(),
+  baseDirectory,
+} = {}) {
+  try {
+    if (!sessionId || !runtimeDirectory) throw new Error('incomplete parent identity');
+    if (!safeDirectory(await lstat(DIRECTORY))) throw new Error('unsafe marker directory');
+    const path = workspaceMarkerPath({ cwd });
+    const metadata = await lstat(path);
+    if ((metadata.mode & 0o077) !== 0 ||
+        (typeof process.getuid === 'function' && metadata.uid !== process.getuid())) {
+      throw new Error('unsafe workspace reservation');
+    }
+    const workspace = await readSafeMarker(path);
+    if (workspace?.version !== 2 || workspace.cwd !== resolve(cwd) ||
+        workspace.session_id !== sessionId || typeof workspace.runtime_dir !== 'string' ||
+        !Number.isSafeInteger(workspace.activated_at) || workspace.activated_at > now ||
+        now - workspace.activated_at > MAX_WORKSPACE_LOCK_AGE_MS) {
+      throw new Error('parent does not hold a live workspace reservation');
+    }
+    // Staged Goal environments retain their warmup runtime. Validate both
+    // bindings by identity, not path equality; Debug has no Goal marker.
+    for (const directory of new Set([workspace.runtime_dir, runtimeDirectory])) {
+      const { manifest } = await validateRuntimeDirectory(directory, { cwd, sessionId, baseDirectory });
+      if (!['goal', 'debug', 'goal-warmup'].includes(manifest.kind) ||
+          manifest.state !== 'active' || manifest.recovery_expires_at <= now) {
+        throw new Error('parent runtime is not a live root');
+      }
+    }
+    return workspace;
+  } catch (cause) {
+    const error = new Error(`Invalid managed worker parent: ${cause.message}`, { cause });
+    error.code = 'CRUISE_WORKER_PARENT_INVALID';
+    throw error;
+  }
 }
 
 export async function activateGoalSession(input, {

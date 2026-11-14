@@ -7,6 +7,7 @@ import {
   rm,
   symlink,
   writeFile,
+  truncate,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +17,9 @@ import {
   USER_CHANGELOG_FILE,
   USER_REFERENCE_FILE,
   MAX_CHANGE_SUMMARY_LENGTH,
+  CHANGELOG_MAX_BYTES,
   prepareCommitChangelogUpdate,
+  writeCommitChangelog,
   userGoalStatus,
   writeUserChangelog,
   writeGoalUserDocuments,
@@ -310,4 +313,108 @@ test('commit-triggered changelog update refuses a symlink without touching its t
     commit: git(root, 'rev-parse', 'HEAD'),
   }), /regular file/iu);
   assert.equal(await readFile(target, 'utf8'), 'protected changelog prose\n');
+});
+
+function syntheticUpdate(root, commit = 'a'.repeat(40)) {
+  return { root, commit, shortCommit: commit.slice(0, 7), subject: 'Synthetic update',
+    committedAt: '2026-11-14T00:00:00Z', parent: null, baseline: null,
+    commitChanges: [], overallChanges: [] };
+}
+
+test('malformed and legacy regions recover without losing bytes or duplicating recovery blocks', async (t) => {
+  const markers = [
+    '<!-- CRUISE:SINCE-LAST-PUSH:START -->', '<!-- CRUISE:SINCE-LAST-PUSH:END -->',
+    '<!-- CRUISE:COMMIT-HISTORY:START -->', '<!-- CRUISE:COMMIT-HISTORY:END -->',
+  ];
+  const complete = markers.join('\n');
+  const fixtures = [
+    ['', 'empty'], ['User prose\r\nNo trailing newline', 'prose'],
+    [Buffer.from([0xff, 0x00, 0xc3, 0x0a]), 'non-UTF8'],
+    [markers.toReversed().join('\n'), 'reversed'],
+    ...markers.map((marker, index) => [complete.replace(marker, ''), `missing-${index}`]),
+    ...markers.map((marker, index) => [`${complete}\n${marker}`, `duplicate-${index}`]),
+    [`<!-- CRUISE:GENERATED:V2:START -->\n${complete}`, 'broken-recovery'],
+  ];
+  const root = await mkdtemp(join(tmpdir(), 'cruise-marker-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, USER_CHANGELOG_FILE);
+  const update = syntheticUpdate(root);
+  const options = { update, generatedAt: '2026-11-14T00:00:00Z' };
+  await writeCommitChangelog(options);
+  const initial = await readFile(path, 'utf8');
+  fixtures.push([initial.slice(0, initial.indexOf(markers[0])) + 'Legacy body\nTrailing user text', 'legacy-header']);
+  for (const [value, label] of fixtures) {
+    const before = Buffer.from(value);
+    await writeFile(path, before);
+    const recovered = [];
+    assert.equal(await writeCommitChangelog({ ...options, onRecovery: (metadata) => recovered.push(metadata) }), path);
+    const first = await readFile(path);
+    assert.deepEqual(first.subarray(0, before.length), before, label);
+    assert.deepEqual(recovered, [{ version: 2, action: 'appended', preservedBytes: before.length }], label);
+    await writeCommitChangelog({ ...options, onRecovery: (metadata) => recovered.push(metadata) });
+    assert.deepEqual(await readFile(path), first, label);
+    assert.equal(recovered.length, 1, label);
+    const suffix = Buffer.from('\nUser text after the recovered block\r\n');
+    await writeFile(path, Buffer.concat([first, suffix]));
+    await writeCommitChangelog({ ...options, update: syntheticUpdate(root, 'b'.repeat(40)) });
+    const second = await readFile(path);
+    assert.deepEqual(second.subarray(0, before.length), before, label);
+    assert.deepEqual(second.subarray(-suffix.length), suffix, label);
+    const active = second.subarray(before.length).toString('utf8');
+    assert.equal(active.split('<!-- CRUISE:GENERATED:V2:START -->').length - 1, 1, label);
+    assert.equal(active.split(`<!-- CRUISE:COMMIT:${update.commit} -->`).length - 1, 1, label);
+    assert.match(active, new RegExp(`CRUISE:COMMIT:${'b'.repeat(40)}`), label);
+  }
+});
+
+test('valid legacy markers retain replacement behavior and surrounding bytes', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-valid-markers-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const options = { update: syntheticUpdate(root), generatedAt: 'first' };
+  const path = await writeCommitChangelog(options);
+  const prefix = Buffer.from([0xff, 0x0a]);
+  const suffix = Buffer.from('\r\nUser trailing text');
+  await writeFile(path, Buffer.concat([prefix, await readFile(path), suffix]));
+  await writeCommitChangelog({ ...options, generatedAt: 'second', onRecovery: () => assert.fail('valid markers must not recover') });
+  const result = await readFile(path);
+  assert.deepEqual(result.subarray(0, prefix.length), prefix);
+  assert.deepEqual(result.subarray(-suffix.length), suffix);
+  assert.match(result.toString(), /Generated: second/u);
+  assert.doesNotMatch(result.toString(), /GENERATED:V2|Generated: first/u);
+});
+
+test('recovery respects both existing and resulting document size bounds', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-marker-size-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, USER_CHANGELOG_FILE);
+  await writeFile(path, '');
+  for (const size of [CHANGELOG_MAX_BYTES + 1, CHANGELOG_MAX_BYTES - 1]) {
+    await truncate(path, size);
+    const before = await readFile(path);
+    await assert.rejects(writeCommitChangelog({ update: syntheticUpdate(root) }), /safety bound/u);
+    assert.deepEqual(await readFile(path), before);
+  }
+});
+
+test('Git evidence excludes sensitive script paths before collecting patches', async (t) => {
+  const root = await repository(t);
+  // Synthetic index entries only: no sensitive files or real credentials are opened.
+  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+    cwd: root, input: 'SYNTHETIC_EXCLUDED_BLOB\n', encoding: 'utf8',
+  }).trim();
+  for (const path of ['.env.mjs', 'secrets/fixture.mjs', 'config/credentials.mjs', 'private-key.mjs']) {
+    git(root, 'update-index', '--add', '--cacheinfo', `100644,${blob},${path}`);
+  }
+  await writeFile(join(root, 'safe.mjs'), 'export const quotedPath = "config/credentials.json";\n');
+  git(root, 'add', 'safe.mjs');
+  git(root, 'commit', '-m', 'synthetic path filtering');
+  const update = await prepareCommitChangelogUpdate({ cwd: root, commit: git(root, 'rev-parse', 'HEAD') });
+  for (const inventory of [update.commitChanges, update.overallChanges]) {
+    assert.deepEqual(inventory, [{ path: 'safe.mjs', action: 'new' }]);
+  }
+  for (const evidence of [update.commitEvidence, update.overallEvidence]) {
+    assert.deepEqual(evidence.map(({ path }) => path), ['safe.mjs']);
+    assert.match(evidence[0].patch, /config\/credentials.json/u);
+    assert.doesNotMatch(JSON.stringify(evidence), /SYNTHETIC_EXCLUDED_BLOB/u);
+  }
 });

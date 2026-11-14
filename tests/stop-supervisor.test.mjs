@@ -69,6 +69,9 @@ function invokeProcess(cwd, overrides = {}, {
     ...overrides,
   };
   const env = { ...process.env };
+  // Fixture hooks must not inherit the Cruise session running this test suite.
+  delete env.CRUISE_RUNTIME_DIR;
+  delete env.CRUISE_SESSION_ID;
   if (goalSession) {
     env.CRUISE_CLAUDE_GOAL = '1';
     const key = `${cwd}\u0000${input.session_id}`;

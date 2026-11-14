@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { Readable } from "node:stream";
 import test from "node:test";
 
@@ -14,6 +14,7 @@ import {
   wrapTerminalText,
 } from "../scripts/lib/picker.mjs";
 import { createLineReader } from "../scripts/lib/line-input.mjs";
+import { answerApproval, nativeApprovalOptions } from "../scripts/lib/simple-session.mjs";
 
 class FakeInput extends EventEmitter {
   constructor({ isTTY = true, isRaw = false, readableFlowing = null } = {}) {
@@ -350,4 +351,37 @@ test("one shared line reader preserves picker, free-text, and picker answers", a
   assert.equal(first.index, 0);
   assert.equal(freeText, "custom requirement");
   assert.equal(second.index, 1);
+});
+
+test("native approvals drain queued decisions before reporting real closed-stream EOF", async () => {
+  const input = Readable.from(["2\n1\n"]);
+  const lineReader = createLineReader({ input });
+  const output = new FakeOutput({ isTTY: false });
+  await once(input, "end");
+  assert.equal(input.readableEnded, true);
+  const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "check.mjs"] } };
+  const params = { availableDecisions: ["decline", amendment, "cancel"] };
+  try {
+    assert.equal(await answerApproval(params, { pickOne, input, output, lineReader }), amendment);
+    assert.equal(await answerApproval(params, { pickOne, input, output, lineReader }), "decline");
+    await assert.rejects(answerApproval(params, { pickOne, input, output, lineReader }), {
+      code: "CRUISE_APPROVAL_CHANNEL_UNAVAILABLE", reason: "eof",
+    });
+    assert.doesNotMatch(output.text(), /\[object Object\]/u);
+  } finally {
+    lineReader.close();
+  }
+});
+
+test("TTY native approval selection keeps structured values and explicit Escape cancellation", async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["node", "check.mjs"] } };
+  const pending = pickOne({ title: "Approve", options: nativeApprovalOptions(["accept", amendment, "cancel"]), input, output });
+  input.emit("keypress", "2", { name: "2" });
+  assert.equal((await pending).value, amendment);
+  const cancelled = answerApproval({}, { pickOne, input, output });
+  input.emit("keypress", "\u001b", { name: "escape" });
+  assert.equal(await cancelled, "cancel");
+  assert.equal(input.listenerCount("keypress"), 0);
 });

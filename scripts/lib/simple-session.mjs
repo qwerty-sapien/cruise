@@ -1,3 +1,4 @@
+import { resolveApprovalsReviewer, nativeReviewerInstructions } from './simple-worker.mjs';
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from './release-policy.mjs';
 import { COLLABORATIVE_GIT_SYNC_INSTRUCTIONS } from './git-sync-policy.mjs';
 import { EventEmitter } from 'node:events';
@@ -101,11 +102,12 @@ const CONTEXT_STATE_FILES = Object.freeze([
   'BUDGET-PAUSE.json',
   'artifacts/',
 ]);
-// Slow/queued native startup is not evidence of failure. Operators may opt in
-// to a finite deadline; process exit, cancellation and quota checks still apply.
-export const DEFAULT_FIRST_TURN_DEADLINE_MS = 0;
+// Goal metadata is not evidence of inference. Bound idle startup by default;
+// an observed turn uses the normal transport/progress watchdog instead.
+export const DEFAULT_FIRST_TURN_DEADLINE_MS = 30_000;
 export function resolveFirstTurnDeadlineMs(value = process.env.CRUISE_GOAL_BOOTSTRAP_TIMEOUT_MS) {
-  if (value === undefined || value === null || value === 'off') return DEFAULT_FIRST_TURN_DEADLINE_MS;
+  if (value === undefined || value === null) return DEFAULT_FIRST_TURN_DEADLINE_MS;
+  if (value === 'off') return 0;
   const milliseconds = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;
   if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > 2_147_483_647) {
     throw new TypeError('Goal bootstrap timeout must be an integer from 0 through 2147483647 milliseconds (0 disables it).');
@@ -250,14 +252,16 @@ export function automaticGoalAuthorization(params = {}, { nativeApprovalDenied =
     const visible = [
       question?.header ?? '',
       question?.question ?? '',
-      ...options.map(optionLabel),
-    ].join(' ');
+      ...options.flatMap((option) => typeof option === 'string'
+        ? [option] : [option?.label, option?.description, option?.value]),
+    ].filter((value) => typeof value === 'string').join('\n');
     const boundary = classifyCruiseAuthorization(visible);
     if (
       typeof question?.id !== 'string' ||
       question.id.length === 0 ||
       MATERIAL_GOAL_DECISION.test(visible) ||
       boundary.action === AUTHORIZATION_ACTION.requestUser ||
+      boundary.reason === 'native-permission-denied' ||
       (
         boundary.action === AUTHORIZATION_ACTION.nativePermissions &&
         (
@@ -337,18 +341,51 @@ async function answerUserInput(params, { pickOne, readLine, input, output, lineR
   return { answers };
 }
 
-async function answerApproval(params, { pickOne, input, output, lineReader }) {
+export class CruiseApprovalChannelUnavailableError extends Error {
+  constructor(reason = 'missing-selection') {
+    super(`Cruise approval-channel-unavailable: the native approval input channel (stdin/host picker) is unavailable (${reason}). Invoke Cruise with an interactive approval channel or host supervision under the existing task authorization. No approval or refusal was recorded.`);
+    this.name = 'CruiseApprovalChannelUnavailableError';
+    this.code = 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE';
+    this.category = 'approval-channel-unavailable';
+    this.reason = reason;
+  }
+}
+
+export function nativeApprovalOptions(decisions = ['accept', 'decline']) {
+  const labels = {
+    accept: 'Accept',
+    acceptForSession: 'Accept for this session',
+    decline: 'Decline',
+    cancel: 'Cancel this turn',
+  };
+  return decisions.map((value) => {
+    let label;
+    if (typeof value === 'string') label = labels[value] ?? value;
+    else if (value?.acceptWithExecpolicyAmendment) {
+      label = `Accept with command policy amendment: ${JSON.stringify(value.acceptWithExecpolicyAmendment)}`;
+    } else if (value?.applyNetworkPolicyAmendment) {
+      label = `Apply network policy amendment: ${JSON.stringify(value.applyNetworkPolicyAmendment)}`;
+    } else label = `Native decision: ${JSON.stringify(value)}`;
+    return { label, value };
+  });
+}
+
+export async function answerApproval(params = {}, { pickOne, input, output, lineReader }) {
+  if (typeof pickOne !== 'function') throw new CruiseApprovalChannelUnavailableError('missing-picker');
   const selection = await pickOne({
     title: params.reason ?? params.command ?? 'Approve this action?',
-    options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
-      label: String(value),
-      value,
-    })),
+    options: nativeApprovalOptions(params.availableDecisions ?? undefined),
     input,
     output,
     lineReader,
   });
-  return selectionValue(selection) ?? 'decline';
+  if (selection?.status === 'cancelled') {
+    if (['q', 'escape', 'ctrl-c'].includes(selection.reason)) return 'cancel';
+    throw new CruiseApprovalChannelUnavailableError(selection.reason ?? 'missing-selection');
+  }
+  const decision = selectionValue(selection);
+  if (decision === null) throw new CruiseApprovalChannelUnavailableError();
+  return decision;
 }
 
 /**
@@ -432,6 +469,7 @@ export class SimpleCruiseSession extends EventEmitter {
     readLine,
     lineReader = null,
     input = process.stdin,
+    approvalsReviewer,
     output = process.stdout,
     errorOutput = process.stderr,
     supervisor = new GoalSupervisor(),
@@ -440,6 +478,7 @@ export class SimpleCruiseSession extends EventEmitter {
     }),
     requireAssurance = false,
     planOnly = false,
+    externalSandbox = false,
     captureFingerprint = captureWorkspaceFingerprint,
     readPlan = inspectFlightPlan,
     firstTurnDeadlineMs = undefined,
@@ -462,9 +501,16 @@ export class SimpleCruiseSession extends EventEmitter {
       throw new TypeError('client, cwd, prompt, skill, and skillPath are required');
     }
     this.client = client;
+    if (typeof externalSandbox !== 'boolean') throw new TypeError('externalSandbox must be a boolean');
+    if (externalSandbox && skill !== 'goal') throw new TypeError('externalSandbox requires a Codex Goal');
+    this.externalSandbox = externalSandbox;
     this.cwd = cwd;
     this.prompt = prompt;
     this.skill = skill;
+    if (skill !== 'goal' && approvalsReviewer !== undefined) {
+      throw new TypeError('--approvals-reviewer is supported only by Codex Goal and worker.');
+    }
+    this.approvalsReviewer = skill === 'goal' ? resolveApprovalsReviewer(approvalsReviewer, { input }) : undefined;
     this.skillPath = skillPath;
     this.goalPreparationOnly = skill === 'goal' && (planOnly || isPreparationOnlyGoalPrompt(prompt));
     this.pickOne = pickOne;
@@ -511,6 +557,8 @@ export class SimpleCruiseSession extends EventEmitter {
     this.turnId = null;
     this.pending = null;
     this.earlyTurnResults = new Map();
+    this.settledTurnIds = new Set();
+    this.nativeGoalReconcileTimer = null;
     this.nativeGoalTurnDeadline = null;
     this.nativeGoalTurnHeartbeat = null;
     this.nativeGoalWatchdogPaused = false;
@@ -551,11 +599,12 @@ export class SimpleCruiseSession extends EventEmitter {
           goalId: this.runtimeDirectory ?? `cruise-${this.skill}`,
         });
       }
-      if (this.skill === 'goal') this.errorOutput.write('Cruise: app-server started.\n');
+      if (this.skill === 'goal') this.errorOutput.write(`Cruise: app-server started.\nCruise: native approvals reviewer=${this.approvalsReviewer}; selection is not an approval result.\n`);
       const started = await this.waitForStartup(this.client.request('thread/start', {
         cwd: this.cwd,
         runtimeWorkspaceRoots: [],
         approvalPolicy: 'on-request',
+        ...(this.approvalsReviewer === undefined ? {} : { approvalsReviewer: this.approvalsReviewer }),
         sandbox: 'workspace-write',
         serviceName: 'cruise',
         ephemeral: false,
@@ -578,11 +627,14 @@ export class SimpleCruiseSession extends EventEmitter {
           'This launcher records Goal user references automatically; do not run cruise reference from the hosted task.',
           'Do not create Cruise run-control files, approval digests, archives, or YAML workflow state. FLIGHT.md frontmatter is an advisory note, not workflow authority.',
           'Use normal Codex approvals and report failures factually.',
+          ...(this.externalSandbox ? [this.externalSandboxInstructions()] : []),
+          ...(this.approvalsReviewer === undefined ? [] : [nativeReviewerInstructions(this.approvalsReviewer)]),
           'Use Cruise context-view for repository retrieval so .env, credential, secret, and private-key exclusions are enforced before access.',
           skillTriggerInstructions(),
           ...(this.skill === 'goal'
             ? [
                 'The root remains the Sol-high coordinator, integrator, and final reviewer. For each ready micro-goal, invoke `cruise worker --managed` with one bounded task, its classified complexity, and the required ownership, evidence, range, and verification fields. Let Cruise enforce consequence floors; use an explicit level only as a stronger override. Keep ownership disjoint, cap active workers at three, consume only `.cruise/HANDOFF.md`, its changed-path summary, and focused evidence, then let the ephemeral worker close. Debug starts with at most three evidence-distinct probes and expands only after confirmed evidence.',
+                'The managed CLI starts a separate Codex control-plane transport. If its startup diagnostic reports an actual OS sandbox permission failure before a worker thread starts, request host-native approval for the exact bounded CLI command with its task justification under the existing user authorization. Keep the worker thread read-only when requested. Do not replace native approval with a new Cruise consent question. An OS sandbox failure is distinct from an automatic approval reviewer rejection; honor an actual rejection and never blindly retry it.',
               ]
             : []),
           ...(this.skill === 'goal' ? [AUTONOMOUS_GOAL_INSTRUCTIONS] : []),
@@ -637,8 +689,10 @@ export class SimpleCruiseSession extends EventEmitter {
         await this.updateGoalMode('plan');
         const goalActivated = deferred();
         const nativeTurn = this.waitForNativeGoalTurn(goalActivated.promise);
+        nativeTurn.catch(() => {});
         try {
-          await this.waitForStartup(this.activateGoal());
+          const activation = this.waitForStartup(this.activateGoal());
+          await Promise.race([activation, nativeTurn.then(() => activation)]);
         } catch (error) {
           goalActivated.resolve();
           this.pending?.reject(error);
@@ -823,6 +877,7 @@ export class SimpleCruiseSession extends EventEmitter {
       throw error;
     } finally {
       this.stopping = true;
+      this.startupAbortController.abort(new Error('Cruise session stopped.'));
       this.client.off?.('request', this.onRequest);
       this.client.off?.('notification', this.onNotification);
       this.client.off?.('exit', this.onExit);
@@ -1075,15 +1130,21 @@ export class SimpleCruiseSession extends EventEmitter {
   }
 
   async reactivateCompletedGoal(goal, instructions) {
+    // Native reactivation may start a turn before an explicit turn/start.
+    await this.updateGoalMode('default');
     const activated = deferred();
-    const nativeTurn = this.waitForNativeGoalTurn(activated.promise);
+    const nativeTurn = this.waitForNativeGoalTurn(activated.promise, {
+      mode: 'default', instructions,
+    });
+    nativeTurn.catch(() => {});
     try {
-      const result = await this.client.request('thread/goal/set', {
-      origin: 'automatic',
+      const mutation = this.waitForStartup(this.client.request('thread/goal/set', {
+        origin: 'automatic',
         threadId: this.threadId,
         objective: `${goal.objective}\n\nCompletion correction:\n${instructions}`,
         status: 'active',
-      });
+      }));
+      const result = await Promise.race([mutation, nativeTurn.then(() => mutation)]);
       this.goal = result?.goal ?? null;
       if (this.goal?.status !== 'active') {
         throw new Error('Codex did not reactivate the unassured Goal.');
@@ -1091,6 +1152,7 @@ export class SimpleCruiseSession extends EventEmitter {
       activated.resolve();
       return await nativeTurn;
     } catch (error) {
+      this.startupAbortController.abort(error);
       activated.resolve();
       this.pending?.reject(error);
       await nativeTurn.catch(() => {});
@@ -1188,6 +1250,15 @@ export class SimpleCruiseSession extends EventEmitter {
     return result;
   }
 
+  externalSandboxInstructions() {
+    return 'The operator explicitly selected --external-sandbox and declares that an outer sandbox is already enforced. Cruise cannot prove that boundary is correct. Pass --external-sandbox to managed workers only within the same enforced outer boundary; never infer isolation from a fresh directory. Plan work and read-only workers must remain read-only: do not mutate product files, and the outer sandbox must enforce those bounds. External sandbox policy alone supplies no read-only guarantee. Preserve normal native approvals and reviewer denials; never use this mode as an automatic fallback after a permission failure.';
+  }
+
+  turnSandboxPolicy(readOnly = false) {
+    if (this.externalSandbox) return { type: 'externalSandbox', networkAccess: 'restricted' };
+    return readOnly ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [this.cwd] };
+  }
+
   goalTurnSettings(mode) {
     const collaborationMode = { mode };
     const model = this.rootRequest?.model ?? this.threadModel;
@@ -1201,6 +1272,10 @@ export class SimpleCruiseSession extends EventEmitter {
         developer_instructions: [
           COLLABORATIVE_GIT_SYNC_INSTRUCTIONS,
           AUTONOMOUS_GOAL_INSTRUCTIONS,
+          ...(this.externalSandbox ? [this.externalSandboxInstructions(),
+            ...(mode === 'plan' ? ['This is read-only Plan mode. Analyze and plan only; do not edit product files or execute mutations.'] : []),
+          ] : []),
+          nativeReviewerInstructions(this.approvalsReviewer),
           `Original user request (scope source):\n${this.prompt}`,
           ...(this.bootstrapHandoff ? [this.bootstrapHandoff] : []),
         ].join(' '),
@@ -1208,9 +1283,8 @@ export class SimpleCruiseSession extends EventEmitter {
     }
     return {
       collaborationMode,
-      sandboxPolicy: mode === 'plan'
-        ? { type: 'readOnly' }
-        : { type: 'workspaceWrite', writableRoots: [this.cwd] },
+      approvalsReviewer: this.approvalsReviewer,
+      sandboxPolicy: this.turnSandboxPolicy(mode === 'plan'),
     };
   }
 
@@ -1255,8 +1329,9 @@ export class SimpleCruiseSession extends EventEmitter {
         cwd: this.cwd,
         runtimeWorkspaceRoots: [],
         approvalPolicy: 'on-request',
+        ...(this.approvalsReviewer === undefined ? {} : { approvalsReviewer: this.approvalsReviewer }),
         ...(goalSettings ?? {
-          sandboxPolicy: { type: 'workspaceWrite', writableRoots: [this.cwd] },
+          sandboxPolicy: this.turnSandboxPolicy(),
         }),
       });
       if (this.pending === completion) {
@@ -1284,6 +1359,18 @@ export class SimpleCruiseSession extends EventEmitter {
     if (this.nativeGoalTurnDeadline !== null) {
       clearTimeout(this.nativeGoalTurnDeadline);
       this.nativeGoalTurnDeadline = null;
+    }
+  }
+
+  adoptNativeGoalTurn(turn) {
+    if (!turn?.id || this.settledTurnIds.has(turn.id) || !this.pending || this.nativeGoalTurnTimedOut) return;
+    if (this.turnId && this.turnId !== turn.id) return;
+    this.nativeGoalTurnStarted = true;
+    this.clearNativeGoalTurnDeadline();
+    this.turnId = turn.id;
+    this.resolveEarlyTurnResult(turn.id);
+    if (['completed', 'failed', 'interrupted'].includes(turn.status)) {
+      this.settleTurn(turn.id, { turn });
     }
   }
 
@@ -1367,11 +1454,18 @@ export class SimpleCruiseSession extends EventEmitter {
     }));
   }
 
-  async waitForNativeGoalTurn(goalActivated = Promise.resolve()) {
+  async waitForNativeGoalTurn(goalActivated = Promise.resolve(), {
+    mode = 'plan', instructions = GOAL_BOOTSTRAP_INSTRUCTIONS,
+  } = {}) {
     this.turnAgentText = '';
     this.turnNativeApprovalDenied = false;
     const completion = deferred();
     completion.promise.catch(() => {});
+    let settled = false;
+    for (const key of ['resolve', 'reject']) {
+      const finish = completion[key];
+      completion[key] = value => { settled = true; finish(value); };
+    }
     this.turnId = null;
     this.pending = completion;
     this.nativeGoalTurnWaiting = true;
@@ -1380,13 +1474,57 @@ export class SimpleCruiseSession extends EventEmitter {
     this.nativeGoalTurnStarted = false;
     this.nativeGoalTurnTimedOut = false;
     this.nativeGoalCleanupCancelled = null;
+    let startRequested = false;
+    const live = () => !settled && this.pending === completion && !this.nativeGoalTurnTimedOut;
+    const read = (method, params) => this.waitWithinBootstrapCleanup(
+      this.client.request(method, params), this.firstTurnCleanupDeadlineMs,
+      `${method} during native Goal reconciliation`,
+    );
+    const reconcile = async () => {
+      if (!live()) return;
+      const metadata = await read('thread/read', { threadId: this.threadId, includeTurns: false });
+      if (!live()) return;
+      const history = await read('thread/turns/list', {
+        threadId: this.threadId, limit: 20, sortDirection: 'desc', itemsView: 'summary',
+      });
+      if (!live()) return;
+      if (!Array.isArray(history?.data)) throw new Error('Codex returned invalid native Goal turn history.');
+      // Only the latest turn can belong to this activation. Older completed
+      // turns (including the turn that caused reactivation) are never replayed.
+      const turn = this.turnId
+        ? history.data.find(candidate => candidate.id === this.turnId)
+        : history.data[0];
+      this.adoptNativeGoalTurn(turn);
+      if (!live()) return;
+      const status = metadata?.thread?.status?.type;
+      if (!['active', 'idle', 'notLoaded'].includes(status)) {
+        throw new Error(`Codex native Goal thread status is ${String(status ?? 'missing')}.`);
+      }
+      if (!this.nativeGoalTurnStarted && !startRequested && status !== 'active') {
+        // Set the guard before sending: a lost reply is ambiguous acceptance,
+        // never permission to retry. History/notifications can still adopt it.
+        startRequested = true;
+        this.errorOutput.write(`Cruise: starting explicit ${mode === 'plan' ? 'Plan bootstrap' : 'Goal correction'} turn.\n`);
+        void this.client.request('turn/start', {
+          threadId: this.threadId,
+          input: [{ type: 'text', text: instructions, text_elements: [] }],
+          cwd: this.cwd, runtimeWorkspaceRoots: [], approvalPolicy: 'on-request',
+          ...this.goalTurnSettings(mode),
+        }).then(response => {
+          if (live()) this.adoptNativeGoalTurn(response?.turn);
+        }, error => { if (live()) completion.reject(error); });
+      }
+      if (live()) this.nativeGoalReconcileTimer = setTimeout(() => {
+        this.nativeGoalReconcileTimer = null;
+        void reconcile().catch(error => { if (live()) completion.reject(error); });
+      }, 250);
+    };
     try {
-      await goalActivated;
       if (!this.nativeGoalTurnStarted && this.pending === completion) {
         const startedAt = Date.now();
         if (this.startupHeartbeatMs > 0) {
           this.nativeGoalTurnHeartbeat = setInterval(() => {
-            this.errorOutput.write(`Cruise: still waiting for native Goal startup; elapsed=${formatDuration(Date.now() - startedAt)}, thread=${this.threadId}. No duplicate execution will be started; awaiting the native turn.\n`);
+            this.errorOutput.write(`Cruise: still waiting for native Goal startup; elapsed=${formatDuration(Date.now() - startedAt)}, thread=${this.threadId}. Reconciling native turn history; no start request will be retried.\n`);
           }, this.startupHeartbeatMs);
           this.nativeGoalTurnHeartbeat.unref?.();
         }
@@ -1397,8 +1535,22 @@ export class SimpleCruiseSession extends EventEmitter {
           }, this.firstTurnDeadlineMs);
         }
       }
+      await Promise.race([goalActivated, completion.promise]);
+      if (live()) {
+        const poll = () => {
+          this.nativeGoalReconcileTimer = null;
+          void reconcile().catch(error => { if (live()) completion.reject(error); });
+        };
+        // A delivered start is already authoritative; give its normal completion
+        // notification a chance before hydrating a bounded history page.
+        if (this.nativeGoalTurnStarted) this.nativeGoalReconcileTimer = setTimeout(poll, 250);
+        else poll();
+      }
       return await completion.promise;
     } finally {
+      if (this.nativeGoalReconcileTimer !== null) clearTimeout(this.nativeGoalReconcileTimer);
+      this.nativeGoalReconcileTimer = null;
+      this.cancelNativeGoalCleanup(new Error('Native Goal reconciliation finished.'));
       this.clearNativeGoalTurnDeadline();
       if (this.pending === completion) {
         this.pending = null;
@@ -1414,18 +1566,25 @@ export class SimpleCruiseSession extends EventEmitter {
     const early = this.earlyTurnResults.get(turnId);
     if (!early || !this.pending || this.turnId !== turnId) return;
     this.earlyTurnResults.delete(turnId);
-    this.turnId = null;
-    if (early.error) this.pending.reject(early.error);
-    else this.pending.resolve(early.turn);
+    this.settleTurn(turnId, early);
   }
 
   settleTurn(turnId, { turn = null, error = null } = {}) {
     if (!this.pending || !turnId) return;
+    if (this.settledTurnIds.has(turnId)) return;
+    if (turn?.status === 'failed' && !error) error = new Error(turn.error?.message ?? 'Cruise turn failed.');
     if (this.turnId === null) {
-      this.earlyTurnResults.set(turnId, { turn, error });
-      return;
+      if (this.nativeGoalTurnWaiting && !this.nativeGoalTurnTimedOut) {
+        this.nativeGoalTurnStarted = true;
+        this.clearNativeGoalTurnDeadline();
+        this.turnId = turnId;
+      } else {
+        this.earlyTurnResults.set(turnId, { turn, error });
+        return;
+      }
     }
     if (turnId !== this.turnId) return;
+    this.settledTurnIds.add(turnId);
     this.turnId = null;
     if (error) this.pending.reject(error);
     else this.pending.resolve(turn);
@@ -1527,7 +1686,10 @@ export class SimpleCruiseSession extends EventEmitter {
   enqueueRequest(message) {
     this.interactions = this.interactions
       .then(() => this.handleRequest(message))
-      .catch((error) => this.client.respondError(message.id, error));
+      .catch((error) => {
+        if (error?.code === 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE') this.pending?.reject(error);
+        return this.client.respondError(message.id, error);
+      });
   }
 
   async handleRequest(message) {
@@ -1599,6 +1761,13 @@ export class SimpleCruiseSession extends EventEmitter {
   handleNotification(message) {
     const params = message.params ?? {};
     if (params.threadId && this.threadId && params.threadId !== this.threadId) return;
+    if (message.method === 'error') {
+      if (params.willRetry === false && this.pending && !this.settledTurnIds.has(params.turnId)
+        && (!this.turnId || this.turnId === params.turnId)) {
+        this.pending.reject(new Error(params.error?.message ?? 'Codex reported a nonretrying protocol error.'));
+      }
+      return;
+    }
     if (message.method === 'thread/tokenUsage/updated') {
       try {
         this.usageMeter.consume(params, { model: this.threadModel });
@@ -1635,6 +1804,7 @@ export class SimpleCruiseSession extends EventEmitter {
         this.pending &&
         this.turnId === null &&
         params.turn?.id &&
+        !this.settledTurnIds.has(params.turn.id) &&
         (!this.nativeGoalTurnWaiting || !this.nativeGoalTurnTimedOut)
       ) {
         if (this.nativeGoalTurnWaiting) {

@@ -12,6 +12,7 @@ import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { inspectFlightPlan } from './flight-plan.mjs';
+import { assertNoSensitiveAccessRequest } from './sensitive-path.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,6 +41,8 @@ const OVERALL_START = '<!-- CRUISE:SINCE-LAST-PUSH:START -->';
 const OVERALL_END = '<!-- CRUISE:SINCE-LAST-PUSH:END -->';
 const HISTORY_START = '<!-- CRUISE:COMMIT-HISTORY:START -->';
 const HISTORY_END = '<!-- CRUISE:COMMIT-HISTORY:END -->';
+const RECOVERY_START = '<!-- CRUISE:GENERATED:V2:START -->';
+const RECOVERY_END = '<!-- CRUISE:GENERATED:V2:END -->';
 const SCRIPT_PATH = /\.(?:[cm]?[jt]sx?|pyi?|sh|bash|zsh|fish|rb|php|p[lm]|lua|r|go|rs|c|h|cc|cpp|cxx|hh|hpp|hxx|java|kt|kts|swift|scala|cs|fs|fsx|clj|cljs|cljc|ex|exs|erl|hrl|hs|lhs|sql|ps1|bat|cmd|vue|svelte)$/iu;
 const USER_STATUSES = new Set([
   'completed',
@@ -230,7 +233,7 @@ async function safeReplaceWithoutReading(path, text, { expected = undefined } = 
       0o600,
     );
     try {
-      await handle.write(text);
+      await handle.writeFile(text);
       await handle.sync();
     } finally {
       await handle.close();
@@ -307,7 +310,17 @@ function scriptPath(path) {
     !path.startsWith('/') &&
     !path.split('/').includes('..') &&
     !/[\u0000-\u001f\u007f<>]/u.test(path) &&
-    SCRIPT_PATH.test(path);
+    SCRIPT_PATH.test(path) && permittedEvidencePath(path);
+}
+
+function permittedEvidencePath(path) {
+  try {
+    assertNoSensitiveAccessRequest(`Read ${JSON.stringify(path)}`, 'Git evidence path');
+    return true;
+  } catch (error) {
+    if (error?.code !== 'CRUISE_SENSITIVE_PATH') throw error;
+    return false;
+  }
 }
 
 function cleanSummary(value) {
@@ -379,6 +392,7 @@ function changedNames(text) {
 }
 
 async function fallbackChangeSummary(root, base, head, path, action) {
+  if (!scriptPath(path)) throw new Error('Git evidence requires a permitted script path');
   let evidence = '';
   if (action === 'new') {
     evidence = await git(root, ['show', `${head}:${path}`], { allowFailure: true }) ?? '';
@@ -386,11 +400,13 @@ async function fallbackChangeSummary(root, base, head, path, action) {
     evidence = await git(root, [
       'diff',
       '--no-ext-diff',
+      '--no-textconv',
+      '--no-renames',
       '--unified=0',
       base,
       head,
       '--',
-      path,
+      `:(literal)${path}`,
     ], { allowFailure: true }) ?? '';
   }
   const names = changedNames(evidence);
@@ -413,8 +429,7 @@ async function scriptChangeInventory(root, base, head) {
   const tracked = parseNameStatus(await git(root, [
     'diff',
     '--no-ext-diff',
-    '--find-renames',
-    '--find-copies',
+    '--no-renames',
     '--name-status',
     '-z',
     base,
@@ -434,8 +449,7 @@ async function rootCommitInventory(root, commit) {
     'diff-tree',
     '--root',
     '--no-commit-id',
-    '--find-renames',
-    '--find-copies',
+    '--no-renames',
     '--name-status',
     '-r',
     '-z',
@@ -454,6 +468,7 @@ async function inferenceEvidence(root, base, head, inventory) {
   const evidence = [];
   let remaining = MAX_INFERENCE_EVIDENCE_TOTAL;
   for (const { path, action } of inventory) {
+    if (!scriptPath(path)) continue;
     if (remaining <= 0) {
       evidence.push({ path, action, patch: '[evidence bound reached]' });
       continue;
@@ -462,20 +477,24 @@ async function inferenceEvidence(root, base, head, inventory) {
       ? await git(root, [
           'diff',
           '--no-ext-diff',
+          '--no-textconv',
+          '--no-renames',
           '--unified=3',
           base,
           head,
           '--',
-          path,
+          `:(literal)${path}`,
         ], { allowFailure: true })
       : await git(root, [
           'show',
           '--format=',
           '--no-ext-diff',
+          '--no-textconv',
+          '--no-renames',
           '--unified=3',
           head,
           '--',
-          path,
+          `:(literal)${path}`,
         ], { allowFailure: true });
     const patch = String(output ?? '').slice(
       0,
@@ -502,45 +521,50 @@ function uniqueMarker(text, marker) {
   return first >= 0 && first === text.lastIndexOf(marker) ? first : -1;
 }
 
+function generatedRegion(text) {
+  const overallStart = uniqueMarker(text, OVERALL_START);
+  const overallEnd = uniqueMarker(text, OVERALL_END);
+  const historyStart = uniqueMarker(text, HISTORY_START);
+  const historyEnd = uniqueMarker(text, HISTORY_END);
+  return overallStart >= 0 && overallEnd > overallStart &&
+    historyStart > overallEnd && historyEnd > historyStart
+    ? { overallStart, overallEnd, historyEnd } : null;
+}
+
 function patchGeneratedChangelog(existing, overall, segment, commit) {
-  const initial = `${USER_CHANGELOG_NOTICE}
-${OVERALL_START}
-${overall}
-${OVERALL_END}
+  const block = `${OVERALL_START}\n${overall}\n${OVERALL_END}\n\n## Commit history\n\n${HISTORY_START}\n${segment}${HISTORY_END}\n`;
+  if (existing === null) return { text: Buffer.from(`${USER_CHANGELOG_NOTICE}\n${block}`), recovery: null };
 
-## Commit history
-
-${HISTORY_START}
-${segment}${HISTORY_END}
-`;
-  if (existing === null) return initial;
-  if (!existing.includes(OVERALL_START) && existing.startsWith(USER_CHANGELOG_NOTICE)) {
-    return initial;
+  // Latin-1 gives byte offsets for ASCII markers without decoding user prose.
+  // Buffer slices preserve even invalid UTF-8 and mixed newline conventions.
+  const source = existing.toString('latin1');
+  let start = 0;
+  let end = existing.length;
+  const recoveryStart = source.lastIndexOf(RECOVERY_START);
+  if (recoveryStart >= 0) {
+    start = recoveryStart + RECOVERY_START.length;
+    end = source.indexOf(RECOVERY_END, start);
   }
-  const overallStart = uniqueMarker(existing, OVERALL_START);
-  const overallEnd = uniqueMarker(existing, OVERALL_END);
-  const historyStart = uniqueMarker(existing, HISTORY_START);
-  const historyEnd = uniqueMarker(existing, HISTORY_END);
-  if (
-    overallStart < 0 ||
-    overallEnd <= overallStart ||
-    historyStart <= overallEnd ||
-    historyEnd <= historyStart
-  ) {
-    throw new Error('existing Cruise changelog has invalid generated-region markers');
+  const region = end >= start ? generatedRegion(source.slice(start, end)) : null;
+  if (!region) {
+    return {
+      text: Buffer.concat([existing, Buffer.from(`\n\n${RECOVERY_START}\n${block}${RECOVERY_END}\n`)]),
+      recovery: Object.freeze({ version: 2, action: 'appended', preservedBytes: existing.length }),
+    };
   }
-  let patched = [
-    existing.slice(0, overallStart + OVERALL_START.length),
-    '\n',
-    overall,
-    '\n',
-    existing.slice(overallEnd),
-  ].join('');
-  if (!patched.includes(commitMarker(commit))) {
-    const insertion = uniqueMarker(patched, HISTORY_END);
-    patched = `${patched.slice(0, insertion)}${segment}${patched.slice(insertion)}`;
-  }
-  return patched;
+  const { overallStart, overallEnd, historyEnd } = region;
+  // Deduplicate only within the active block, never against preserved legacy data.
+  const addition = source.slice(start, end).includes(commitMarker(commit)) ? '' : segment;
+  return {
+    text: Buffer.concat([
+      existing.subarray(0, start + overallStart + OVERALL_START.length),
+      Buffer.from(`\n${overall}\n`),
+      existing.subarray(start + overallEnd, start + historyEnd),
+      Buffer.from(addition),
+      existing.subarray(start + historyEnd),
+    ]),
+    recovery: null,
+  };
 }
 
 async function readGeneratedChangelog(path) {
@@ -552,7 +576,7 @@ async function readGeneratedChangelog(path) {
     if (metadata.size > CHANGELOG_MAX_BYTES) {
       throw new Error(`${path} exceeds the ${CHANGELOG_MAX_BYTES}-byte safety bound`);
     }
-    const text = await readFile(path, 'utf8');
+    const text = await readFile(path);
     const after = await lstat(path);
     if (!sameFileState(metadata, after)) {
       throw new Error(`${path} changed while Cruise inspected its generated markers`);
@@ -624,6 +648,7 @@ export async function writeCommitChangelog({
   generatedAt = new Date().toISOString(),
   commitSummaries = [],
   overallSummaries = [],
+  onRecovery = null,
 }) {
   if (!update || typeof update !== 'object' || typeof update.root !== 'string') {
     throw new TypeError('prepared changelog update is required');
@@ -664,8 +689,12 @@ export async function writeCommitChangelog({
   ].join('\n');
   const path = join(update.root, USER_CHANGELOG_FILE);
   const existing = await readGeneratedChangelog(path);
-  const text = patchGeneratedChangelog(existing.text, overall, segment, update.commit);
+  const { text, recovery } = patchGeneratedChangelog(existing.text, overall, segment, update.commit);
+  if (text.length > CHANGELOG_MAX_BYTES) {
+    throw new Error(`${path} exceeds the ${CHANGELOG_MAX_BYTES}-byte safety bound`);
+  }
   await safeReplaceWithoutReading(path, text, { expected: existing.metadata });
+  if (recovery) onRecovery?.(recovery);
   return path;
 }
 

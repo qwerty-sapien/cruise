@@ -604,13 +604,18 @@ export class AppServerClient extends EventEmitter {
     this.state = "stopped";
     this._disableInactivityWatchdog();
 
+    const stderrTail = compactDiagnostic(this._stderrTail.toString("utf8")).slice(-1024);
+    const permissionHint = /\b(?:EPERM|operation not permitted|permission denied)\b/iu.test(stderrTail)
+      ? " Stderr reports a permission error. If the parent native sandbox blocked this control-plane launch, request native escalation for the exact command and bounded task; do not retry automatically or bypass host approval."
+      : "";
+    const diagnostic = stderrTail ? ` (codex-stderr-tail=${stderrTail})${permissionHint}` : "";
     const processError =
       cause instanceof AppServerProcessError
         ? cause
         : new AppServerProcessError(
-            cause
-              ? `Codex app-server failed: ${cause.message ?? String(cause)}`
-              : `Codex app-server exited${code == null ? "" : ` with code ${code}`}`,
+            (cause
+              ? `Codex app-server failed: ${compactDiagnostic(cause.message ?? String(cause)).slice(-1024)}`
+              : `Codex app-server exited${code == null ? "" : ` with code ${code}`}`) + diagnostic,
             { code, signal, cause },
           );
 

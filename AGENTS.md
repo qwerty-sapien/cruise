@@ -27,7 +27,7 @@ For app-server work, inspect the installed or current generated protocol schema 
 - A discovery round may open at most six windows before summarizing.
 - Raw output goes under `.cruise/artifacts/` with a path and digest.
 - Worker input is at most 8 KB.
-- Worker handoff is at most 4 KB.
+- Structured worker results are at most 8 KB; the root continuation stays at most 4 KB.
 - `.cruise/HANDOFF.md` is at most 4 KB.
 - `.cruise/FLIGHT.md` is at most 8 KB.
 

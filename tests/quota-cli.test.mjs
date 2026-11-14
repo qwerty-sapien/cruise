@@ -216,7 +216,7 @@ test('managed worker writes a bounded capsule before quota and persists its comp
   for (const label of ['Compact handoff', 'Next work item', 'Quota state', 'Unresolved assurance']) {
     assert.match(persisted, new RegExp(label, 'u'));
   }
-  assert.doesNotMatch(persisted, /Repair payment idempotency/u);
+  assert.match(persisted, /result Repair payment idempotency/u);
   assert.ok(Buffer.byteLength(persisted) <= 4 * 1024);
 });
 

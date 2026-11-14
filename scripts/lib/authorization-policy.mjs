@@ -64,7 +64,27 @@ const NO_NON_ADMIN = /\bno\s+non[- ]admin(?:istrator)?\s+users?\b/iu;
 const NON_ADMIN_PRESENT = /\b(?:contains?|has|includes?|involves?)\b[\s\S]{0,80}\bnon[- ]admin(?:istrator)?\s+users?\b|\bnon[- ]admin(?:istrator)?\s+users?\s+(?:are\s+)?(?:confirmed|exist|present)\b|\busers?\s+outside\s+(?:the\s+)?approved\s+admin(?:istrator)?\s+list\b/iu;
 const BOOKING_SUPPORT_SITE = /\bbooking-support-site\b/iu;
 const BOOKING_ADMIN_ONLY = /\bapproved\b[\s\S]{0,100}\b(?:assigned|role)\w*\b[\s\S]{0,60}\b(?:gm|owner)\b|\b(?:gm|owner)\b[\s\S]{0,60}\b(?:assigned|role)\w*\b[\s\S]{0,100}\bapproved\b/iu;
-const APPROVED_LOCAL = /\b(?:access[- ]approved|approved)\s+local\s+(?:directories?|files?|repository|workspace)\b|\b(?:local\s+workspace|workspace\s+files?|repository\s+files?)\b/iu;
+const APPROVED_LOCAL = /\b(?:host[- ]access[- ]approved|access[- ]approved|approved|authori[sz]ed)\s+(?:(?:ordinary|local|accessible|task[- ]relevant|sibling|private)\s+){0,4}(?:folders?|director(?:y|ies)|files?|repositor(?:y|ies)|workspaces?)\b|\b(?:local\s+workspaces?|workspace\s+files?|repository\s+files?)\b/iu;
+const LOCAL_READ = /\b(?:read|search|inspect|browse|list|open|find|review|scan|summarize)\w*\b/iu;
+const LOCAL_EDIT = /\b(?:edit|fix|patch|change|update|modify|write)\w*\b(?!\s+ownership\b)/iu;
+const OWNED_REVERSIBLE_EDIT = /\b(?:minor|small)\s+reversible\b[\s\S]{0,160}\b(?:within|inside)\s+(?:the\s+|my\s+|our\s+)?(?:assigned\s+)?(?:write\s+|edit\s+)?ownership\b/iu;
+const NATIVE_DENIAL = /\b(?:EACCES|EPERM|permission\s+denied|operation\s+not\s+permitted)\b|\b(?:host|sandbox|native\s+approval|automatic\s+approval\s+review)\s+(?:(?:has|was|explicitly)\s+){0,2}(?:denied|rejected)\b/iu;
+// Local access is never authority for a second external or destructive effect.
+const LOCAL_CONSEQUENTIAL_EFFECT = /\b(?:email|upload|transmit|export|deploy|publish|release|delete|drop|truncate|wipe|overwrite|remove|install|purchase|charge|chmod|sudo|execute)\w*\b|\brun\s+(?:arbitrary\s+)?(?:commands?|scripts?|code)\b|\b(?:external|third[- ]party)\s+(?:provider|service|destination)\b/iu;
+const EXTERNAL_COPY = /\b(?:copy|cp|sync)\b[\s\S]{0,160}\b(?:to|into|onto)\s+['"`]?(?:https?|s?ftp|ssh):\/\//iu;
+const NONLOCAL_EFFECT = new RegExp(`${LOCAL_CONSEQUENTIAL_EFFECT.source}|${EXTERNAL_COPY.source}|\\b(?:send|share)\\w*\\b`, 'iu');
+const OUTSIDE_OWNERSHIP = /\b(?:outside|beyond)\s+(?:the\s+|my\s+|our\s+)?(?:assigned\s+)?(?:write\s+|edit\s+)?ownership\b/iu;
+const UNAPPROVED_LOCAL = /\b(?:not\s+(?:yet\s+)?(?:approved|authori[sz]ed)|unapproved|unauthori[sz]ed|forbidden)\b/iu;
+
+// Bind software-topic wording to one read clause; a following effect stays gated.
+function localEffectText(value) {
+  const topic = /\b(?:delete|deletion|deploy(?:ment)?|install(?:ation)?)\s+(?:(?:endpoint|handler|function|route)\s+)?(?:source\s+code|code|tests?|docs?|documentation)\b/giu;
+  return value.replace(topic, (match, offset) => {
+    const prefix = value.slice(Math.max(0, offset - 160), offset)
+      .split(/[.;!?\r\n]|\b(?:and|then|but)\b/iu).at(-1);
+    return LOCAL_READ.test(prefix) ? 'software topic' : match;
+  });
+}
 const BOUNDED_CODEX_WORKER = /\b(?:bounded\s+(?:context|worker)|codex\s+(?:subagent|worker)|cruise\s+(?:goal[- ]skill|subagent|worker)|gpt-5\.6-(?:luna|terra|sol)|gpt-6-astra|managed\s+worker|(?:terra|astra)\s+(?:launch|worker))\b/iu;
 const ROUTINE_DELEGATION = /\bsub[- ]?agents?\b|\b(?:another|additional|native|new(?:ly\s+spawned)?)\s+(?:[\w-]+\s+){0,3}agents?\b|\b(?:worker|agent)\s+model\b/iu;
 const DELEGATION_PERMISSION_QUESTION = /(?:^|[.!?\n])\s*(?:may|can|could|shall|should)\s+(?:i|we|you)\b[^?]{0,600}\?/iu;
@@ -169,17 +189,52 @@ export function isCruiseIntegrityDriftAuthorizationPause(value, { nativeApproval
   return classifyCruiseAuthorization(visible).reason === 'cruise-integrity-drift-recovery';
 }
 
+function authorizationQuestionText(question) {
+  const options = Array.isArray(question.options) ? question.options : [];
+  // Newlines prevent an exclusion in one option from masking another object.
+  return [question.header, question.question, ...options.flatMap((option) =>
+    typeof option === 'string' ? [option] : [option?.label, option?.description, option?.value])]
+    .filter((value) => typeof value === 'string' && value).join('\n');
+}
+
+/** Resolve bounded local work; access does not confer write or disclosure authority. */
+export function automaticLocalAuthorization(params = {}, { nativeApprovalDenied = false } = {}) {
+  if (nativeApprovalDenied || !Array.isArray(params.questions) || params.questions.length === 0) return null;
+  const answers = {};
+  for (const question of params.questions) {
+    if (typeof question?.id !== 'string' || !question.id) return null;
+    const visible = authorizationQuestionText(question);
+    const effects = localEffectText(visible);
+    if (!APPROVED_LOCAL.test(visible) || UNAPPROVED_LOCAL.test(visible) || NATIVE_DENIAL.test(visible)
+      || MATERIAL_DELEGATION.test(effects) || NONLOCAL_EFFECT.test(effects)) return null;
+    if (!(LOCAL_READ.test(visible) || LOCAL_EDIT.test(visible))
+      || (LOCAL_EDIT.test(visible) && (!OWNED_REVERSIBLE_EDIT.test(visible) || OUTSIDE_OWNERSHIP.test(visible)))) return null;
+    const analysis = exclusionAnalysis(visible);
+    // Skipping one never-read path cannot authorize a separate sensitive object.
+    const dataMentions = analysis.mentions.filter(({ object }) => !analysis.paths.some((path) =>
+      path.object === object && isSensitivePath(path.match[0])));
+    if (hasSensitiveMaterial(visible, { mentions: dataMentions })) return null;
+    const boundary = classifyCruiseAuthorization(visible);
+    if (boundary.action === AUTHORIZATION_ACTION.skipSensitive) {
+      answers[question.id] = { answers: [SENSITIVE_PATH_SKIP_ANSWER] };
+    } else if (boundary.action === AUTHORIZATION_ACTION.proceed && boundary.reason === 'approved-local-context') {
+      answers[question.id] = { answers: [PREAUTHORIZED_PROCEED_ANSWER
+        + ' Stay within the current task, skip never-read and ignored paths, and keep edits within assigned write ownership. Native host permissions remain authoritative.'] };
+    } else return null;
+  }
+  return { answers };
+}
+
 /** Resolve only internal coordination; never a worker's additional effects. */
 export function automaticDelegationAuthorization(params = {}, { nativeApprovalDenied = false } = {}) {
   if (nativeApprovalDenied || !Array.isArray(params.questions) || params.questions.length === 0) return null;
   const answers = {};
   for (const question of params.questions) {
     if (typeof question?.id !== 'string' || !question.id) return null;
-    const options = Array.isArray(question.options) ? question.options : [];
-    const visible = [question.header, question.question, ...options.map((option) =>
-      typeof option === 'string' ? option : option?.label)].filter(Boolean).join(' ');
+    const visible = authorizationQuestionText(question);
+    const effects = localEffectText(visible);
     if (!(ROUTINE_DELEGATION.test(visible) || BOUNDED_CODEX_WORKER.test(visible))
-      || MATERIAL_DELEGATION.test(visible)) return null;
+      || MATERIAL_DELEGATION.test(effects)) return null;
     const boundary = classifyCruiseAuthorization(visible);
     if (boundary.action !== AUTHORIZATION_ACTION.proceed
       || !['routine-delegation', 'bounded-codex-worker-context', 'approved-local-context'].includes(boundary.reason)) return null;
@@ -208,8 +263,12 @@ export const CRUISE_INTEGRITY_DRIFT_RECOVERY_INSTRUCTIONS = [
  * Classify only evidence stated in the proposed authorization boundary. Generic
  * privacy language is not evidence that approved local material is sensitive.
  */
-export function classifyCruiseAuthorization(value) {
+export function classifyCruiseAuthorization(value, { nativeApprovalDenied = false } = {}) {
   const visible = String(value ?? '').replace(/[^\S\r\n]+/gu, ' ').trim();
+  const effects = localEffectText(visible);
+  if (nativeApprovalDenied || NATIVE_DENIAL.test(visible)) {
+    return Object.freeze({ action: AUTHORIZATION_ACTION.nativePermissions, reason: 'native-permission-denied' });
+  }
   const cloudTable = CLOUD_TABLE.test(visible);
   const tableMutation = TABLE_MUTATION.test(visible);
   const analysis = exclusionAnalysis(visible);
@@ -244,8 +303,16 @@ export function classifyCruiseAuthorization(value) {
     });
   }
 
-  if (delegation && MATERIAL_DELEGATION.test(visible)) {
+  if (delegation && MATERIAL_DELEGATION.test(effects)) {
     return Object.freeze({ action: AUTHORIZATION_ACTION.requestUser, reason: 'material-delegated-effect' });
+  }
+
+  if (APPROVED_LOCAL.test(visible)
+    && (MATERIAL_DELEGATION.test(effects) || LOCAL_CONSEQUENTIAL_EFFECT.test(effects) || EXTERNAL_COPY.test(effects)
+      || (!delegation && NONLOCAL_EFFECT.test(effects))
+      || UNAPPROVED_LOCAL.test(visible)
+      || (LOCAL_EDIT.test(visible) && OUTSIDE_OWNERSHIP.test(visible)))) {
+    return Object.freeze({ action: AUTHORIZATION_ACTION.requestUser, reason: 'material-local-effect' });
   }
 
   if (delegation && /\bread[- ]only\s+review\b/iu.test(visible)) {

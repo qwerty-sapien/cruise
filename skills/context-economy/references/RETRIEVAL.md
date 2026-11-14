@@ -124,3 +124,44 @@ The deterministic map should contain only:
 - exact entry points.
 
 Cache it by Git HEAD plus dirty-path metadata. Rebuild only invalidated sections.
+
+## Named read roots and read-only workers
+
+Read scope is separate from write ownership. A task naming an ordinary file or
+search directory supplies its retrieval scope, including sibling relative paths
+and absolute paths. No additional confirmation is needed for those reads.
+
+Use `node scripts/context-view.mjs --root /named/directory slice notes.md 1 80`
+or `node scripts/context-view.mjs search pattern ../shared` to choose a read
+root or search root. `--root` defaults to the working directory. Git discovery
+is optional for extraction; non-Git roots support named reads, maps and searches.
+Unscoped Git maps/searches use tracked files. Named directories and non-Git
+roots enumerate at most 4096 entries and 32 directory levels; exceeding a cap
+requires a narrower root. Sensitive paths, explicit sensitive-path exclusions,
+Git ignore rules, root underscore Markdown and symlink checks still apply before
+content access. Named read roots never expand write ownership.
+
+Read-only workers must pass `--no-persist` (API: `noPersist: true`). This mode
+bypasses cache reads and all artifact/cache writes; do not add writable product
+roots to satisfy retrieval. If ordinary persistence is unavailable, extraction
+still returns the same capped content and digest. `artifact_path: null`,
+`cache_hit: false`, and `persistence: disabled|unavailable` distinguish missing
+artifacts from persisted evidence; `persistence_error` supplies the filesystem
+error code for an unavailable store. Results include the absolute `root` and
+root-relative `sources` for provenance. A digest of returned raw extraction is
+not evidence that an artifact was persisted or that the entire source was read.
+
+## Managed CLI transport and native sandbox failures
+
+The managed CLI is control-plane transport. If the parent native sandbox cannot
+start it, retain the exit code and bounded stderr evidence. Request native
+escalation for the exact command with a bounded task justification grounded in
+existing user authority, including source scope, destination and secret exclusions.
+Keep the worker task thread read-only when requested; transport escalation does
+not expand its file access or write ownership. Continue using `--no-persist`.
+
+An OS error such as `EPERM`, `Operation not permitted` or `permission denied`
+is not an automatic approval reviewer rejection. Exit code 1 alone establishes
+neither a permission error nor a sandbox cause. An actual approval rejection
+remains authoritative: report its reason, do not blindly retry, and do not bypass
+host permission. No automatic launch retry follows a diagnostic hint.

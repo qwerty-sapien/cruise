@@ -41,6 +41,8 @@ For finite planned features and consequential work, inspect the repository and m
 
 ## Keep authorization gates evidence-based
 
+Search and read ordinary accessible, non-ignored, task-relevant sibling folders when the current task authorizes that access, even outside repository write ownership. Reuse the current task authorization without a redundant Cruise question; private or domain labels alone do not establish sensitive data. Skip never-read paths before retrieval, keep all writes within assigned ownership, and honor actual host permission denials. Explain whether a blocker came from Cruise fallback or the native host/tool result.
+
 Authorization gates are distinct from Flight assurance checks and from native host permission prompts. Treat ordinary files in a host-access-approved local directory as non-sensitive and pre-authorized for task-scoped reading and use. Reading those files or sending the minimum bounded context required by another Codex or Cruise worker needs no fresh user authorization. A switch among Codex worker models or tiers is not, by itself, a new third-party provider disclosure boundary. Never infer sensitivity merely from words such as `private`, `repository`, `skill`, `prompt`, or `provider`.
 
 Never read, search, summarize, fingerprint, or send `.env` variants, credential/secret/private-key files or directories, or paths the user explicitly marks secret. Exclude those paths before access and continue with safe bounded context; do not ask the user to authorize disclosure of an excluded file. Do not infer a host rejection merely because approved source would reach Luna, Terra, Sol, or Astra. Without an actual denial, reduce an overbroad request to a bounded capsule and launch it without a fresh disclosure gate.

@@ -32,12 +32,16 @@ read_more_conditions: []
 stop_conditions: []
 escalation_conditions: []
 visible_output_cap_bytes: 12288
-handoff_cap_bytes: 4096
+result_cap_bytes: 8192
+root_handoff_cap_bytes: 4096
 ```
 
 ## Worker return handoff
 
-Maximum 4 KB.
+Maximum 8 KB for the structured result. The derived root continuation remains capped at 4 KB.
+
+`active_blocker_or_next_work_item` may be empty when there is no reported blocker
+or next action. Put the actual result in `outcome`; root formatting preserves it.
 
 ```yaml
 schema_version: 1

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -24,7 +25,323 @@ import {
 import { readOriginPrompt, writeOriginPrompt } from '../scripts/lib/origin-note.mjs';
 import { writeFlightPlan } from '../scripts/lib/flight-plan.mjs';
 import { SimpleCruiseSession } from '../scripts/lib/simple-session.mjs';
-import { isGoalSessionActive } from '../hooks/session-marker.mjs';
+import { answerWorkerRequest } from '../scripts/cruise.mjs';
+import {
+  activateGoalSession, deactivateGoalSession, isGoalSessionActive,
+  reserveCruiseWorkspace, runtimeSessionDirectory, MAX_WORKSPACE_LOCK_AGE_MS,
+} from '../hooks/session-marker.mjs';
+import { cleanupRuntimeSession, createRuntimeSession, validateRuntimeDirectory } from '../scripts/lib/runtime-state.mjs';
+import { QuotaGuard } from '../scripts/lib/quota-guard.mjs';
+import { WorkerDispatchLedger } from '../scripts/lib/worker-dispatcher.mjs';
+
+function managedParentOptions(cwd) {
+  return parseArgs(['--codex', 'worker', '--managed', '--read-only', '--strict-budget',
+    '--complexity', 'retrieval', '--owns', 'ordinary.txt', '--evidence', 'Ordinary fixture.',
+    '--range', 'ordinary.txt:1-1', '--verify', 'Read fixture.', '-C', cwd, 'Read the fixture.'], { env: {} });
+}
+
+function workspaceLeasePath(cwd) {
+  return join(tmpdir(), 'cruise-goal-sessions', `${createHash('sha256').update(cwd).digest('hex')}.workspace.json`);
+}
+
+class ManagedParentTransport extends EventEmitter {
+  constructor({ onThread = async () => {}, fail = false } = {}) {
+    super();
+    this.onThread = onThread;
+    this.fail = fail;
+    this.requests = [];
+    this.stopped = false;
+  }
+  async start() {}
+  async stop() { this.stopped = true; }
+  async request(method, params) {
+    this.requests.push({ method, params });
+    if (method === 'account/read') return { account: { type: 'chatgpt', email: 'fixture@example.invalid', planType: 'plus' } };
+    if (method === 'account/rateLimits/read') return { rateLimits: {
+      secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 2000000000 },
+    } };
+    if (method === 'model/list') return { data: [{ id: 'gpt-5.6-luna', model: 'gpt-5.6-luna',
+      hidden: false, isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: ['medium'] },
+    { id: 'gpt-5.6-sol', model: 'gpt-5.6-sol', hidden: false, isDefault: false,
+      defaultReasoningEffort: 'high', supportedReasoningEfforts: ['high'] },
+    { id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', hidden: false, isDefault: false,
+      defaultReasoningEffort: 'xhigh', supportedReasoningEfforts: ['xhigh', 'ultra'] }] };
+    if (method === 'thread/start') {
+      await this.onThread(params);
+      return { thread: { id: 'managed-child' } };
+    }
+    if (method === 'turn/start') {
+      queueMicrotask(() => {
+        if (!this.fail) this.emit('notification', { method: 'item/completed', params: { item: {
+          id: 'final', type: 'agentMessage', phase: 'final_answer', text: JSON.stringify({
+            outcome: 'Fixture complete', completed_work: ['Read fixture'], changed_files: [],
+            decisions_and_invariants: [], exact_tests: [], active_blocker_or_next_work_item: 'None.',
+            files_not_to_reread: [], evidence_pointers: [], usage_and_quota_summary: 'Mock transport only',
+          }),
+        } } });
+        this.emit('notification', { method: 'turn/completed', params: { turn: {
+          id: 'managed-turn', status: this.fail ? 'failed' : 'completed',
+        } } });
+      });
+      return { turn: { id: 'managed-turn' } };
+    }
+    throw new Error(`unexpected mock transport request: ${method}`);
+  }
+}
+
+test('real managed CLI joins Goal, staged and Debug parents with independent leases and child-only cleanup', async (t) => {
+  for (const mode of ['goal', 'goal-error', 'staged', 'debug', 'standalone']) await t.test(mode, async (t) => {
+    // Canonicalize BEFORE activation: /var and /private/var otherwise hide the conflict on macOS.
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), 'cruise-parent-integration-')));
+    t.after(() => rm(cwd, { recursive: true, force: true }));
+    const parent = { cwd, session_id: `parent-${mode}` };
+    let parentRuntime;
+    let warmRuntime;
+    if (mode !== 'standalone') {
+      if (mode === 'debug') parentRuntime = await reserveCruiseWorkspace(parent);
+      else {
+        await activateGoalSession(parent);
+        parentRuntime = await runtimeSessionDirectory(parent);
+      }
+      t.after(() => deactivateGoalSession(parent));
+      await writeFile(join(parentRuntime, 'drafts', 'parent.txt'), 'parent artifact');
+    }
+    if (mode === 'staged') {
+      warmRuntime = await createRuntimeSession({ cwd, sessionId: parent.session_id, kind: 'goal-warmup' });
+      t.after(() => cleanupRuntimeSession(warmRuntime, { cwd, sessionId: parent.session_id }));
+    }
+    const parentLease = parentRuntime ? await readFile(workspaceLeasePath(cwd), 'utf8') : null;
+    const dispatch = new WorkerDispatchLedger({ cwd });
+    let quota;
+    let childEnv;
+    const budgetClient = new ManagedParentTransport();
+    const parentQuota = parentRuntime ? new QuotaGuard({ cwd, baseDirectory: join(cwd, 'quota-fixture'), strictBudget: true }) : null;
+    if (parentQuota) await parentQuota.start({ client: budgetClient, goalId: parent.session_id });
+    const workerClient = new ManagedParentTransport({ fail: mode === 'goal-error', onThread: async (params) => {
+      assert.notEqual(childEnv.CRUISE_SESSION_ID, parent.session_id);
+      assert.notEqual(childEnv.CRUISE_RUNTIME_DIR, parentRuntime);
+      assert.notEqual(childEnv.CRUISE_RUNTIME_DIR, warmRuntime);
+      assert.equal(childEnv.CRUISE_CLAUDE_GOAL, undefined);
+      const { manifest } = await validateRuntimeDirectory(childEnv.CRUISE_RUNTIME_DIR, {
+        cwd, sessionId: childEnv.CRUISE_SESSION_ID,
+      });
+      assert.equal(manifest.kind, 'worker');
+      assert.equal(params.serviceName, 'cruise_worker');
+      assert.equal(params.ephemeral, true);
+      assert.equal(params.sandbox, 'read-only');
+      assert.equal(params.approvalPolicy, 'on-request');
+      assert.deepEqual(params.runtimeWorkspaceRoots, []);
+      const ledger = JSON.parse(await readFile(dispatch.ledgerPath, 'utf8'));
+      assert.equal(ledger.active.length, 1);
+      const reservations = JSON.parse(await readFile(quota.ledgerPath(), 'utf8')).reservations;
+      assert.equal(reservations.filter(entry => entry.status === 'active').length, parentQuota ? 2 : 1);
+      assert.equal(reservations.at(-1).goal_id, `worker:${childEnv.CRUISE_SESSION_ID}`);
+      const stop = spawnSync(process.execPath, [resolve('hooks/stop-supervisor.mjs'), '--plugin-hook'], {
+        env: childEnv, encoding: 'utf8', timeout: 10000,
+        input: JSON.stringify({ cwd, session_id: childEnv.CRUISE_SESSION_ID, hook_event_name: 'Stop' }),
+      });
+      assert.equal(stop.status, 0, stop.stderr);
+      assert.equal(stop.stdout.trim(), '');
+      if (parentRuntime) {
+        assert.equal(await readFile(workspaceLeasePath(cwd), 'utf8'), parentLease);
+        await assert.rejects(reserveCruiseWorkspace({ cwd, session_id: 'unrelated-root' }), { code: 'CRUISE_GOAL_CONFLICT' });
+        await assert.rejects(runWorker(managedParentOptions(cwd), { env: {},
+          workerClientFactory() { assert.fail('unrelated root reached transport'); },
+          budgetClientFactory() { assert.fail('unrelated root reached quota'); },
+        }), { code: 'CRUISE_GOAL_CONFLICT' });
+      }
+    } });
+    // Simulate an inherited root-only hook flag; the worker transport must scrub it.
+    const priorFlag = process.env.CRUISE_CLAUDE_GOAL;
+    process.env.CRUISE_CLAUDE_GOAL = '1';
+    try {
+      const run = runWorker(managedParentOptions(cwd), {
+        env: parentRuntime ? { CRUISE_SESSION_ID: parent.session_id, CRUISE_RUNTIME_DIR: warmRuntime ?? parentRuntime } : {},
+        workerClientFactory(input) { childEnv = input.spawnOptions.env; return workerClient; },
+        budgetClientFactory: () => budgetClient,
+        quotaGuardFactory(input) {
+          quota = new QuotaGuard({ ...input, baseDirectory: join(cwd, 'quota-fixture') });
+          return quota;
+        },
+      });
+      if (mode === 'goal-error') await assert.rejects(run, /worker turn ended with status failed/u);
+      else assert.equal(await run, 0);
+    } finally {
+      if (priorFlag === undefined) delete process.env.CRUISE_CLAUDE_GOAL;
+      else process.env.CRUISE_CLAUDE_GOAL = priorFlag;
+    }
+    assert.deepEqual(workerClient.requests.map(entry => entry.method), ['model/list', 'thread/start', 'turn/start']);
+    const turn = workerClient.requests.at(-1).params;
+    assert.deepEqual(turn.sandboxPolicy, { type: 'readOnly' });
+    assert.equal(turn.cwd, cwd);
+    assert.equal(turn.approvalPolicy, 'on-request');
+    assert.equal(workerClient.stopped && budgetClient.stopped, true);
+    await assert.rejects(lstat(childEnv.CRUISE_RUNTIME_DIR), { code: 'ENOENT' });
+    assert.deepEqual(JSON.parse(await readFile(dispatch.ledgerPath, 'utf8')).active, []);
+    const reservations = JSON.parse(await readFile(quota.ledgerPath(), 'utf8')).reservations;
+    assert.equal(reservations.at(-1).status, 'released');
+    if (parentQuota) {
+      assert.equal(reservations[0].status, 'active');
+      assert.equal(reservations[0].goal_id, parent.session_id);
+      await parentQuota.release();
+    }
+    if (parentRuntime) {
+      assert.equal(await readFile(workspaceLeasePath(cwd), 'utf8'), parentLease);
+      assert.equal(await readFile(join(parentRuntime, 'drafts', 'parent.txt'), 'utf8'), 'parent artifact');
+      assert.equal(await isGoalSessionActive(parent), mode !== 'debug');
+    } else await assert.rejects(lstat(workspaceLeasePath(cwd)), { code: 'ENOENT' });
+  });
+});
+
+test('managed CLI rejects invalid parent bindings before capsule writes or transport creation', async (t) => {
+  for (const mode of ['missing-runtime', 'missing-session', 'wrong-session', 'wrong-cwd', 'unregistered',
+    'stale-lease', 'expired-runtime', 'inactive-runtime', 'tampered-manifest', 'worker-parent',
+    'unsafe-runtime', 'symlink-runtime', 'foreign-inherited-runtime']) await t.test(mode, async (t) => {
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), 'cruise-invalid-parent-')));
+    const parent = { cwd, session_id: 'fixture-parent' };
+    await activateGoalSession(parent);
+    const runtime = await runtimeSessionDirectory(parent);
+    const manifestPath = join(runtime, 'manifest.json');
+    const manifestText = await readFile(manifestPath, 'utf8');
+    const leasePath = workspaceLeasePath(cwd);
+    const leaseText = await readFile(leasePath, 'utf8');
+    t.after(async () => {
+      await chmod(runtime, 0o700);
+      await writeFile(manifestPath, manifestText);
+      await writeFile(leasePath, leaseText, { mode: 0o600 });
+      await deactivateGoalSession(parent);
+      await rm(cwd, { recursive: true, force: true });
+    });
+    const env = { CRUISE_SESSION_ID: parent.session_id, CRUISE_RUNTIME_DIR: runtime };
+    if (mode === 'missing-runtime') delete env.CRUISE_RUNTIME_DIR;
+    if (mode === 'missing-session') delete env.CRUISE_SESSION_ID;
+    if (mode === 'wrong-session') env.CRUISE_SESSION_ID = 'unrelated';
+    if (mode === 'unsafe-runtime') await chmod(runtime, 0o777);
+    if (mode === 'symlink-runtime') {
+      const link = join(dirname(runtime), 'fixture-runtime-link');
+      await symlink(runtime, link);
+      t.after(() => rm(link, { force: true }));
+      env.CRUISE_RUNTIME_DIR = link;
+    }
+    if (mode === 'foreign-inherited-runtime') {
+      const foreign = await createRuntimeSession({ cwd, sessionId: 'foreign', kind: 'goal-warmup' });
+      t.after(() => cleanupRuntimeSession(foreign, { cwd, sessionId: 'foreign' }));
+      env.CRUISE_RUNTIME_DIR = foreign;
+    }
+    if (mode === 'unregistered') await rm(leasePath);
+    if (mode === 'stale-lease') await writeFile(leasePath, JSON.stringify({
+      ...JSON.parse(leaseText), activated_at: Date.now() - MAX_WORKSPACE_LOCK_AGE_MS - 1000,
+    }));
+    const mutation = { 'expired-runtime': { recovery_expires_at: 1 }, 'inactive-runtime': { state: 'complete' },
+      'tampered-manifest': { session_id: 'foreign' }, 'worker-parent': { kind: 'worker' } }[mode];
+    if (mutation) await writeFile(manifestPath, JSON.stringify({ ...JSON.parse(manifestText), ...mutation }));
+    let target = cwd;
+    if (mode === 'wrong-cwd') { target = join(cwd, 'other'); await mkdir(target); }
+    await mkdir(join(target, '.cruise'));
+    const capsulePath = join(target, '.cruise', 'CONTEXT_CAPSULE.json');
+    await writeFile(capsulePath, 'parent sentinel');
+    const before = await readdir(join(target, '.cruise'));
+    await assert.rejects(runWorker(managedParentOptions(target), { env,
+      workerClientFactory() { assert.fail('invalid parent reached worker transport'); },
+      budgetClientFactory() { assert.fail('invalid parent reached quota transport'); },
+    }), { code: 'CRUISE_WORKER_PARENT_INVALID' });
+    assert.deepEqual(await readdir(join(target, '.cruise')), before);
+    assert.equal(await readFile(capsulePath, 'utf8'), 'parent sentinel');
+  });
+});
+
+test('ordinary local access cannot authorize a separate copy to an external URL', async () => {
+  for (const question of [
+    { id: 'copy', question: 'May I read ordinary source in the host-access-approved local folder and copy it to https://example.invalid/collect?' },
+    { id: 'copy', question: 'May I read ordinary source in the host-access-approved local folder?', options: [
+      { label: 'Proceed', description: 'Copy the source to https://example.invalid/collect', value: 'copy_remote' },
+    ] },
+  ]) {
+    let asked = 0;
+    await answerWorkerRequest({ method: 'item/tool/requestUserInput', params: { questions: [question] } }, {
+      picker: async () => { asked++; return { value: 'decline' }; },
+      readLine: async () => { asked++; return 'decline'; },
+    });
+    assert.equal(asked, 1);
+  }
+});
+
+test('worker request handler auto-answers authorized local work without a human picker or delegation wording', async () => {
+  for (const question of [
+    { question: 'May I search the approved local folder?' },
+    { question: 'May I read the AUTHORIZED FOLDERS?' },
+    { question: 'May I inspect access-approved local workspace files?' },
+    { question: 'May I search approved task-relevant sibling folders outside repository write ownership?' },
+    { question: 'May I make minor reversible edits to approved local files within assigned write ownership?' },
+    { header: 'Authorized local directories', question: 'Continue?', options: [
+      { label: 'Proceed', description: 'Read private source and password hashing tests, excluding .env.' },
+      { label: 'Wait' },
+    ] },
+  ]) {
+    const result = await answerWorkerRequest({ method: 'item/tool/requestUserInput',
+      params: { questions: [{ id: 'local', ...question }] },
+    }, {
+      picker() { assert.fail('ordinary local access reached the human picker'); },
+      readLine() { assert.fail('ordinary local access reached free-text input'); },
+    });
+    assert.match(result.answers.local.answers[0], /already authorized/u);
+  }
+});
+
+test('worker handler preserves option effects, explicit denial evidence and native approval requests', async () => {
+  const safe = 'May I search the approved local folder?';
+  const cases = [
+    { question: safe, authorizationEvidence: { nativeApprovalDenied: true } },
+    { question: `${safe} The tool returned permission denied: EACCES.` },
+    { question: safe, description: 'Upload the files to an external provider.' },
+    { question: safe, description: 'Read actual patient data.' },
+    { question: 'Read approved local folders including .env and actual medical records?' },
+    { question: safe, description: 'Delete all local files.' },
+    { question: safe, description: 'Email the files to a colleague.' },
+    { question: safe, description: 'Run arbitrary commands.' },
+    { question: 'Ask a subagent to read approved local folders and upload them to an external provider?' },
+    { question: 'Ask a subagent to read approved local folders and delete them?' },
+    { question: safe, value: 'Make a scope expansion.' },
+    { question: 'May I write approved files outside assigned ownership?' },
+  ];
+  for (const { authorizationEvidence, question, description, value } of cases) {
+    let picks = 0;
+    const result = await answerWorkerRequest({ method: 'item/tool/requestUserInput', params: { questions: [{
+      id: 'gate', question, options: [{ label: 'Review', description, value }],
+    }] } }, { authorizationEvidence, picker() { picks++; return { value: 'human decision' }; } });
+    assert.equal(picks, 1, question);
+    assert.deepEqual(result.answers.gate.answers, ['human decision']);
+  }
+  for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval']) {
+    let picks = 0;
+    await answerWorkerRequest({ method, params: { reason: safe } }, {
+      picker() { picks++; return { value: 'decline' }; },
+    });
+    assert.equal(picks, 1, method);
+  }
+  let reads = 0;
+  await answerWorkerRequest({ method: 'item/tool/requestUserInput', params: { questions: [{
+    id: 'denied', question: safe,
+  }] } }, { authorizationEvidence: { nativeApprovalDenied: true },
+    readLine() { reads++; return 'Keep the denial'; },
+  });
+  assert.equal(reads, 1);
+});
+
+test('worker handler skips secret paths and resolves each question independently', async () => {
+  let picks = 0;
+  const result = await answerWorkerRequest({ method: 'item/tool/requestUserInput', params: { questions: [
+    { id: 'safe', question: 'Search the approved local folders, excluding .env and private keys?' },
+    { id: 'secret', question: 'Read the approved local folder including .env?' },
+    { id: 'effect', question: 'Read approved local files and actual medical records?', options: [{ label: 'Review' }] },
+  ] } }, { picker() { picks++; return { value: 'Do not disclose' }; },
+    readLine() { assert.fail('safe access and secret exclusions must not prompt'); },
+  });
+  assert.match(result.answers.safe.answers[0], /already authorized/u);
+  assert.match(result.answers.secret.answers[0], /Exclude it automatically/u);
+  assert.deepEqual(result.answers.effect.answers, ['Do not disclose']);
+  assert.equal(picks, 1);
+});
 
 test('the npm package entry runs the Cruise CLI', () => {
   const result = spawnSync(process.execPath, [resolve('index.js'), '--version'], {
@@ -66,6 +383,7 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
     help: false,
     version: false,
     level: null,
+    externalSandbox: false,
     userStatus: null,
     commit: null,
     weeklyDeltaCap: 9,
@@ -83,6 +401,7 @@ test('the public CLI accepts direct requests and rejects retired control-plane f
     help: false,
     version: false,
     level: 6,
+    externalSandbox: false,
     userStatus: null,
     commit: null,
     weeklyDeltaCap: 9,
@@ -183,9 +502,11 @@ test('provider selectors are request-scoped, mutually exclusive, and default to 
   assert.throws(() => parseArgs(['--provider', 'other', 'quick', 'Fix'], { env: {} }), /provider must be one of/u);
 });
 
-test('workers receive ordinary text and an explicit, request-scoped level', async () => {
+test('workers receive ordinary text and an explicit, request-scoped level', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-worker-text-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
-  const result = await runWorker({ cwd: process.cwd(), prompt: 'Run one check.', level: 5 }, {
+  const result = await runWorker({ cwd: root, prompt: 'Run one check.', level: 5 }, {
     async worker(input) {
       calls.push(input);
       assert.equal((await lstat(input.runtimeDirectory)).isDirectory(), true);
@@ -194,13 +515,55 @@ test('workers receive ordinary text and an explicit, request-scoped level', asyn
   });
   assert.equal(result, 0);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].cwd, process.cwd());
+  assert.equal(calls[0].cwd, await realpath(root));
   assert.equal(calls[0].task, 'Run one check.');
   assert.equal(calls[0].level, 5);
+  assert.equal(calls[0].externalSandbox, false);
   assert.equal(typeof calls[0].sessionId, 'string');
   await assert.rejects(lstat(calls[0].runtimeDirectory), { code: 'ENOENT' });
   assert.equal(typeof calls[0].onOutput, 'function');
   assert.equal(typeof calls[0].onServerRequest, 'function');
+});
+
+test('external sandbox is explicit, Codex-only, and limited to Goal and worker commands', () => {
+  for (const command of ['goal', 'worker']) {
+    assert.equal(parseArgs([command, 'Task'], { env: {} }).externalSandbox, false);
+    assert.equal(parseArgs(['--codex', command, '--external-sandbox', 'Task'], { env: {} }).externalSandbox, true);
+    assert.throws(() => parseArgs(['--claude', command, '--external-sandbox', 'Task'], { env: {} }), /only.*codex/u);
+  }
+  assert.equal(parseArgs(['goal', '--external-sandbox', '--plan', 'Task'], { env: {} }).planOnly, true);
+  for (const command of ['start', 'quick', 'build', 'debug', 'queue', 'doctor', 'changelog', 'budget', 'usage', 'attest', 'reference', 'help']) {
+    assert.throws(() => parseArgs([command, '--external-sandbox'], { env: {} }), /only.*codex/u);
+  }
+  for (const args of [['config', 'show'], ['migrate', 'status']]) {
+    assert.throws(() => parseArgs([...args, '--external-sandbox'], { env: {} }), /only.*codex/u);
+  }
+  assert.throws(() => parseArgs(['goal', '--external-sandbox', 'Task'], { env: { CRUISE_PROVIDER: 'claude' } }), /only.*codex/u);
+  assert.equal(parseArgs(['goal', '--', '--external-sandbox'], { env: {} }).externalSandbox, false);
+  assert.equal(parseArgs(['goal', 'Task'], { env: { CRUISE_EXTERNAL_SANDBOX: '1' } }).externalSandbox, false);
+});
+
+test('external sandbox CLI option reaches hosted Goals and managed workers', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-external-routing-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const goalOptions = parseArgs(['--codex', 'goal', '--external-sandbox', '-C', cwd, 'Inspect ordinary source.'], { env: {} });
+  const result = await runOneGoal(goalOptions, {
+    clientFactory: () => ({}),
+    sessionFactory(input) {
+      assert.equal(input.externalSandbox, true);
+      return { async run() { return { status: 'complete' }; }, async interrupt() {} };
+    },
+  });
+  assert.equal(result.exitCode, 0);
+  await writeFile(join(cwd, 'ordinary.txt'), 'fixture');
+  const options = managedParentOptions(cwd);
+  options.externalSandbox = true;
+  const client = new ManagedParentTransport();
+  assert.equal(await runWorker(options, { env: {}, workerClientFactory: () => client, enforceBudget: false }), 0);
+  const turn = client.requests.find(({ method }) => method === 'turn/start').params;
+  assert.deepEqual(turn.sandboxPolicy, { type: 'externalSandbox', networkAccess: 'restricted' });
+  assert.equal(turn.approvalPolicy, 'on-request');
+  assert.equal(client.stopped, true);
 });
 
 test('managed CLI routing requires explicit reasoning evidence for an L6-to-L7 transition', async (t) => {
@@ -240,16 +603,16 @@ test('managed CLI routing requires explicit reasoning evidence for an L6-to-L7 t
 
   await runWorker(parseArgs([
     'worker', ...common, '--complexity', 'exceptional', 'Run', 'direct', 'exceptional', 'work.',
-  ]), { worker, dispatchLedgerFactory });
+  ]), { worker, dispatchLedgerFactory, env: {} });
   await runWorker(parseArgs([
     'worker', ...common, '--complexity', 'repeated', '--level', '7',
     'Retry', 'after', 'the', 'tool', 'failure.',
-  ]), { worker, dispatchLedgerFactory });
+  ]), { worker, dispatchLedgerFactory, env: {} });
   await runWorker(parseArgs([
     'worker', ...common, '--complexity', 'repeated', '--level', '7',
     '--reasoning-escalation-evidence', 'The focused trace isolates reasoning as the remaining uncertainty.',
     'Resolve', 'the', 'isolated', 'reasoning', 'blocker.',
-  ]), { worker, dispatchLedgerFactory });
+  ]), { worker, dispatchLedgerFactory, env: {} });
 
   assert.equal(calls.length, 3);
   assert.equal(calls[0].level, 7);
@@ -391,10 +754,12 @@ test('direct changelog command delegates one exact commit through isolated scrat
   assert.match(output, /Recorded commit a1b2c3d4/u);
 });
 
-test('Claude workers use the Claude adapter without touching Codex app-server', async () => {
+test('Claude workers use the Claude adapter without touching Codex app-server', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-claude-worker-text-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
   const result = await runWorker({
-    cwd: process.cwd(),
+    cwd: root,
     prompt: 'Run one check.',
     level: 6,
     provider: 'claude',
@@ -573,6 +938,9 @@ test('a native Goal bootstrap timeout maps to exit code 4', async (t) => {
         return { thread: { id: 'thread-timeout' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
+      if (method === 'thread/read') return { thread: { status: { type: 'idle' } } };
+      if (method === 'thread/turns/list') return { data: [] };
+      if (method === 'turn/start') return new Promise(() => {});
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
         this.statuses.push(params.status);
@@ -839,4 +1207,52 @@ test('Claude Doctor checks the CLI, plugin, and authentication', () => {
     ['claude', ['auth', 'status']],
     ['claude', ['doctor']],
   ]);
+});
+
+test('native reviewer CLI is request-scoped and limited to Codex Goal and worker', () => {
+  for (const reviewer of ['user', 'auto_review', 'guardian_subagent']) {
+    for (const command of ['start', 'goal', 'worker']) {
+      assert.equal(parseArgs(['--codex', command, '--approvals-reviewer', reviewer, 'Inspect source']).approvalsReviewer, reviewer);
+      assert.equal(parseArgs(['--codex', command, `--approvals-reviewer=${reviewer}`, 'Inspect source']).approvalsReviewer, reviewer);
+    }
+  }
+  for (const command of ['quick', 'build', 'debug', 'queue', 'doctor', 'usage', 'budget', 'reference', 'changelog', 'attest', 'help']) {
+    assert.throws(() => parseArgs([command, '--approvals-reviewer', 'auto_review']), /only by Codex Goal and worker/u);
+  }
+  for (const command of ['start', 'goal', 'worker']) {
+    assert.throws(() => parseArgs(['--claude', command, '--approvals-reviewer', 'user', 'Inspect source']), /only by Codex Goal and worker/u);
+  }
+  for (const value of ['', 'accept', 'never', 'AUTO_REVIEW', '--plan']) {
+    assert.throws(() => parseArgs(['goal', '--approvals-reviewer', value, 'Inspect source']), /requires user, auto_review, or guardian_subagent/u);
+  }
+  assert.throws(() => parseArgs(['goal', '--approvals-reviewer']), /requires user, auto_review, or guardian_subagent/u);
+  assert.equal(parseArgs(['goal', 'Inspect source']).approvalsReviewer, undefined);
+});
+
+test('launcher forwards injected native reviewer defaults and overrides to Goal and worker', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-reviewer-cli-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  for (const [isTTY, override, expected] of [
+    [true, undefined, 'user'], [false, undefined, 'auto_review'],
+    [false, 'user', 'user'], [true, 'auto_review', 'auto_review'],
+    [false, 'guardian_subagent', 'guardian_subagent'],
+  ]) {
+    const input = { isTTY };
+    await runOneGoal({ cwd, prompt: 'Inspect source.', provider: 'codex', approvalsReviewer: override }, {
+      input, clientFactory: () => ({}),
+      sessionFactory(options) {
+        assert.equal(options.approvalsReviewer, expected);
+        assert.equal(options.input, input);
+        return { async run() { return { status: 'complete' }; }, async interrupt() {} };
+      },
+    });
+    await runWorker({ cwd, prompt: 'Inspect source.', provider: 'codex', approvalsReviewer: override }, {
+      input,
+      worker: async (options) => {
+        assert.equal(options.approvalsReviewer, expected);
+        assert.equal(options.stdin, input);
+        return { output: '' };
+      },
+    });
+  }
 });

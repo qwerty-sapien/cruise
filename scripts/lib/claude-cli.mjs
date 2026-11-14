@@ -12,6 +12,7 @@ import { inspectFlightPlan } from './flight-plan.mjs';
 import { normalizeRecommendedLevel } from './worker-policy.mjs';
 import { skillReference } from './provider.mjs';
 import { skillTriggerInstructions } from './skill-trigger-policy.mjs';
+import { prepareWorkerInput } from './simple-worker.mjs';
 import { captureWorkspaceFingerprint } from './supervisor.mjs';
 import {
   activateGoalSession,
@@ -87,7 +88,10 @@ export function claudeWorkerArgs({ task, level = null }) {
 }
 
 export function claudeChangelogWorkerArgs({ task }) {
-  if (typeof task !== 'string' || !task.trim()) throw new TypeError('changelog task is required');
+  if ((typeof task !== 'string' || !task.trim()) && task?.kind !== 'cruise-evidence-task') {
+    throw new TypeError('changelog task is required');
+  }
+  const prompt = prepareWorkerInput(task).map((item) => item.text).join('\n\n');
   return [
     '-p',
     '--permission-mode',
@@ -96,7 +100,7 @@ export function claudeChangelogWorkerArgs({ task }) {
     'json',
     '--append-system-prompt',
     'Summarize only the immutable evidence supplied in the request. Never inspect a repository or root underscore Markdown document. Return the requested JSON and do not edit the workspace.',
-    task,
+    prompt,
   ];
 }
 

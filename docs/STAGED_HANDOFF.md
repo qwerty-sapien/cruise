@@ -73,13 +73,16 @@ external transfer directory after the child has finished.
 
 ## Startup wait controls
 
-Native first-turn startup has no fixed abort deadline by default. A queued or
-slow native Goal produces a waiting heartbeat every 120 seconds; transport
-inactivity accounting is suspended only during this startup wait and during the
-parent handoff. Process exits and cancellation still reject the wait, and normal
-transport monitoring resumes as soon as the native turn starts.
+Idle first-turn startup has a 30-second deadline by default. Goal activation is
+metadata, so Cruise reconciles thread status and recent turn history, adopts an
+existing turn, and requests one explicit Plan bootstrap when the thread is idle.
+It recovers missed completion events and never blindly retries an ambiguously
+accepted start. Reactivation uses the same reconciliation in execution mode.
+Transport inactivity accounting resumes as soon as a turn is established; the
+idle startup deadline is then cleared. Process exit, cancellation and concrete
+nonretrying protocol errors settle the wait with the actual cause.
 
-Use `--bootstrap-timeout-ms 600000` to opt into a ten-minute first-turn deadline,
+Use `--bootstrap-timeout-ms 600000` to select a ten-minute idle first-turn deadline,
 or `--bootstrap-timeout-ms off` (equivalently 0) to disable it. The corresponding
 environment override is `CRUISE_GOAL_BOOTSTRAP_TIMEOUT_MS`.
 

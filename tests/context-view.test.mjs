@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import {
   CONTEXT_SLICE_BYTES,
@@ -197,4 +198,98 @@ test('mini-repository excludes dotenv and secret paths before every retrieval ro
     const content = await readFile(join(artifactDirectory, artifact), 'utf8');
     assert.doesNotMatch(content, /MINIREPO_.*SENTINEL/u);
   }
+});
+
+test('named sibling files and search roots work independently of Git and edit ownership', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'cruise-named-read-'));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const repo = join(parent, 'repo');
+  const shared = join(parent, 'shared');
+  await mkdir(repo); await mkdir(shared);
+  git(repo, ['init', '-q']);
+  await writeFile(join(shared, 'notes.md'), 'ordinary needle\nsecond line\n');
+  for (const input of ['../shared/notes.md', join(shared, 'notes.md')]) {
+    const result = await runContextView({ cwd: repo, command: 'slice', args: [input, '1', '2'], noPersist: true });
+    assert.match(result.content, /ordinary needle/u);
+    assert.deepEqual(result.sources, ['../shared/notes.md']);
+    assert.match(result.root, /repo$/u);
+  }
+  for (const options of [
+    { cwd: repo, args: ['needle', '../shared'] },
+    { cwd: repo, args: ['needle', join(shared, 'notes.md')] },
+    { cwd: shared, args: ['needle'] },
+    { cwd: repo, root: shared, args: ['needle', '.'] },
+  ]) {
+    const result = await runContextView({ ...options, command: 'search', noPersist: true });
+    assert.match(result.content, /notes\.md:1:ordinary needle/u);
+    assert.equal(result.source_count, 1);
+  }
+  const mapped = await runContextView({ cwd: shared, command: 'map', noPersist: true });
+  assert.match(mapped.content, /notes\.md/u);
+  const cli = spawnSync(process.execPath, [resolve(import.meta.dirname, '../scripts/context-view.mjs'),
+    '--root', shared, '--no-persist', 'slice', 'notes.md', '1', '2'], { cwd: repo, encoding: 'utf8' });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.match(JSON.parse(cli.stdout).content, /ordinary needle/u);
+  assert.equal(JSON.parse(cli.stdout).artifact_path, null);
+  assert.deepEqual((await readdir(shared)).sort(), ['notes.md']);
+});
+
+test('named reads retain ignore, sensitive, underscore-root, and symlink exclusions', async (t) => {
+  const root = await fixture(t);
+  await writeFile(join(root, '.gitignore'), 'ignored.md\nignored-dir/\n');
+  await writeFile(join(root, 'ignored.md'), 'EXCLUDED_NEEDLE');
+  await mkdir(join(root, 'ignored-dir'));
+  await writeFile(join(root, 'ignored-dir', 'safe.md'), 'EXCLUDED_NEEDLE');
+  await writeFile(join(root, '_reference.md'), 'EXCLUDED_NEEDLE');
+  await symlink(join(root, '.env'), join(root, 'alias.md'));
+  await symlink(join(root, 'notes'), join(root, 'alias-dir'));
+  for (const path of ['ignored.md', 'ignored-dir/safe.md', '_reference.md', 'alias.md', 'alias-dir/internal.md']) {
+    await assert.rejects(runContextView({ cwd: root, command: 'slice', args: [path], noPersist: true }));
+  }
+  const searched = await runContextView({ cwd: root, command: 'search', args: ['EXCLUDED_NEEDLE', '.'], noPersist: true,
+    explicitSensitivePaths: ['notes/internal.md'] });
+  assert.equal(searched.content, '');
+  for (const command of ['slice', 'search']) {
+    for (const path of ['.env', 'config/credentials.json', 'notes/internal.md', '_reference.md']) {
+      await assert.rejects(runContextView({ cwd: join(root, 'notes'), root, command,
+        args: command === 'search' ? ['NEEDLE', join(root, path)] : [join(root, path)], noPersist: true,
+        explicitSensitivePaths: ['notes/internal.md'] }));
+    }
+  }
+});
+
+test('read-only permission sandbox returns capped extraction without any filesystem write allowance', async (t) => {
+  const root = await fixture(t);
+  const moduleUrl = pathToFileURL(resolve(import.meta.dirname, '../scripts/context-view.mjs')).href;
+  const expected = await runContextView({ cwd: root, command: 'slice', args: ['source.mjs', '1', '4'], noPersist: true, visibleBytes: 128 });
+  for (const noPersist of [true, false]) {
+    const script = `import { runContextView } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(await runContextView(${JSON.stringify({ cwd: root, command: 'slice', args: ['source.mjs', '1', '4'], noPersist, visibleBytes: 128 })})));`;
+    const child = spawnSync(process.execPath, ['--permission', '--allow-fs-read=*', '--allow-child-process', '--input-type=module', '-e', script],
+      { encoding: 'utf8', maxBuffer: 16 * 1024 });
+    assert.equal(child.status, 0, child.stderr);
+    const actual = JSON.parse(child.stdout);
+    assert.equal(actual.content, expected.content);
+    assert.equal(actual.content_digest, expected.content_digest);
+    assert.ok(actual.visible_bytes <= 128);
+    assert.equal(actual.artifact_path, null);
+    assert.equal(actual.cache_hit, false);
+    assert.equal(actual.persistence, noPersist ? 'disabled' : 'unavailable');
+    assert.equal(actual.persistence_error, noPersist ? null : 'ERR_ACCESS_DENIED');
+  }
+  assert.equal((await readdir(root)).includes('.cruise'), false);
+});
+
+test('non-Git enumeration fails at a hard entry cap and tiny visible caps stay bounded', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-enumeration-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'normal.txt'), 'ordinary content\n');
+  for (const visibleBytes of [1, 2, 3, 4]) {
+    const result = await runContextView({ cwd: root, command: 'slice', args: ['normal.txt'], noPersist: true, visibleBytes });
+    assert.ok(result.visible_bytes <= visibleBytes);
+  }
+  // Excluded empty fixture entries exercise the enumeration bound without reads.
+  for (let start = 0; start < 4096; start += 128) {
+    await Promise.all(Array.from({ length: 128 }, (_, offset) => writeFile(join(root, `${start + offset}.bin`), '')));
+  }
+  await assert.rejects(runContextView({ cwd: root, command: 'map', noPersist: true }), /enumeration cap/u);
 });

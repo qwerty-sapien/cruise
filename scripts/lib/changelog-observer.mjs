@@ -74,16 +74,20 @@ export function parseChangelogSummaryOutput(output, update) {
 }
 
 export function changelogSummaryTask(update) {
-  return [
+  const instructions = [
     'Act as a read-only changelog summarizer running in parallel with the main Cruise session.',
     'Never read, search, or inspect root Markdown files whose basenames begin with an underscore.',
     'Use only the immutable, script-only Git evidence packet supplied below. Do not inspect a repository or working tree.',
-    `Commit evidence: ${JSON.stringify(update.commitEvidence)}.`,
-    `Overall since-last-push evidence: ${JSON.stringify(update.overallEvidence)}.`,
     'Return JSON only with this schema:',
     '{"version":1,"commit":[{"path":"relative/script.mjs","summary":"plain-language summary, at most 500 characters"}],"overall":[{"path":"relative/script.mjs","summary":"plain-language summary, at most 500 characters"}]}',
     'Return exactly one entry for every supplied path in its section, no other paths, no Markdown, no raw patch text, and no commentary.',
   ].join(' ');
+  // Snapshot data separately: source literals are not requests to access files.
+  return Object.freeze({
+    kind: 'cruise-evidence-task',
+    instructions,
+    evidence: JSON.stringify({ commit: update.commitEvidence, overall: update.overallEvidence }),
+  });
 }
 
 async function commitsBetween(cwd, previous, current) {

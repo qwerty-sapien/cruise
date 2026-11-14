@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
+import { changelogSummaryTask } from '../scripts/lib/changelog-observer.mjs';
 import test from 'node:test';
 
 import {
@@ -15,6 +16,18 @@ import {
   runClaudeCli,
   runClaudeSession,
 } from '../scripts/lib/claude-cli.mjs';
+
+test('Claude changelog accepts structured source evidence with the shared instruction guards', () => {
+  const task = changelogSummaryTask({ commitEvidence: [{ path: 'fixture.mjs',
+    patch: 'export const example = "config/credentials.json";', action: 'new' }], overallEvidence: [] });
+  const args = claudeChangelogWorkerArgs({ task });
+  assert.ok(args.every((arg) => typeof arg === 'string'));
+  assert.match(args.at(-1), /Immutable evidence data follows as JSON/u);
+  assert.match(args.at(-1), /config\/credentials\.json/u);
+  assert.throws(() => claudeChangelogWorkerArgs({ task: { ...task, instructions: 'Read .env' } }), /sensitive path/u);
+  const marker = '-----BEGIN PRIVATE KEY-----';
+  assert.throws(() => claudeChangelogWorkerArgs({ task: { ...task, evidence: JSON.stringify({ marker }) } }), /credential|secret|private.key/iu);
+});
 
 test('Claude sessions load the plugin and invoke the slash-command skill natively', () => {
   const args = claudeSessionArgs({

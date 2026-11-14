@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, opendir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,7 @@ const COMMANDS = new Set([
   'changed',
 ]);
 
-const EXCLUDED_PATH = /(?:^|\/)(?:\.git|node_modules|vendor|dist|build|coverage|\.next|\.cache|artifacts|datasets?|models?|weights?)(?:\/|$)|\.(?:zip|tar|tgz|gz|7z|bin|png|jpe?g|gif|pdf|csv|tsv|jsonl|ndjson|parquet|arrow|feather|avro|npy|npz|safetensors|pt|pth|ckpt|onnx|h5|log)$/iu;
+const EXCLUDED_PATH = /(?:^|\/)(?:\.git|\.cruise|node_modules|vendor|dist|build|coverage|\.next|\.cache|artifacts|datasets?|models?|weights?)(?:\/|$)|\.(?:zip|tar|tgz|gz|7z|bin|png|jpe?g|gif|pdf|csv|tsv|jsonl|ndjson|parquet|arrow|feather|avro|npy|npz|safetensors|pt|pth|ckpt|onnx|h5|log)$/iu;
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -52,8 +52,48 @@ function git(cwd, args, { allowNoMatch = false } = {}) {
 function safeRelative(cwd, input) {
   const absolute = resolve(cwd, input);
   const rel = relative(cwd, absolute).split(sep).join('/');
-  if (!rel || rel === '..' || rel.startsWith('../')) throw new Error(`path escapes repository: ${input}`);
-  return { absolute, relative: rel };
+  return { absolute, relative: rel || '.' };
+}
+
+function gitRoot(cwd) {
+  const result = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', maxBuffer: 4096 });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function ignored(cwd, absolute) {
+  const root = gitRoot(cwd);
+  if (!root) return false;
+  const result = spawnSync('git', ['check-ignore', '--no-index', '-q', '--', absolute], { cwd, encoding: 'utf8' });
+  if (result.error) throw result.error;
+  if (![0, 1].includes(result.status)) throw new Error('could not check retrieval ignore rules');
+  return result.status === 0;
+}
+
+async function readableTarget(cwd, input, { explicitSensitivePaths = [] } = {}) {
+  const target = safeRelative(cwd, input);
+  const exclusions = explicitSensitivePaths.map((path) => resolve(cwd, path));
+  for (const path of [target.relative, target.absolute]) {
+    assertReadablePath(path, { explicitSensitivePaths: [...explicitSensitivePaths, ...exclusions] });
+  }
+  const canonical = await realpath(target.absolute);
+  assertReadablePath(canonical, { explicitSensitivePaths: exclusions });
+  // Reject aliases below the actual read root, including symlinked directories.
+  // Canonicalize the parent of an external named root to permit host aliases
+  // such as macOS /tmp, without following the named entry itself.
+  const external = target.relative === '..' || target.relative.startsWith('../');
+  const boundary = external ? dirname(target.absolute) : cwd;
+  const expected = resolve(await realpath(boundary), relative(boundary, target.absolute));
+  if (canonical !== expected || (await lstat(target.absolute)).isSymbolicLink()) {
+    throw new Error(`symlink retrieval is excluded: ${input}`);
+  }
+  const owner = gitRoot(dirname(canonical));
+  const ownerRelative = relative(owner ?? (external ? dirname(canonical) : cwd), canonical);
+  if (/^_[^/]*\.md$/iu.test(ownerRelative) || /^_[^/]*\.md$/iu.test(target.relative)
+    || (external && /^_.*\.md$/iu.test(basename(canonical)))) {
+    throw new Error(`write-only root Markdown is excluded: ${input}`);
+  }
+  if (ignored(dirname(canonical), canonical)) throw new Error(`ignored retrieval path: ${input}`);
+  return { absolute: canonical, relative: relative(cwd, canonical).split(sep).join('/') || '.' };
 }
 
 function included(path, { explicit = false, explicitSensitivePaths = [] } = {}) {
@@ -62,6 +102,7 @@ function included(path, { explicit = false, explicitSensitivePaths = [] } = {}) 
 }
 
 function trackedFiles(cwd, { explicitSensitivePaths = [] } = {}) {
+  if (!gitRoot(cwd)) return [];
   return git(cwd, ['ls-files', '-z', '--', '.', ...sensitiveGitPathspecs(explicitSensitivePaths)])
     .split('\0')
     .filter(Boolean);
@@ -72,7 +113,7 @@ function instructionPaths(files, targets = []) {
   if (targets.length === 0) return instructions;
   return instructions.filter((instruction) => {
     const directory = dirname(instruction) === '.' ? '' : `${dirname(instruction)}/`;
-    return targets.some((target) => target === instruction || target.startsWith(directory));
+    return targets.some((target) => !target.startsWith('../') && (target === instruction || target.startsWith(directory)));
   });
 }
 
@@ -92,7 +133,7 @@ async function repositoryIdentity(cwd, paths, { explicitSensitivePaths = [] } = 
   const safe = (paths ?? trackedFiles(cwd, { explicitSensitivePaths }))
     .filter((path) => included(path, { explicitSensitivePaths }));
   const safeSet = new Set(safe);
-  const index = git(cwd, ['ls-files', '-s', '--', '.', ...sensitiveGitPathspecs(explicitSensitivePaths)])
+  const index = (gitRoot(cwd) ? git(cwd, ['ls-files', '-s', '--', '.', ...sensitiveGitPathspecs(explicitSensitivePaths)]) : '')
     .split('\n')
     .filter((line) => safeSet.has(line.replace(/^\d+\s+[0-9a-f]+\s+\d+\t/u, '')))
     .join('\n');
@@ -118,8 +159,9 @@ function truncateLine(line, limit = CONTEXT_LONG_LINE_BYTES) {
 function capUtf8(value, limit) {
   const bytes = Buffer.from(value);
   if (bytes.length <= limit) return { value, truncated: false };
+  const suffix = limit >= 4 ? '\n...' : '.'.repeat(Math.max(0, limit));
   return {
-    value: `${bytes.subarray(0, Math.max(0, limit - 4)).toString('utf8').replace(/\uFFFD$/u, '')}\n...`,
+    value: `${bytes.subarray(0, Math.max(0, limit - Buffer.byteLength(suffix))).toString('utf8').replace(/\uFFFD$/u, '')}${suffix}`,
     truncated: true,
   };
 }
@@ -164,12 +206,7 @@ async function lineScan(path, visit, { stopAfter = Infinity } = {}) {
 
 async function mapCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const files = trackedFiles(cwd, { explicitSensitivePaths });
-  const prefixes = args.map((path) => safeRelative(cwd, path).relative);
-  for (const path of prefixes) assertReadablePath(path, { explicitSensitivePaths });
-  const selected = files.filter((path) => {
-    if (!included(path, { explicitSensitivePaths })) return false;
-    return prefixes.length === 0 || prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
-  });
+  const selected = await selectedFiles(cwd, args, { explicitSensitivePaths });
   const lines = [];
   for (const path of selected) {
     const info = await lstat(resolve(cwd, path));
@@ -181,6 +218,41 @@ async function mapCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
     instructions: instructionPaths(files, selected),
     identity: await repositoryIdentity(cwd, selected, { explicitSensitivePaths }),
   };
+}
+
+// Enumerate only the named roots (or this root), never the surrounding host.
+// Abort instead of silently claiming a complete search after a traversal cap.
+async function selectedFiles(cwd, paths, options) {
+  const selected = new Set();
+  let visited = 0;
+  async function visit(input, depth = 0, explicit = false) {
+    if (++visited > 4096 || depth > 32) throw new Error('retrieval enumeration cap exceeded; name a narrower root');
+    const lexical = safeRelative(cwd, input);
+    if (!included(lexical.relative, options) || !included(lexical.absolute, options)) {
+      if (explicit) await readableTarget(cwd, input, options);
+      return;
+    }
+    let target;
+    try { target = await readableTarget(cwd, input, options); }
+    catch (error) {
+      if (explicit || !(/excluded|ignored/u.test(error.message) || error.code === 'CRUISE_SENSITIVE_PATH' || error.code === 'ENOENT')) throw error;
+      return;
+    }
+    const info = await lstat(target.absolute);
+    if (info.isDirectory()) {
+      if (dirname(target.absolute) === target.absolute) throw new Error('name a narrower retrieval root than the filesystem root');
+      const directory = await opendir(target.absolute);
+      for await (const entry of directory) {
+        await visit(resolve(target.absolute, entry.name), depth + 1);
+      }
+    } else if (info.isFile()) selected.add(target.relative);
+  }
+  if (paths.length === 0 && gitRoot(cwd)) {
+    for (const path of trackedFiles(cwd, options)) await visit(path);
+  } else {
+    for (const path of paths.length ? paths : ['.']) await visit(path, 0, true);
+  }
+  return [...selected].sort();
 }
 
 function chunksByArgumentBytes(paths, cap = 96 * 1024) {
@@ -204,20 +276,26 @@ function chunksByArgumentBytes(paths, cap = 96 * 1024) {
 async function searchCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [pattern, ...paths] = args;
   if (!pattern) throw new Error('search requires a pattern');
-  const normalized = paths.map((path) => safeRelative(cwd, path).relative);
-  for (const path of normalized) assertReadablePath(path, { explicitSensitivePaths });
   const tracked = trackedFiles(cwd, { explicitSensitivePaths });
-  const selected = tracked.filter((path) => included(path, { explicitSensitivePaths }) && (
-    normalized.length === 0 || normalized.some((item) => path === item || path.startsWith(`${item}/`))
-  ));
-  const output = chunksByArgumentBytes(selected).map((chunk) => git(cwd, [
-    'grep', '-n', '-I', '--full-name', '-e', pattern, '--', ...chunk,
-  ], { allowNoMatch: true })).join('');
+  const selected = await selectedFiles(cwd, paths, { explicitSensitivePaths });
+  // grep keeps the existing basic-regexp semantics without Git's path boundary.
+  // Every file has already passed the same exclusions and symlink checks.
+  let output = '';
+  for (const chunk of chunksByArgumentBytes(selected.map((path) => resolve(cwd, path)))) {
+    const result = spawnSync('grep', ['-n', '-H', '-I', '-e', pattern, '--', ...chunk], {
+      cwd, encoding: 'utf8', maxBuffer: 1024 * 1024,
+    });
+    if (result.error) throw result.error;
+    if (![0, 1].includes(result.status)) throw new Error(String(result.stderr || 'search failed').trim());
+    output += result.stdout;
+    if (Buffer.byteLength(output) > 1024 * 1024) throw new Error('search output cap exceeded; narrow the query');
+  }
   const matches = [];
   const sources = new Set();
   for (const line of output.split('\n').filter(Boolean)) {
-    const path = line.split(':', 1)[0];
-    matches.push(line);
+    const absolute = line.split(':', 1)[0];
+    const path = relative(cwd, absolute).split(sep).join('/');
+    matches.push(`${path}${line.slice(absolute.length)}`);
     sources.add(path);
   }
   return {
@@ -231,8 +309,7 @@ async function searchCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
 async function sliceCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input, startRaw = '1', endRaw = null] = args;
   if (!input) throw new Error('slice requires a file');
-  const target = safeRelative(cwd, input);
-  assertReadablePath(target.relative, { explicitSensitivePaths });
+  const target = await readableTarget(cwd, input, { explicitSensitivePaths });
   if (!included(target.relative, { explicit: true, explicitSensitivePaths })) {
     throw new Error(`excluded file requires an explicit compact extractor: ${target.relative}`);
   }
@@ -273,8 +350,7 @@ async function sliceCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
 async function symbolsCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('symbols requires a file');
-  const target = safeRelative(cwd, input);
-  assertReadablePath(target.relative, { explicitSensitivePaths });
+  const target = await readableTarget(cwd, input, { explicitSensitivePaths });
   const matches = [];
   const pattern = /^\s*(?:export\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|def|struct|enum)\s+([A-Za-z_$][\w$]*)/u;
   await lineScan(target.absolute, (line, number) => {
@@ -304,8 +380,7 @@ function summarizeJson(value, depth = 0) {
 async function jsonSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('json-summary requires a file');
-  const target = safeRelative(cwd, input);
-  assertReadablePath(target.relative, { explicitSensitivePaths });
+  const target = await readableTarget(cwd, input, { explicitSensitivePaths });
   const value = JSON.parse(await readFile(target.absolute, 'utf8'));
   return {
     raw: `${JSON.stringify(summarizeJson(value), null, 2)}\n`,
@@ -318,8 +393,7 @@ async function jsonSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {
 async function tableSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('table-summary requires a file');
-  const target = safeRelative(cwd, input);
-  assertReadablePath(target.relative, { explicitSensitivePaths });
+  const target = await readableTarget(cwd, input, { explicitSensitivePaths });
   let rows = 0;
   let columns = 0;
   let delimiter = ',';
@@ -347,8 +421,7 @@ async function tableSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = 
 async function logSummaryCommand(cwd, args, { explicitSensitivePaths = [] } = {}) {
   const [input] = args;
   if (!input) throw new Error('log-summary requires a file');
-  const target = safeRelative(cwd, input);
-  assertReadablePath(target.relative, { explicitSensitivePaths });
+  const target = await readableTarget(cwd, input, { explicitSensitivePaths });
   const counts = { error: 0, warn: 0, info: 0 };
   let lines = 0;
   let first = '';
@@ -416,6 +489,8 @@ async function cachedResult(cwd, cacheKey) {
 
 export async function runContextView({
   cwd = process.cwd(),
+  root: explicitRoot = null,
+  noPersist = false,
   command,
   args = [],
   visibleBytes = CONTEXT_VISIBLE_BYTES,
@@ -425,37 +500,53 @@ export async function runContextView({
   if (!Number.isSafeInteger(visibleBytes) || visibleBytes < 1 || visibleBytes > CONTEXT_VISIBLE_BYTES) {
     throw new TypeError('visibleBytes must be an integer from 1 through 12288');
   }
-  const root = resolve(cwd);
   if (!Array.isArray(explicitSensitivePaths) || explicitSensitivePaths.some((path) => typeof path !== 'string')) {
     throw new TypeError('explicitSensitivePaths must be an array of repository-relative paths');
   }
+  const namedRoot = resolve(cwd, explicitRoot ?? '.');
+  assertReadablePath(namedRoot);
+  const root = await realpath(namedRoot);
+  assertReadablePath(root);
+  if (explicitRoot !== null && (await lstat(namedRoot)).isSymbolicLink()) throw new Error('symlink retrieval root is excluded');
   const initial = await HANDLERS[command](root, args, { explicitSensitivePaths });
-  const cacheKey = sha256(JSON.stringify({ command, args, explicitSensitivePaths, identity: initial.identity }));
-  const hit = await cachedResult(root, cacheKey);
+  const cacheKey = sha256(JSON.stringify({ root, command, args, explicitSensitivePaths, identity: initial.identity, content: sha256(initial.raw) }));
+  const hit = noPersist ? null : await cachedResult(root, cacheKey);
   let raw = initial.raw;
-  let artifactPath;
+  let artifactPath = null;
+  let persistence = noPersist ? 'disabled' : 'available';
+  let persistenceError = null;
   let cacheHit = false;
   if (hit) {
     raw = hit.raw;
     artifactPath = hit.cached.artifact_path;
     cacheHit = true;
-  } else {
-    const artifactDirectory = resolve(root, '.cruise', 'artifacts');
-    const cacheDirectory = resolve(root, '.cruise', 'context-cache');
-    await mkdir(artifactDirectory, { recursive: true });
-    await mkdir(cacheDirectory, { recursive: true });
-    artifactPath = resolve(artifactDirectory, `context-view-${command}-${cacheKey.slice(0, 16)}.raw`);
-    await writeFile(artifactPath, raw, { encoding: 'utf8', mode: 0o600 });
-    await writeFile(resolve(cacheDirectory, `${cacheKey}.json`), `${JSON.stringify({
-      artifact_path: artifactPath,
-      content_digest: sha256(raw),
-    })}\n`, { encoding: 'utf8', mode: 0o600 });
+  } else if (!noPersist) {
+    try {
+      const artifactDirectory = resolve(root, '.cruise', 'artifacts');
+      const cacheDirectory = resolve(root, '.cruise', 'context-cache');
+      await mkdir(artifactDirectory, { recursive: true });
+      await mkdir(cacheDirectory, { recursive: true });
+      artifactPath = resolve(artifactDirectory, `context-view-${command}-${cacheKey.slice(0, 16)}.raw`);
+      await writeFile(artifactPath, raw, { encoding: 'utf8', mode: 0o600 });
+      await writeFile(resolve(cacheDirectory, `${cacheKey}.json`), `${JSON.stringify({
+        artifact_path: artifactPath,
+        content_digest: sha256(raw),
+      })}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      if (!['EACCES', 'EPERM', 'EROFS', 'ERR_ACCESS_DENIED', 'ENOTDIR', 'EEXIST'].includes(error?.code)) throw error;
+      artifactPath = null;
+      persistence = 'unavailable';
+      persistenceError = error.code;
+    }
   }
   const visible = visibleContent(presentationFor(command, raw), Math.min(visibleBytes, 10 * 1024));
   const rtk = spawnSync('rtk', ['--version'], { encoding: 'utf8', timeout: 1_000 });
   return Object.freeze({
     schema_version: 1,
     command,
+    root,
+    persistence,
+    persistence_error: persistenceError,
     content: visible.value,
     content_digest: sha256(raw),
     raw_bytes: Buffer.byteLength(raw),
@@ -473,17 +564,40 @@ export async function runContextView({
 }
 
 function parseCli(argv) {
-  const [command, ...args] = argv;
-  if (!command || command === '--help' || command === '-h') {
-    return { help: true, command: null, args: [] };
+  const positional = [];
+  let root = null;
+  let noPersist = false;
+  let options = true;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (options && arg === '--') { options = false; continue; }
+    if (options && arg === '--no-persist') { noPersist = true; continue; }
+    if (options && arg === '--root') {
+      if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error('--root requires a directory');
+      root = argv[++i];
+      continue;
+    }
+    positional.push(arg);
   }
-  return { help: false, command, args };
+  const [command, ...args] = positional;
+  return { help: !command || command === '--help' || command === '-h', command, args, root, noPersist };
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const parsed = parseCli(argv);
   if (parsed.help) {
-    process.stdout.write('Usage: node scripts/context-view.mjs <map|search|slice|symbols|json-summary|table-summary|log-summary|changed> [args...]\n');
+    process.stdout.write([
+      'Usage: node scripts/context-view.mjs <command> [args...] [--root directory] [--no-persist]',
+      '  map [path...]',
+      '  search <pattern> [path...]',
+      '  slice <file> [start-line] [end-line]',
+      '  symbols|json-summary|table-summary|log-summary <file>',
+      '  changed',
+      'Paths and line ranges are positional. --root selects a named retrieval directory.',
+      '--no-persist avoids writing retrieval caches and artifacts (use for read-only workers).',
+      'Example: slice ordinary-note.txt 1 1 --root ../shared --no-persist',
+      '',
+    ].join('\n'));
     return 0;
   }
   const result = await runContextView(parsed);

@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { runSimpleWorker } from '../scripts/lib/simple-worker.mjs';
 
 import {
   buildContextCapsule,
   MAX_CAPSULE_BYTES,
   MAX_WORKER_HANDOFF_BYTES,
+  MAX_WORKER_RESULT_BYTES,
   parseWorkerHandoff,
   readContinuationContext,
   writeRootHandoff,
@@ -47,9 +50,34 @@ test('capsules and schema-constrained handoffs enforce byte caps', () => {
     /exceeds/u,
   );
   assert.throws(
-    () => parseWorkerHandoff(JSON.stringify(handoff({ outcome: 'x'.repeat(MAX_WORKER_HANDOFF_BYTES) }))),
+    () => parseWorkerHandoff(JSON.stringify(handoff({ outcome: 'x'.repeat(MAX_WORKER_RESULT_BYTES) }))),
     /exceeds/u,
   );
+});
+
+test('bounded detailed worker findings retain a compact root continuation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-detailed-handoff-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const raw = JSON.stringify(handoff({ completed_work: ['Detailed finding. '.repeat(280)] }));
+  assert.ok(Buffer.byteLength(raw) > MAX_WORKER_HANDOFF_BYTES);
+  assert.ok(Buffer.byteLength(raw) <= MAX_WORKER_RESULT_BYTES);
+  const parsed = parseWorkerHandoff(raw);
+  assert.equal(parsed.completed_work[0], 'Detailed finding. '.repeat(280).trim());
+  const persisted = await writeRootHandoff(root, parsed);
+  assert.ok(persisted.bytes <= MAX_WORKER_HANDOFF_BYTES);
+});
+
+test('a completed worker may report no blocker and its outcome survives continuation formatting', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-result-handoff-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const parsed = parseWorkerHandoff(JSON.stringify(handoff({
+    outcome: 'Exact computed result: fixture-result-731.', active_blocker_or_next_work_item: '',
+  })));
+  const result = await writeRootHandoff(root, parsed);
+  const content = await readFile(result.path, 'utf8');
+  assert.match(content, /fixture-result-731/u);
+  assert.match(content, /No blocker reported/u);
+  assert.throws(() => parseWorkerHandoff(JSON.stringify(handoff({ active_blocker_or_next_work_item: null }))), /must be a string/u);
 });
 
 test('worker capsules fail closed before sensitive paths or credential material can be dispatched', () => {
@@ -257,4 +285,57 @@ test('managed dispatch surfaces reservation release failure', async () => {
     /quota release failed/u,
   );
   assert.equal(dispatcher.active, 0);
+});
+
+test('handoff parser rejects malformed, multiple-object, fenced, and trailing-text output', () => {
+  const valid = JSON.stringify(handoff());
+  for (const invalid of ['{"outcome":', valid + '\n' + valid, '```json\n' + valid + '\n```', valid + '\ntrailing text']) {
+    assert.throws(() => parseWorkerHandoff(invalid), /one JSON object/u);
+  }
+  assert.deepEqual(parseWorkerHandoff(valid), handoff());
+});
+
+test('managed dispatch consumes canonical final items and retains strict payload parsing', async () => {
+  const valid = JSON.stringify(handoff());
+  const completed = (id, phase, text) => ({ method: 'item/completed', params: { item: { type: 'agentMessage', id, phase, text } } });
+  const delta = (itemId, text) => ({ method: 'item/agentMessage/delta', params: { itemId, delta: text } });
+  for (const [events, expectedError] of [
+    [[completed('f', 'final_answer', valid)], null],
+    [[delta('c', 'Checking.'), completed('c', 'commentary', 'Checking.'), delta('f', valid), completed('f', 'final_answer', valid)], null],
+    [[delta('f', valid), completed('f', null, valid)], null],
+    [[delta('f', valid)], null],
+    [[completed('f', 'final_answer', valid + '\ntrailing text')], /one JSON object/u],
+    [[completed('f', 'final_answer', valid + '\n' + valid)], /one JSON object/u],
+    [[completed('f', 'final_answer', '```json\n' + valid + '\n```')], /one JSON object/u],
+    [[completed('f', 'final_answer', '{"outcome":')], /one JSON object/u],
+    [[completed('f', 'final_answer', valid), completed('g', null, valid)], /ambiguous worker final output/u],
+  ]) {
+    let persisted = false;
+    let released = false;
+    class TranscriptClient extends EventEmitter {
+      async start() {} async stop() {}
+      async request(method) {
+        if (method === 'thread/start') return { thread: { id: 'worker-thread' } };
+        if (method === 'turn/start') {
+          queueMicrotask(() => {
+            for (const event of events) this.emit('notification', event);
+            this.emit('notification', { method: 'turn/completed', params: { turn: { status: 'completed' } } });
+          });
+          return { turn: { id: 'worker-turn' } };
+        }
+        throw new Error('unexpected method: ' + method);
+      }
+    }
+    const dispatcher = new ManagedWorkerDispatcher({ cwd: process.cwd(),
+      capsuleWriter: async () => '/tmp/mock-capsule.json',
+      reserveWorker: async () => ({ release: async () => { released = true; } }),
+      runWorker: (request) => runSimpleWorker({ ...request, level: null, clientFactory: () => new TranscriptClient() }),
+      handoffWriter: async () => { persisted = true; return { path: '/tmp/mock-handoff.md' }; },
+    });
+    const dispatch = dispatcher.dispatch({ task: 'Review one bounded fixture.', readOnly: true });
+    if (expectedError) await assert.rejects(dispatch, expectedError);
+    else await dispatch;
+    assert.equal(persisted, expectedError === null);
+    assert.equal(released, true);
+  }
 });

@@ -1,6 +1,41 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import fs, { constants } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isSensitivePath } from './sensitive-path.mjs';
+
+// Used for small control inputs and bounded product reads. Never follow an
+// alias inside the workspace, including an aliased parent directory.
+export async function readBoundedAssuranceFile(cwd, path, maxBytes) {
+  const parts = path.split('/');
+  if (!path || parts.some((part) => !part || part === '.' || part === '..') ||
+      path.includes('\\') || isSensitivePath(path) || /^_[^/]*\.md$/iu.test(path)) {
+    throw new Error('unsafe assurance file');
+  }
+  for (let index = 1; index <= parts.length; index += 1) {
+    const stat = await fs.lstat(join(cwd, ...parts.slice(0, index)));
+    if (stat.isSymbolicLink() || (index < parts.length && !stat.isDirectory())) {
+      throw new Error('assurance file traverses a non-directory or symlink');
+    }
+  }
+  const handle = await fs.open(join(cwd, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size > maxBytes) throw new Error('assurance file exceeds read bounds');
+    const buffer = Buffer.alloc(before.size + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    const after = await handle.stat();
+    if (size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs ||
+        after.ctimeMs !== before.ctimeMs) throw new Error('assurance file changed during capture');
+    return buffer.subarray(0, size);
+  } finally {
+    await handle.close();
+  }
+}
 
 const RISKS = new Set(['low', 'medium', 'high', 'critical']);
 const GATE_STATES = new Set([
@@ -290,7 +325,7 @@ export async function captureFlightAssuranceContext(cwd, plan, {
 } = {}) {
   let originText;
   try {
-    originText = await readFile(join(cwd, '.cruise', 'ORIGIN.md'), 'utf8');
+    originText = (await readBoundedAssuranceFile(cwd, '.cruise/ORIGIN.md', 64 * 1024)).toString('utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') {
       throw new Error('Cruise cannot attest Flight v2 without .cruise/ORIGIN.md');
@@ -321,7 +356,7 @@ export async function captureFlightContextFingerprint(cwd, plan, {
 } = {}) {
   let originText;
   try {
-    originText = await readFile(join(cwd, '.cruise', 'ORIGIN.md'), 'utf8');
+    originText = (await readBoundedAssuranceFile(cwd, '.cruise/ORIGIN.md', 64 * 1024)).toString('utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') {
       throw new Error('Cruise cannot attest Flight v2 without .cruise/ORIGIN.md');

@@ -11,6 +11,8 @@ import {
 
 export const MAX_CAPSULE_BYTES = 8 * 1024;
 export const MAX_WORKER_HANDOFF_BYTES = 4 * 1024;
+// Structured findings may need more room than the root continuation injected later.
+export const MAX_WORKER_RESULT_BYTES = 8 * 1024;
 
 const HANDOFF_KEYS = Object.freeze([
   'outcome',
@@ -111,7 +113,7 @@ export async function writeContextCapsule(cwd, capsule, {
 
 export function parseWorkerHandoff(raw) {
   if (typeof raw !== 'string') throw new TypeError('worker handoff must be JSON text');
-  assertByteCap(raw, MAX_WORKER_HANDOFF_BYTES, 'worker handoff');
+  assertByteCap(raw, MAX_WORKER_RESULT_BYTES, 'worker handoff');
   let value;
   try {
     value = JSON.parse(raw);
@@ -132,10 +134,9 @@ export function parseWorkerHandoff(raw) {
     changed_files: stringList(value.changed_files, 'changed_files'),
     decisions_and_invariants: stringList(value.decisions_and_invariants, 'decisions_and_invariants'),
     exact_tests: stringList(value.exact_tests, 'exact_tests'),
-    active_blocker_or_next_work_item: text(
-      value.active_blocker_or_next_work_item,
-      'active_blocker_or_next_work_item',
-    ),
+    active_blocker_or_next_work_item: typeof value.active_blocker_or_next_work_item === 'string'
+      ? value.active_blocker_or_next_work_item.trim()
+      : (() => { throw new TypeError('active_blocker_or_next_work_item must be a string'); })(),
     files_not_to_reread: stringList(value.files_not_to_reread, 'files_not_to_reread'),
     evidence_pointers: stringList(value.evidence_pointers, 'evidence_pointers'),
     usage_and_quota_summary: text(value.usage_and_quota_summary, 'usage_and_quota_summary'),
@@ -146,6 +147,7 @@ export function parseWorkerHandoff(raw) {
 export function formatRootHandoff(handoff) {
   const value = typeof handoff === 'string' ? parseWorkerHandoff(handoff) : handoff;
   const compact = [
+    `result ${value.outcome}`,
     ...value.completed_work.map((item) => `completed ${item}`),
     ...value.changed_files.map((item) => `changed ${item}`),
     ...value.decisions_and_invariants.map((item) => `preserve ${item}`),
@@ -158,7 +160,7 @@ export function formatRootHandoff(handoff) {
     '# Cruise continuation',
     '',
     `- Compact handoff: ${truncateUtf8(compact, 1_800)}`,
-    `- Next work item: ${value.active_blocker_or_next_work_item}`,
+    `- Next work item: ${value.active_blocker_or_next_work_item || 'No blocker reported; reconcile the result with the parent task.'}`,
     `- Quota state: ${value.usage_and_quota_summary}`,
     `- Unresolved assurance: ${truncateUtf8(assurance, 1_200)}`,
     '',
@@ -201,7 +203,8 @@ export async function readContinuationContext(cwd, {
 
 export const WORKER_HANDOFF_SCHEMA_INSTRUCTIONS = [
   'Return exactly one JSON object and no markdown fence.',
-  `Keep it at most ${MAX_WORKER_HANDOFF_BYTES} bytes.`,
+  `Keep it concise and at most ${MAX_WORKER_RESULT_BYTES} bytes; the root continuation remains capped at ${MAX_WORKER_HANDOFF_BYTES} bytes.`,
   `Use exactly these keys: ${HANDOFF_KEYS.join(', ')}.`,
   'All fields except outcome, active_blocker_or_next_work_item, and usage_and_quota_summary are arrays of strings.',
+  'active_blocker_or_next_work_item may be an empty string when no blocker or next step is reported; outcome must carry the result.',
 ].join(' ');

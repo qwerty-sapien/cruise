@@ -94,6 +94,8 @@ Use `references/ROUTING.md`. High consequence sets a minimum level. Complexity s
 
 For every ready Goal micro-goal, use `cruise worker --managed --complexity <class> --owns <path> --evidence <fact> --range <path:start-end> --verify <command> <task>`. Cruise applies consequence floors automatically. Pass `--level <1-7>` only as a stronger explicit override; it cannot lower the routed floor. L7 selects GPT-6 Astra xhigh for direct exceptional-consequence work and requires `--exceptional-consequence` plus `--exceptional-rationale`; Astra ultra is reserved for an evidenced escalation from L6. The root writes the capsule before quota reservation, remains the integrator and final reviewer, and consumes the worker's schema-constrained `.cruise/HANDOFF.md`. A Goal may have at most three active workers. Debug begins with at most three evidence-distinct probes and needs confirmed evidence before another wave.
 
+The managed CLI starts a separate Codex control-plane transport. If an actual OS sandbox permission failure prevents startup before a worker thread exists, request host-native approval for that exact bounded CLI command, giving its task justification and existing user authority. Preserve the worker thread's read-only scope when requested. An OS sandbox failure is distinct from an automatic approval reviewer rejection: honor actual rejections and never retry them unchanged. Do not turn an ordinary native approval request into a new Cruise consent ceremony.
+
 The capsule must be at most 8 KB and contain:
 
 - exact task and non-goals;
@@ -106,7 +108,7 @@ The capsule must be at most 8 KB and contain:
 - stop and escalation conditions;
 - model-visible output cap.
 
-Workers may search outside the initial paths only after stating what uncertainty requires it. They return a handoff of at most 4 KB.
+Workers may search outside the initial paths only after stating what uncertainty requires it. They return a concise structured result of at most 8 KB. Root continuation text remains capped at 4 KB; detailed findings must not be discarded solely to fit that continuation.
 
 ### 6. Integrate and verify
 
@@ -160,7 +162,8 @@ file_window_lines: 160
 file_window_bytes: 16384
 max_windows_per_discovery_round: 6
 worker_capsule_bytes: 8192
-worker_handoff_bytes: 4096
+worker_result_bytes: 8192
+root_handoff_bytes: 4096
 flight_bytes: 8192
 large_file_bytes: 65536
 context_warn_ratio: 0.30

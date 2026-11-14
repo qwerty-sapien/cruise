@@ -105,7 +105,7 @@ test('signature-only supervision recovers when failure evidence changes or clear
   assert.equal(cleared.recordTurn({ fingerprint: null, failureSignature: null }).level, 'ok');
 });
 
-test('workspace fingerprinting is disabled without a git repository', async () => {
+test('an undeclared non-Git workspace fingerprint is unavailable', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'cruise-supervisor-no-git-'));
   try {
     assert.equal(await captureWorkspaceFingerprint(cwd), null);

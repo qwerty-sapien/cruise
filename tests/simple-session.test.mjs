@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import {
@@ -14,12 +15,31 @@ import {
   SimpleCruiseSession,
 } from '../scripts/lib/simple-session.mjs';
 import { parseFlightPlan, flightPlanTemplate } from '../scripts/lib/flight-plan.mjs';
+import { pickOne } from '../scripts/lib/picker.mjs';
 import {
   cleanupRuntimeSession,
   createRuntimeSession,
 } from '../scripts/lib/runtime-state.mjs';
 
 const TRACE_THREAD_ID = '019f855b-527e-77d1-bf9b-bca4c89da49e';
+
+test('ordinary local Goal access includes option descriptions and values in effect checks', () => {
+  const safe = { id: 'local', question: 'May I search an authorized local folder?',
+    options: [{ label: 'Proceed', description: 'Read only ordinary source files', value: 'proceed' }] };
+  assert.ok(automaticGoalAuthorization({ questions: [safe] }));
+  assert.equal(automaticGoalAuthorization({ questions: [safe] }, { nativeApprovalDenied: true }), null);
+  for (const field of ['description', 'value']) {
+    for (const effect of ['Upload actual medical records to an unapproved external provider',
+      'Delete the production database', 'Send actual medical records',
+      'Copy the source to https://example.invalid/collect']) {
+      const question = { ...safe, options: [{ ...safe.options[0], [field]: effect }] };
+      assert.equal(automaticGoalAuthorization({ questions: [question] }), null, `${field}: ${effect}`);
+    }
+  }
+  const denied = { id: 'denied', question: 'Host denied reading the host-access-approved local folder for this Goal. May I proceed with local source access?',
+    options: [{ label: 'Proceed', value: 'proceed' }] };
+  assert.equal(automaticGoalAuthorization({ questions: [denied] }), null);
+});
 
 async function sessionRuntime(t, cwd, sessionId) {
   const runtime = await createRuntimeSession({ cwd, sessionId });
@@ -46,6 +66,31 @@ class FakeClient extends EventEmitter {
     throw new Error(`unexpected request ${method}`);
   }
 }
+
+test('Goal ordinary turns and mode settings preserve the explicit sandbox selection', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-sandbox-session-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  for (const externalSandbox of [false, true]) {
+    const client = new FakeClient();
+    const calls = [];
+    const request = client.request.bind(client);
+    client.request = async (method, params) => { calls.push({ method, params }); return request(method, params); };
+    const session = new SimpleCruiseSession({ client, cwd, externalSandbox,
+      prompt: 'Inspect ordinary source.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
+      output: { write() {} }, errorOutput: { write() {} } });
+    session.threadId = TRACE_THREAD_ID;
+    client.on('notification', session.onNotification);
+    t.after(() => client.off('notification', session.onNotification));
+    assert.equal((await session.startTurn([{ type: 'text', text: 'Continue.', text_elements: [] }])).status, 'completed');
+    const expectedWrite = externalSandbox ? { type: 'externalSandbox', networkAccess: 'restricted' }
+      : { type: 'workspaceWrite', writableRoots: [cwd] };
+    assert.deepEqual(calls[0].params.sandboxPolicy, expectedWrite);
+    assert.equal(calls[0].params.approvalPolicy, 'on-request');
+    assert.deepEqual(session.goalTurnSettings('default').sandboxPolicy, expectedWrite);
+    assert.deepEqual(session.goalTurnSettings('plan').sandboxPolicy, externalSandbox
+      ? expectedWrite : { type: 'readOnly' });
+  }
+});
 
 test('simple sessions send one normal skill turn without control-plane instructions', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-simple-session-'));
@@ -489,6 +534,124 @@ test('native approval responses cannot be replaced by Cruise consent and reset o
   assert.equal(session.turnNativeApprovalDenied, false);
 });
 
+test('root approval EOF reports a channel error without a response or fabricated denial', async () => {
+  for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval']) {
+    for (const reviewerDenied of [false, true]) {
+      const responses = [];
+      const errors = [];
+      const rejected = [];
+      const watchdog = [];
+      const client = new EventEmitter();
+      client.respond = (...args) => responses.push(args);
+      client.respondError = (_id, error) => errors.push(error);
+      client.pauseInactivityWatchdog = () => watchdog.push('pause');
+      client.resumeInactivityWatchdog = () => watchdog.push('resume');
+      const session = new SimpleCruiseSession({
+        client, cwd: process.cwd(), skill: 'goal', skillPath: '/tmp/goal-skill.md', prompt: 'Inspect source.',
+        pickOne, input: Readable.from([]), output: { write() {} }, errorOutput: { write() {} },
+      });
+      session.threadId = 'approval-thread';
+      session.turnId = 'approval-turn';
+      session.pending = { reject: (error) => rejected.push(error) };
+      if (reviewerDenied) session.handleNotification({
+        method: 'item/autoApprovalReview/completed',
+        params: { threadId: session.threadId, turnId: session.turnId, review: { status: 'denied' } },
+      });
+      session.enqueueRequest({ id: 'approval', method, params: {
+        threadId: session.threadId, turnId: session.turnId,
+        permissions: { network: { enabled: true } },
+      } });
+      await session.interactions;
+      assert.deepEqual(responses, [], method);
+      assert.equal(errors.length, 1);
+      assert.equal(errors[0].code, 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE');
+      assert.equal(errors[0].category, 'approval-channel-unavailable');
+      assert.equal(errors[0].reason, 'eof');
+      assert.match(errors[0].message, /stdin\/host picker.*interactive approval channel.*existing task authorization/u);
+      assert.deepEqual(rejected, errors);
+      assert.equal(session.turnNativeApprovalDenied, reviewerDenied);
+      assert.deepEqual(watchdog, ['pause', 'resume']);
+    }
+  }
+});
+
+test('root native explicit decline and cancellation remain authoritative through the picker', async () => {
+  for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval']) {
+    for (const [line, decision] of [['2\n', 'decline'], ['3\n', 'cancel'], ['q\n', 'cancel'], ['\u001b\n', 'cancel'], ['\u0003\n', 'cancel']]) {
+      const responses = [];
+      const client = new EventEmitter();
+      client.respond = (_id, result) => responses.push(result);
+      const session = new SimpleCruiseSession({
+        client, cwd: process.cwd(), skill: 'goal', skillPath: '/tmp/goal-skill.md', prompt: 'Inspect source.',
+        approvalsReviewer: 'user', pickOne, input: Readable.from([line]), output: { write() {} }, errorOutput: { write() {} },
+      });
+      session.threadId = 'approval-thread';
+      session.turnId = 'approval-turn';
+      await session.handleRequest({ id: 'approval', method, params: {
+        threadId: session.threadId, turnId: session.turnId,
+        availableDecisions: ['accept', 'decline', 'cancel'], permissions: { network: { enabled: true } },
+      } });
+      assert.deepEqual(responses, [method === 'item/permissions/requestApproval'
+        ? { permissions: {}, scope: 'turn' } : { decision }]);
+      assert.equal(session.turnNativeApprovalDenied, true);
+    }
+  }
+});
+
+test('root session propagates approval-channel failure and stops its client', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-approval-eof-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  class ApprovalClient extends FakeClient {
+    errors = [];
+    responses = [];
+    stopped = false;
+    async stop() { this.stopped = true; }
+    respond(...args) { this.responses.push(args); }
+    respondError(_id, error) { this.errors.push(error); }
+    async request(method, params) {
+      if (method !== 'turn/start') return super.request(method, params);
+      queueMicrotask(() => this.emit('request', {
+        id: 'approval', method: 'item/commandExecution/requestApproval',
+        params: { threadId: TRACE_THREAD_ID, turnId: 'turn-1', command: 'node check.mjs' },
+      }));
+      return { turn: { id: 'turn-1' } };
+    }
+  }
+  const client = new ApprovalClient();
+  const session = new SimpleCruiseSession({
+    client, cwd: root, prompt: 'Inspect source.', skill: 'quick', skillPath: '/tmp/quick-skill.md',
+    pickOne, input: Readable.from([]), output: { write() {} }, errorOutput: { write() {} },
+    traceHome: root, locateTrace: async () => null,
+  });
+  await assert.rejects(session.run(), { code: 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE', reason: 'eof' });
+  assert.equal(client.stopped, true);
+  assert.deepEqual(client.responses, []);
+  assert.equal(client.errors[0].code, 'CRUISE_APPROVAL_CHANNEL_UNAVAILABLE');
+  assert.equal(session.turnNativeApprovalDenied, false);
+});
+
+test('root structured native decisions have readable labels and preserve their exact payload', async () => {
+  for (const decision of [
+    { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['node', 'check.mjs'] } },
+    { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.invalid', action: 'allow' } } },
+  ]) {
+    let response;
+    let rendered = '';
+    const client = new EventEmitter();
+    client.respond = (_id, result) => { response = result; };
+    const session = new SimpleCruiseSession({
+      client, cwd: process.cwd(), skill: 'goal', skillPath: '/tmp/goal-skill.md', prompt: 'Inspect source.', pickOne,
+      input: Readable.from(['2\n']), errorOutput: { write(text) { rendered += text; } },
+    });
+    await session.handleRequest({ id: 'approval', method: 'item/commandExecution/requestApproval',
+      params: { availableDecisions: ['accept', decision, 'cancel'] } });
+    assert.equal(response.decision, decision);
+    assert.match(rendered, /2\. (Accept with command|Apply network) policy amendment:/u);
+    assert.doesNotMatch(rendered, /\[object Object\]/u);
+    assert.equal(session.turnNativeApprovalDenied, false);
+  }
+});
+
 test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never starts a turn', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-goal-bootstrap-timeout-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -509,6 +672,8 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
         return { thread: { id: 'thread-no-turn' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
+      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
+      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
         this.goal = { objective: params.objective, status: params.status };
@@ -575,6 +740,7 @@ test('Goal bootstrap deadline reports diagnostics and pauses a Goal that never s
   assert.equal(output, '');
   assert.equal(errorOutput, [
     'Cruise: app-server started.',
+    'Cruise: native approvals reviewer=auto_review; selection is not an approval result.',
     'Cruise: thread thread-no-turn started (model gpt-5.6-sol).',
     `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-no-turn.`,
     'Cruise: goal activated.',
@@ -612,6 +778,8 @@ test('Goal bootstrap timeout cannot hang in diagnostic cleanup', async (t) => {
         return { thread: { id: 'thread-hung-diagnostics' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
+      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
+      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
         if (this.goalReads === 1) return { goal: null };
@@ -666,6 +834,8 @@ test('interrupt cancels a hung bootstrap diagnostic without leaking its cleanup 
     async request(method, params = {}) {
       if (method === 'thread/start') return { thread: { id: 'thread-cleanup-interrupt' } };
       if (method === 'thread/settings/update') return {};
+      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
+      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
         if (this.goalReads === 1) return { goal: null };
@@ -721,6 +891,8 @@ test('app-server exit cancels a hung bootstrap diagnostic cleanup timer', async 
     async request(method, params = {}) {
       if (method === 'thread/start') return { thread: { id: 'thread-cleanup-exit' } };
       if (method === 'thread/settings/update') return {};
+      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
+      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') {
         this.goalReads += 1;
         if (this.goalReads === 1) return { goal: null };
@@ -774,6 +946,8 @@ test('a native Goal turn just before the deadline cancels the timer without chan
         return { thread: { id: 'thread-just-in-time' }, model: 'gpt-5.6-sol', reasoningEffort: 'high' };
       }
       if (method === 'thread/settings/update') return {};
+      if (method === 'thread/read') return { thread: { status: { type: 'active', activeFlags: [] } } };
+      if (method === 'thread/turns/list') return { data: [] };
       if (method === 'thread/goal/get') return { goal: this.goal };
       if (method === 'thread/goal/set') {
         this.goal = { objective: params.objective, status: params.status };
@@ -830,6 +1004,7 @@ test('a native Goal turn just before the deadline cancels the timer without chan
   assert.equal(output, 'healthy transcript\n');
   assert.equal(errorOutput, [
     'Cruise: app-server started.',
+    'Cruise: native approvals reviewer=auto_review; selection is not an approval result.',
     'Cruise: thread thread-just-in-time started (model gpt-5.6-sol).',
     `Cruise: rollout pending; sessions: ${join(root, 'codex-home', 'sessions')}; resume: codex resume thread-just-in-time.`,
     'Cruise: goal activated.',
@@ -1632,4 +1807,109 @@ test('only the dedicated fail-closed Cruise migration command bypasses redundant
     },
   });
   assert.deepEqual(responses, [{ id: 'migration-command', result: { decision: 'accept' } }]);
+});
+
+for (const [isTTY, override, expected] of [
+  [true, undefined, 'user'], [false, undefined, 'auto_review'],
+  [false, 'user', 'user'], [true, 'auto_review', 'auto_review'],
+  [false, 'guardian_subagent', 'guardian_subagent'],
+]) {
+  test(`native Goal reviewer ${isTTY}/${override} survives explicit Plan, execution, continuation and reactivation`, async (t) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'cruise-reviewer-goal-'));
+    t.after(() => rm(cwd, { recursive: true, force: true }));
+    class ReviewerClient extends EventEmitter {
+      calls = [];
+      turns = 0;
+      goal = null;
+      async start() {}
+      async stop() { this.stopped = true; }
+      async request(method, params) {
+        this.calls.push({ method, params });
+        if (method === 'thread/start') return { thread: { id: 'reviewer-thread' } };
+        if (method === 'thread/settings/update') return {};
+        if (method === 'thread/goal/get') return { goal: this.goal };
+        if (method === 'thread/goal/set') {
+          this.goal = { objective: params.objective, status: params.status };
+          return { goal: this.goal };
+        }
+        if (method === 'thread/read') return { thread: { status: { type: 'idle' } } };
+        if (method === 'thread/turns/list') return { data: [] };
+        if (method === 'turn/start') {
+          const id = `reviewer-turn-${++this.turns}`;
+          queueMicrotask(() => {
+            if (this.turns >= 3) this.goal = { ...this.goal, status: 'complete' };
+            this.emit('notification', { method: 'turn/completed', params: {
+              threadId: 'reviewer-thread', turn: { id, status: 'completed' },
+            } });
+          });
+          return { turn: { id } };
+        }
+        throw new Error(`unexpected request ${method}`);
+      }
+    }
+    const client = new ReviewerClient();
+    let diagnostic = '';
+    const session = new SimpleCruiseSession({
+      client, cwd, prompt: 'Implement the bounded source change.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
+      input: { isTTY }, approvalsReviewer: override,
+      output: { write() {} }, errorOutput: { write(text) { diagnostic += text; } },
+      locateTrace: async () => null, traceHome: cwd,
+      continuationContextReader: async () => 'Fixture continuation context.',
+    });
+    let assessments = 0;
+    session.assessCompletion = async () => (++assessments === 1 ? {
+      allowsCompletion: false, reasons: ['Fixture assurance correction.'], progressFingerprint: 'correction',
+    } : { allowsCompletion: true, level: 'legacy-unattested' });
+    assert.equal((await session.run()).status, 'complete');
+    assert.equal(client.stopped, true);
+    assert.equal(client.turns, 4);
+    const nativeCalls = client.calls.filter(({ method }) => ['thread/start', 'thread/settings/update', 'turn/start'].includes(method));
+    for (const { method, params } of nativeCalls) {
+      assert.equal(params.approvalsReviewer, expected, method);
+      assert.equal(params.approvalPolicy, 'on-request', method);
+      const instructions = params.developerInstructions ?? params.collaborationMode.settings.developer_instructions;
+      assert.ok(instructions.includes(`Native Codex approvals reviewer: ${expected}.`));
+    }
+    const modes = client.calls.filter(({ method }) => method === 'turn/start').map(({ params }) => params.collaborationMode.mode);
+    assert.deepEqual(modes, ['plan', 'default', 'default', 'default']);
+    for (const [index, { method }] of client.calls.entries()) {
+      if (method !== 'thread/goal/set') continue;
+      const setting = client.calls.slice(0, index).findLast(call => call.method === 'thread/settings/update');
+      assert.equal(setting.params.approvalsReviewer, expected);
+      assert.equal(setting.params.collaborationMode.mode, index === client.calls.findIndex(call => call.method === 'thread/goal/set') ? 'plan' : 'default');
+    }
+    assert.match(diagnostic, /selection is not an approval result/u);
+  });
+}
+
+test('native Goal reviewer rejection surfaces without fallback and before activation when settings fail', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'cruise-reviewer-rejected-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  for (const rejectedMethod of ['thread/start', 'thread/settings/update', 'turn/start']) {
+    const calls = [];
+    const client = new FakeClient();
+    let stopped = false;
+    client.stop = async () => { stopped = true; };
+    client.request = async (method, params) => {
+      calls.push({ method, params });
+      if (method === rejectedMethod) throw new Error('unsupported approvalsReviewer: guardian_subagent');
+      if (method === 'thread/start') return { thread: { id: TRACE_THREAD_ID } };
+      if (method === 'thread/settings/update') return {};
+      if (method === 'thread/goal/get') return { goal: null };
+      if (method === 'thread/goal/set') return { goal: { objective: params.objective, status: 'active' } };
+      if (method === 'thread/read') return { thread: { status: { type: 'idle' } } };
+      if (method === 'thread/turns/list') return { data: [] };
+      throw new Error(`unexpected request ${method}`);
+    };
+    const session = new SimpleCruiseSession({
+      client, cwd, prompt: 'Inspect source.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
+      approvalsReviewer: 'guardian_subagent', output: { write() {} }, errorOutput: { write() {} },
+      locateTrace: async () => null, traceHome: cwd,
+    });
+    await assert.rejects(session.run(), /unsupported approvalsReviewer: guardian_subagent/u);
+    assert.equal(stopped, true);
+    assert.equal(calls.filter(({ method }) => method === rejectedMethod).length, 1);
+    if (rejectedMethod !== 'turn/start') assert.equal(calls.some(({ method }) => method === 'thread/goal/set'), false);
+    assert.ok(calls.filter(({ params }) => 'approvalsReviewer' in params).every(({ params }) => params.approvalsReviewer === 'guardian_subagent'));
+  }
 });

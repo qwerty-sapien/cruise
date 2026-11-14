@@ -39,12 +39,13 @@ import {
   writeQueue,
 } from './lib/queue.mjs';
 import {
+  answerApproval,
   SimpleCruiseGoalBootstrapTimeoutError,
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
 } from './lib/simple-session.mjs';
-import { runSimpleWorker } from './lib/simple-worker.mjs';
-import { automaticDelegationAuthorization } from './lib/authorization-policy.mjs';
+import { runSimpleWorker, resolveApprovalsReviewer } from './lib/simple-worker.mjs';
+import { automaticDelegationAuthorization, automaticLocalAuthorization } from './lib/authorization-policy.mjs';
 import { createStagedHandoff } from './lib/staged-handoff.mjs';
 import {
   buildContextCapsule,
@@ -74,6 +75,7 @@ import {
   releaseCruiseWorkspace,
   reserveCruiseWorkspace,
   runtimeSessionDirectory,
+  validateCruiseWorkerParent,
 } from '../hooks/session-marker.mjs';
 import {
   writeGoalUserDocuments,
@@ -114,6 +116,10 @@ Usage:
   cruise migrate <status|route> [--sandbox-first <auto|manual>] [--json]
   cruise [--codex|--claude] doctor [--json]
 
+Native approval routing (Codex Goal and worker only):
+  --approvals-reviewer <user|auto_review|guardian_subagent>
+  Default: user with TTY stdin; native auto_review with non-TTY/headless stdin.
+
 Budget options:
   --weekly-delta-cap <percent>   Campaign increase allowed within the weekly window (default 9.0)
   --goal-reservation <percent>  Reservation required before Goal or worker launch (default 2.25)
@@ -133,7 +139,8 @@ and effects. Codex is the default; CRUISE_PROVIDER may set a request-scoped
 default to codex or claude.
 
 Startup options (Codex Goal):
-  --bootstrap-timeout-ms <ms>   Optional native first-turn deadline; 0/off disables (default)
+  --external-sandbox            Codex Goal/worker only: caller already enforces an outer sandbox
+  --bootstrap-timeout-ms <ms>   Idle first-turn deadline (default 30000ms); 0/off disables
   --staged-handoff <file.json>  Await fresh parent state before activating the Goal
   --ready-file <file.json>      Exclusive readiness marker outside the workspace
 Environment: CRUISE_GOAL_BOOTSTRAP_TIMEOUT_MS and CRUISE_INITIALIZE_TIMEOUT_MS (0 disables).
@@ -216,6 +223,7 @@ export function parseArgs(argv, { env = process.env } = {}) {
     help: false,
     version: false,
     level: null,
+    externalSandbox: false,
     userStatus: null,
     commit: null,
     promptParts: [],
@@ -243,6 +251,14 @@ export function parseArgs(argv, { env = process.env } = {}) {
     if (arg === '-h' || arg === '--help') options.help = true;
     else if (arg === '-V' || arg === '--version') options.version = true;
     else if (arg === '--json' && ['doctor', 'attest', 'usage', 'budget', 'config', 'migrate'].includes(command)) options.json = true;
+    else if (arg === '--approvals-reviewer' || arg.startsWith('--approvals-reviewer=')) {
+      if (provider !== 'codex' || !['start', 'goal', 'worker'].includes(command)) {
+        throw new Error('--approvals-reviewer is supported only by Codex Goal and worker.');
+      }
+      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++index];
+      if (value === undefined) throw new Error('--approvals-reviewer requires user, auto_review, or guardian_subagent.');
+      options.approvalsReviewer = resolveApprovalsReviewer(value);
+    }
     else if (arg === '--target') {
       if (command !== 'migrate') throw new Error('--target is supported only by cruise migrate.');
       const value = args[++index];
@@ -342,6 +358,12 @@ export function parseArgs(argv, { env = process.env } = {}) {
         }
         options.firstTurnDeadlineMs = milliseconds;
       } else options[arg === '--staged-handoff' ? 'stagedHandoff' : 'readyFile'] = value;
+    }
+    else if (arg === '--external-sandbox') {
+      if (provider !== 'codex' || !['goal', 'worker'].includes(command)) {
+        throw new Error('--external-sandbox is supported only by cruise --codex goal or worker.');
+      }
+      options.externalSandbox = true;
     }
     else if (arg === '--plan') {
       if (command !== 'goal') throw new Error('--plan is supported only by cruise goal.');
@@ -647,11 +669,15 @@ async function runHostedSession(
   {
     clientFactory = null,
     claudeRunner = runClaudeSession,
+    input = process.stdin,
     sessionFactory = (input) => new SimpleCruiseSession(input),
     quotaGuardFactory = (input) => new QuotaGuard(input),
   } = {},
 ) {
   const provider = resolveProvider(options.provider);
+  if (options.approvalsReviewer !== undefined && (provider !== 'codex' || options.skill !== 'goal')) {
+    throw new Error('--approvals-reviewer is supported only by Codex Goal and worker.');
+  }
   if (provider === 'claude') {
     const result = await claudeRunner({
       cwd,
@@ -697,12 +723,15 @@ async function runHostedSession(
     prompt: options.prompt,
     skill: options.skill,
     skillPath: resolve(SKILLS_ROOT, options.skill, 'SKILL.md'),
+    input,
+    ...(options.skill === 'goal' ? { approvalsReviewer: resolveApprovalsReviewer(options.approvalsReviewer, { input }) } : {}),
     pickOne,
     readLine: readLineOnce,
     requireAssurance: true,
     beforeGoalActivation: options.beforeGoalActivation ?? null,
     firstTurnDeadlineMs: options.firstTurnDeadlineMs,
     planOnly: Boolean(options.planOnly),
+    externalSandbox: Boolean(options.externalSandbox),
     runtimeDirectory: options.runtimeDirectory ?? null,
     rootOverride: options.rootModel
       ? { model: options.rootModel, reasoning_effort: options.rootEffort }
@@ -1315,14 +1344,21 @@ export async function runQueue(options, {
 
 export async function runWorker(options, {
   worker = null,
+  workerClientFactory,
+  input = process.stdin,
   claudeWorker = runClaudeWorker,
   budgetClientFactory = (input) => new AppServerClient(input),
   quotaGuardFactory = (input) => new QuotaGuard(input),
   dispatchLedgerFactory = (input) => new WorkerDispatchLedger(input),
   enforceBudget = worker === null,
+  env = process.env,
 } = {}) {
   const cwd = await validateWorkingDirectory(options.cwd);
   const provider = resolveProvider(options.provider);
+  if (options.approvalsReviewer !== undefined && provider !== 'codex') {
+    throw new Error('--approvals-reviewer is supported only by Codex Goal and worker.');
+  }
+  const approvalsReviewer = provider === 'codex' ? resolveApprovalsReviewer(options.approvalsReviewer, { input }) : undefined;
   const selectedWorker = provider === 'claude' ? claudeWorker : worker ?? runSimpleWorker;
   const managed = provider === 'codex' && options.managedWorker === true;
   const exceptionalRecord = options.exceptionalConsequence
@@ -1403,14 +1439,23 @@ export async function runWorker(options, {
       exceptional_consequence: exceptionalRecord,
     });
   }
-  if (capsule) await writeContextCapsule(cwd, capsule);
+  const joinedParent = managed &&
+    (env.CRUISE_SESSION_ID !== undefined || env.CRUISE_RUNTIME_DIR !== undefined);
+  if (joinedParent) {
+    await validateCruiseWorkerParent({
+      cwd, session_id: env.CRUISE_SESSION_ID, runtime_dir: env.CRUISE_RUNTIME_DIR,
+    });
+  }
   const sessionId = randomUUID();
   const reservation = { cwd, session_id: sessionId };
-  const runtimeDirectory = await reserveCruiseWorkspace(reservation);
+  const runtimeDirectory = joinedParent
+    ? await createRuntimeSession({ cwd, sessionId, kind: 'worker' })
+    : await reserveCruiseWorkspace(reservation, { kind: 'worker' });
   let budgetClient = null;
   let quotaGuard = null;
   let dispatchLease = null;
   try {
+    if (capsule) await writeContextCapsule(cwd, capsule);
     if (managed) {
       dispatchLease = await dispatchLedgerFactory({ cwd }).reserve({
         debugProbeKey: options.debugProbeKey ?? null,
@@ -1437,16 +1482,19 @@ export async function runWorker(options, {
       task: capsule
         ? `${capsule.serialized}\n${WORKER_HANDOFF_SCHEMA_INSTRUCTIONS}`
         : options.prompt,
+      ...(provider === 'codex' ? { approvalsReviewer, stdin: input } : {}),
       level: selectedLevel,
       readOnly: Boolean(options.workerReadOnly),
+      externalSandbox: Boolean(options.externalSandbox),
       exceptionalConsequence: exceptionalRecord,
       transition: workerTransition,
       runtimeDirectory,
       sessionId,
+      ...(workerClientFactory ? { clientFactory: workerClientFactory } : {}),
       onOutput(delta) {
         process.stdout.write(delta);
       },
-      onServerRequest: (message, client, authorizationEvidence) => answerWorkerRequest(message, { client, authorizationEvidence }),
+      onServerRequest: (message, client, authorizationEvidence) => answerWorkerRequest(message, { client, authorizationEvidence, input }),
     });
     if (managed) {
       const handoff = parseWorkerHandoff(result.output);
@@ -1466,7 +1514,9 @@ export async function runWorker(options, {
       ['quota reservation release', () => quotaGuard?.release()],
       ['worker dispatch release', () => dispatchLease?.release()],
       ['budget client stop', () => budgetClient?.stop()],
-      ['workspace release', () => releaseCruiseWorkspace(reservation)],
+      ['workspace release', () => joinedParent
+        ? cleanupRuntimeSession(runtimeDirectory, { cwd, sessionId })
+        : releaseCruiseWorkspace(reservation)],
     ]) {
       try {
         await action();
@@ -1620,12 +1670,16 @@ export async function answerWorkerRequest(message, {
   authorizationEvidence = {},
   picker = pickOne,
   readLine = readLineOnce,
+  input = process.stdin,
+  output = process.stderr,
+  lineReader,
 } = {}) {
   const params = message.params ?? {};
   if (message.method === 'item/tool/requestUserInput') {
     const answers = {};
     for (const question of params.questions ?? []) {
-      const automatic = automaticDelegationAuthorization({ questions: [question] }, authorizationEvidence);
+      const automatic = automaticLocalAuthorization({ questions: [question] }, authorizationEvidence)
+        ?? automaticDelegationAuthorization({ questions: [question] }, authorizationEvidence);
       if (automatic) {
         Object.assign(answers, automatic.answers);
         continue;
@@ -1653,14 +1707,7 @@ export async function answerWorkerRequest(message, {
     'item/permissions/requestApproval',
   ].includes(message.method)) {
     return awaitHumanInput(client, async () => {
-      const selection = await picker({
-        title: params.reason ?? params.command ?? 'Approve this action?',
-        options: (params.availableDecisions ?? ['accept', 'decline']).map((value) => ({
-          label: String(value),
-          value,
-        })),
-      });
-      const decision = selection?.value ?? selection?.label ?? 'decline';
+      const decision = await answerApproval(params, { pickOne: picker, input, output, lineReader });
       return message.method === 'item/permissions/requestApproval'
         ? { permissions: decision === 'accept' ? params.permissions ?? {} : {}, scope: 'turn' }
         : { decision };

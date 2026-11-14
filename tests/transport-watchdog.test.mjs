@@ -124,6 +124,14 @@ class HostileAppServer extends EventEmitter {
       this.respond(message, { goal: this.goal });
       return;
     }
+    if (message.method === 'thread/read') {
+      this.respond(message, { thread: { status: { type: this.activeTurn ? 'active' : 'idle' } } });
+      return;
+    }
+    if (message.method === 'thread/turns/list') {
+      this.respond(message, { data: this.activeTurn ? [this.activeTurn] : [] });
+      return;
+    }
     if (message.method === 'thread/goal/set') {
       this.goal = {
         objective: message.params?.objective ?? this.goal?.objective ?? 'probe',
@@ -147,7 +155,7 @@ class HostileAppServer extends EventEmitter {
       return;
     }
     if (message.method === 'turn/start') {
-      if (this.mode === 'H_turn_start_no_reply') return;
+      if (['H_turn_start_no_reply', 'C_goal_no_turn'].includes(this.mode)) return;
       const turn = this.startTurn({
         complete: ['fast', 'G2_question_held_open'].includes(this.mode),
         question: ['G_question_no_stdin', 'G2_question_held_open'].includes(this.mode),
