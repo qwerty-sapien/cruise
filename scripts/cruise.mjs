@@ -50,6 +50,7 @@ import { createStagedHandoff } from './lib/staged-handoff.mjs';
 import {
   buildContextCapsule,
   parseWorkerHandoff,
+  WORKER_HANDOFF_OUTPUT_SCHEMA,
   WORKER_HANDOFF_SCHEMA_INSTRUCTIONS,
   writeContextCapsule,
   writeRootHandoff,
@@ -137,6 +138,15 @@ Cruise has no approval authority, archive, run-control YAML, digest, or retry
 ledger. The selected host's native permissions remain the authority for work
 and effects. Codex is the default; CRUISE_PROVIDER may set a request-scoped
 default to codex or claude.
+
+Managed worker options:
+  --managed --complexity <naming|retrieval|bounded|complex|consequential|repeated|exceptional>
+  --owns <path> --evidence <fact> --range <path:start-end> --verify <command>
+                               Repeat these fields to supply bounded task context
+  --read-only                  Keep the worker's product task read-only
+  --level <1-7>                Explicit level; cannot lower the routed consequence floor
+Use -- before task text containing flags. Example:
+  cruise --codex worker --managed --complexity retrieval --read-only --owns notes.txt --evidence 'Named ordinary input' --range notes.txt:1-20 --verify 'Read only the named lines' -- 'Read notes.txt and return its contents.'
 
 Startup options (Codex Goal):
   --external-sandbox            Codex Goal/worker only: caller already enforces an outer sandbox
@@ -1397,6 +1407,7 @@ export async function runWorker(options, {
   const selectedLevel = managed
     ? Math.max(options.level ?? 1, route.recommended_level)
     : options.level ?? null;
+  if (managed) process.stderr.write(`Cruise worker: requested level=${options.level ?? 'auto'}; routed minimum=L${route.recommended_level}; selected=L${selectedLevel}.\n`);
   if (options.reasoningEscalationEvidence !== undefined && route.recommended_level !== 6) {
     throw new Error('reasoning escalation evidence requires an L6 routed work item');
   }
@@ -1482,6 +1493,7 @@ export async function runWorker(options, {
       task: capsule
         ? `${capsule.serialized}\n${WORKER_HANDOFF_SCHEMA_INSTRUCTIONS}`
         : options.prompt,
+      ...(managed ? { outputSchema: WORKER_HANDOFF_OUTPUT_SCHEMA } : {}),
       ...(provider === 'codex' ? { approvalsReviewer, stdin: input } : {}),
       level: selectedLevel,
       readOnly: Boolean(options.workerReadOnly),

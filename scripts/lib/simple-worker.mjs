@@ -91,6 +91,7 @@ async function oneAttempt({
   exceptionalConsequence,
   transition,
   approvalsReviewer,
+  outputSchema,
 }) {
   let nativeApprovalDenied = false;
   const env = { ...process.env };
@@ -227,6 +228,7 @@ async function oneAttempt({
       sandboxPolicy: externalSandbox
         ? { type: 'externalSandbox', networkAccess: 'restricted' }
         : readOnly ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [cwd] },
+      ...(outputSchema === undefined ? {} : { outputSchema }),
       ...(policy
         ? {
             model: policy.worker.resolved.model,
@@ -290,6 +292,7 @@ export async function runSimpleWorker({
   exceptionalConsequence = null,
   transition = null,
   approvalsReviewer,
+  outputSchema = undefined,
   stdin = process.stdin,
   errorOutput = process.stderr,
 } = {}) {
@@ -320,6 +323,7 @@ export async function runSimpleWorker({
         exceptionalConsequence,
         transition,
         approvalsReviewer: reviewer,
+        outputSchema,
       });
     } catch (cause) {
       const failure = classifyWorkerFailure(cause);

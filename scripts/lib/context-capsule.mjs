@@ -26,6 +26,35 @@ const HANDOFF_KEYS = Object.freeze([
   'usage_and_quota_summary',
 ]);
 
+const HANDOFF_NONEMPTY_TEXT_SCHEMA = Object.freeze({
+  type: 'string',
+  minLength: 1,
+  pattern: '\\S',
+});
+const HANDOFF_STRING_ARRAY_SCHEMA = Object.freeze({
+  type: 'array',
+  items: Object.freeze({ type: 'string' }),
+});
+
+/** Native turn/start schema for the same strict contract parseWorkerHandoff enforces. */
+export const WORKER_HANDOFF_OUTPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: HANDOFF_KEYS,
+  properties: Object.freeze({
+    outcome: HANDOFF_NONEMPTY_TEXT_SCHEMA,
+    completed_work: HANDOFF_STRING_ARRAY_SCHEMA,
+    changed_files: HANDOFF_STRING_ARRAY_SCHEMA,
+    decisions_and_invariants: HANDOFF_STRING_ARRAY_SCHEMA,
+    exact_tests: HANDOFF_STRING_ARRAY_SCHEMA,
+    // A completed worker may intentionally report no next item.
+    active_blocker_or_next_work_item: Object.freeze({ type: 'string' }),
+    files_not_to_reread: HANDOFF_STRING_ARRAY_SCHEMA,
+    evidence_pointers: HANDOFF_STRING_ARRAY_SCHEMA,
+    usage_and_quota_summary: HANDOFF_NONEMPTY_TEXT_SCHEMA,
+  }),
+});
+
 function digest(text) {
   return createHash('sha256').update(text).digest('hex');
 }

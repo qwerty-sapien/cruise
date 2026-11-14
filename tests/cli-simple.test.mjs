@@ -25,6 +25,7 @@ import {
 import { readOriginPrompt, writeOriginPrompt } from '../scripts/lib/origin-note.mjs';
 import { writeFlightPlan } from '../scripts/lib/flight-plan.mjs';
 import { SimpleCruiseSession } from '../scripts/lib/simple-session.mjs';
+import { WORKER_HANDOFF_OUTPUT_SCHEMA } from '../scripts/lib/context-capsule.mjs';
 import { answerWorkerRequest } from '../scripts/cruise.mjs';
 import {
   activateGoalSession, deactivateGoalSession, isGoalSessionActive,
@@ -175,6 +176,7 @@ test('real managed CLI joins Goal, staged and Debug parents with independent lea
     assert.deepEqual(turn.sandboxPolicy, { type: 'readOnly' });
     assert.equal(turn.cwd, cwd);
     assert.equal(turn.approvalPolicy, 'on-request');
+    assert.deepEqual(turn.outputSchema, WORKER_HANDOFF_OUTPUT_SCHEMA);
     assert.equal(workerClient.stopped && budgetClient.stopped, true);
     await assert.rejects(lstat(childEnv.CRUISE_RUNTIME_DIR), { code: 'ENOENT' });
     assert.deepEqual(JSON.parse(await readFile(dispatch.ledgerPath, 'utf8')).active, []);
@@ -523,6 +525,7 @@ test('workers receive ordinary text and an explicit, request-scoped level', asyn
   await assert.rejects(lstat(calls[0].runtimeDirectory), { code: 'ENOENT' });
   assert.equal(typeof calls[0].onOutput, 'function');
   assert.equal(typeof calls[0].onServerRequest, 'function');
+  assert.equal(Object.hasOwn(calls[0], 'outputSchema'), false);
 });
 
 test('external sandbox is explicit, Codex-only, and limited to Goal and worker commands', () => {

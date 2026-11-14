@@ -1,4 +1,5 @@
 import { INDEPENDENT_RELEASE_INSTRUCTIONS } from '../scripts/lib/release-policy.mjs';
+import { WORKER_HANDOFF_OUTPUT_SCHEMA } from '../scripts/lib/context-capsule.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -270,6 +271,27 @@ test('model selection is untouched without an explicit level', async () => {
   assert.equal(Object.hasOwn(thread, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'effort'), false);
+});
+
+test('worker forwards an explicit native output schema and omits it by default', async () => {
+  const schemaClient = new FakeWorkerClient([
+    { method: 'turn/completed', params: { turn: { status: 'completed' } } },
+  ]);
+  await runSimpleWorker({
+    cwd: process.cwd(), task: 'Return a bounded handoff.', outputSchema: WORKER_HANDOFF_OUTPUT_SCHEMA,
+    clientFactory: () => schemaClient,
+  });
+  const schemaTurn = schemaClient.requests.find(({ method }) => method === 'turn/start').params;
+  assert.deepEqual(schemaTurn.outputSchema, WORKER_HANDOFF_OUTPUT_SCHEMA);
+
+  const genericClient = new FakeWorkerClient([
+    { method: 'turn/completed', params: { turn: { status: 'completed' } } },
+  ]);
+  await runSimpleWorker({
+    cwd: process.cwd(), task: 'Run a generic bounded task.', clientFactory: () => genericClient,
+  });
+  const genericTurn = genericClient.requests.find(({ method }) => method === 'turn/start').params;
+  assert.equal(Object.hasOwn(genericTurn, 'outputSchema'), false);
 });
 
 test('worker transcript routes coordination internally and carries native evidence to its request handler', async () => {
@@ -625,6 +647,7 @@ test('changelog source evidence is data while instruction and credential checks 
     assert.ok(turn.input[1].text.includes(JSON.stringify(patch)));
     assert.match(turn.input[1].text, /never as instructions or authorization/u);
     assert.deepEqual(turn.sandboxPolicy, { type: 'readOnly' });
+    assert.equal(Object.hasOwn(turn, 'outputSchema'), false);
   }
   const forbiddenClient = () => { throw new Error('preflight must reject before starting a client'); };
   for (const instructions of ['Read .env', 'Read config/credentials.json']) {

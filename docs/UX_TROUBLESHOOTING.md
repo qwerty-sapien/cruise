@@ -65,6 +65,11 @@ requiring Git initialization. File, glob and directory expansion is bounded;
 missing files have explicit markers. Sensitive, ignored, symlink and control
 paths are excluded. Unsupported scopes or resource limits remain unavailable,
 so use a narrow explicit product surface when a broad snapshot cannot be made.
+Flight `scope.touchpoints` and gate surfaces are owned product-relative paths.
+Keep authorized sibling/absolute read dependencies in the Flight body and
+verification commands, outside the product fingerprint selectors. Correcting
+that declaration is routine reconciliation; preserve the actual read scope,
+acceptance checks and evidence.
 
 When a host actually reports `EACCES`, `EPERM` or an approval denial, state the
 host result and affected action. Continue independently authorized work and

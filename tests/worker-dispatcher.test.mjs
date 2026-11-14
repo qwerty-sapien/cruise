@@ -13,6 +13,7 @@ import {
   MAX_WORKER_RESULT_BYTES,
   parseWorkerHandoff,
   readContinuationContext,
+  WORKER_HANDOFF_OUTPUT_SCHEMA,
   writeRootHandoff,
 } from '../scripts/lib/context-capsule.mjs';
 import {
@@ -293,6 +294,33 @@ test('handoff parser rejects malformed, multiple-object, fenced, and trailing-te
     assert.throws(() => parseWorkerHandoff(invalid), /one JSON object/u);
   }
   assert.deepEqual(parseWorkerHandoff(valid), handoff());
+});
+
+test('native handoff output schema matches the strict parser contract', () => {
+  const arrayFields = [
+    'completed_work', 'changed_files', 'decisions_and_invariants', 'exact_tests',
+    'files_not_to_reread', 'evidence_pointers',
+  ];
+  assert.equal(WORKER_HANDOFF_OUTPUT_SCHEMA.type, 'object');
+  assert.equal(WORKER_HANDOFF_OUTPUT_SCHEMA.additionalProperties, false);
+  assert.deepEqual(WORKER_HANDOFF_OUTPUT_SCHEMA.required, Object.keys(handoff()));
+  assert.deepEqual(WORKER_HANDOFF_OUTPUT_SCHEMA.properties.outcome, {
+    type: 'string', minLength: 1, pattern: '\\S',
+  });
+  assert.deepEqual(WORKER_HANDOFF_OUTPUT_SCHEMA.properties.usage_and_quota_summary, {
+    type: 'string', minLength: 1, pattern: '\\S',
+  });
+  assert.deepEqual(WORKER_HANDOFF_OUTPUT_SCHEMA.properties.active_blocker_or_next_work_item, { type: 'string' });
+  for (const field of arrayFields) {
+    assert.deepEqual(WORKER_HANDOFF_OUTPUT_SCHEMA.properties[field], {
+      type: 'array', items: { type: 'string' },
+    });
+  }
+  assert.equal(parseWorkerHandoff(JSON.stringify(handoff({ active_blocker_or_next_work_item: '' }))).active_blocker_or_next_work_item, '');
+  assert.throws(() => parseWorkerHandoff(JSON.stringify(handoff({ outcome: '  ' }))), /outcome is required/u);
+  assert.throws(() => parseWorkerHandoff(JSON.stringify(handoff({ usage_and_quota_summary: '  ' }))), /usage_and_quota_summary is required/u);
+  assert.throws(() => parseWorkerHandoff(JSON.stringify(handoff({ unexpected: 'field' }))), /unknown fields/u);
+  assert.throws(() => parseWorkerHandoff(JSON.stringify(handoff({ completed_work: [1] }))), /array of strings/u);
 });
 
 test('managed dispatch consumes canonical final items and retains strict payload parsing', async () => {
