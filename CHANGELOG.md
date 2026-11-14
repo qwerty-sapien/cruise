@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1 — 2026-11-14
+
+- Inherit native approval policy, reviewer, sandbox and runtime roots instead
+  of forcing Cruise permission settings at session or worker startup.
+- Inspect all structured Goal-choice fields before automatic progression;
+  preserve execution after local inspection prerequisites or historical plans.
+- Add a session-derived synthetic adversarial corpus, seeded replayable cases,
+  historical sensitivity controls and per-family outcome reports to validation.
+
 ## 0.9.0 — 2026-11-14
 
 - Keep Cruise thin: native hosts own sign-in, permissions, tools, and agent

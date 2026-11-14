@@ -126,9 +126,6 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
     }
     const started = await client.request('thread/start', {
       cwd,
-      runtimeWorkspaceRoots: [],
-      approvalPolicy: 'on-request',
-      sandbox: 'workspace-write',
       ...(policy
         ? {
             model: policy.worker.resolved.model,
@@ -144,9 +141,6 @@ async function oneAttempt({ cwd, task, level, clientFactory, onOutput, onServerR
       threadId,
       input: [{ type: 'text', text: task, text_elements: [] }],
       cwd,
-      runtimeWorkspaceRoots: [],
-      approvalPolicy: 'on-request',
-      sandboxPolicy: { type: 'workspaceWrite', writableRoots: [cwd] },
       ...(policy
         ? {
             model: policy.worker.resolved.model,

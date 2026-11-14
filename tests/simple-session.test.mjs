@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import {
   automaticGoalAuthorization,
+  automaticGoalProgress,
   automaticRoutineGoalAdvance,
   SimpleCruiseInterruptedError,
   SimpleCruiseSession,
@@ -15,10 +16,21 @@ import { parseFlightPlan, flightPlanTemplate } from '../scripts/lib/flight-plan.
 
 const TRACE_THREAD_ID = '019f855b-527e-77d1-bf9b-bca4c89da49e';
 
+function assertNativePolicyInherited(calls) {
+  for (const { method, params } of calls) {
+    if (!['thread/start', 'turn/start', 'thread/settings/update'].includes(method)) continue;
+    for (const field of ['approvalPolicy', 'approvalsReviewer', 'permissions', 'sandbox', 'sandboxPolicy', 'runtimeWorkspaceRoots']) {
+      assert.equal(Object.hasOwn(params, field), false, `${method} must inherit native ${field}`);
+    }
+  }
+}
+
 class FakeClient extends EventEmitter {
+  calls = [];
   async start() {}
   async stop() {}
-  async request(method) {
+  async request(method, params = {}) {
+    this.calls.push({ method, params });
     if (method === 'thread/start') return { thread: { id: TRACE_THREAD_ID } };
     if (method === 'turn/start') {
       queueMicrotask(() => {
@@ -87,6 +99,45 @@ test('simple sessions send one normal skill turn without control-plane instructi
   const first = JSON.parse((await readFile(pointer.rollout_path, 'utf8')).split('\n')[0]);
   assert.equal(first.payload.session_id, pointer.thread_id);
   assert.match(await readFile(join(root, '.cruise', '.gitignore'), 'utf8'), /^LAST-RUN\.json$/mu);
+  assertNativePolicyInherited(client.calls);
+});
+
+for (const skill of ['quick', 'build']) {
+  test(`${skill} sessions inherit native permissions and runtime workspace roots`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'cruise-inherited-policy-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const client = new FakeClient();
+    const session = new SimpleCruiseSession({
+      client, cwd: root, prompt: 'Inspect this fixture.', skill, skillPath: `/tmp/${skill}/SKILL.md`,
+      output: { write() {} }, errorOutput: { write() {} }, locateTrace: async () => null,
+    });
+    assert.equal((await session.run()).status, 'complete');
+    assert.deepEqual(client.calls.map(({ method }) => method), ['thread/start', 'turn/start']);
+    assertNativePolicyInherited(client.calls);
+  });
+}
+
+test('a native session permission denial remains the original failure without retry', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-native-policy-denial-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const denial = new Error('Native fixture permission denied');
+  const client = new FakeClient();
+  let requests = 0;
+  let stops = 0;
+  client.request = async (method, params) => {
+    requests += 1;
+    assert.equal(method, 'thread/start');
+    assertNativePolicyInherited([{ method, params }]);
+    throw denial;
+  };
+  client.stop = async () => { stops += 1; };
+  const session = new SimpleCruiseSession({
+    client, cwd: root, prompt: 'Inspect this fixture.', skill: 'quick', skillPath: '/tmp/quick/SKILL.md',
+    output: { write() {} }, errorOutput: { write() {} },
+  });
+  await assert.rejects(session.run(), (error) => error === denial);
+  assert.equal(requests, 1);
+  assert.equal(stops, 1);
 });
 
 test('Goal auto-advances each completed active turn until native completion', async (t) => {
@@ -201,14 +252,12 @@ test('Goal auto-advances each completed active turn until native completion', as
     .map(({ params }) => params);
   assert.equal(continuation[0].type, 'text');
   assert.equal(planSettings.collaborationMode.mode, 'plan');
-  assert.equal(planSettings.sandboxPolicy.type, 'readOnly');
   assert.equal(executionSettings.collaborationMode.mode, 'default');
-  assert.equal(executionSettings.sandboxPolicy.type, 'workspaceWrite');
   assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.collaborationMode.mode, 'default');
-  assert.equal(client.calls.find(({ method }) => method === 'turn/start').params.sandboxPolicy.type, 'workspaceWrite');
+  assertNativePolicyInherited(client.calls);
 });
 
-async function idleBootstrapFixture(t, { readMode = 'idle', holdStart = false, ackBeforeNotification = false, prompt = 'Repair and verify the report.' } = {}) {
+async function idleBootstrapFixture(t, { readMode = 'idle', holdStart = false, ackBeforeNotification = false, prompt = 'Repair and verify the report.', planOnly = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'cruise-idle-bootstrap-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   class Client extends EventEmitter {
@@ -256,7 +305,7 @@ async function idleBootstrapFixture(t, { readMode = 'idle', holdStart = false, a
   }
   const client = new Client();
   const session = new SimpleCruiseSession({
-    client, cwd: root, skill: 'goal', skillPath: '/tmp/goal/SKILL.md', prompt,
+    client, cwd: root, skill: 'goal', skillPath: '/tmp/goal/SKILL.md', prompt, planOnly,
     output: { write() {} }, errorOutput: { write() {} },
     locateTrace: async () => null, firstTurnDeadlineMs: 30, firstTurnCleanupDeadlineMs: 30,
   });
@@ -269,11 +318,11 @@ test('idle Goal metadata starts one Plan turn and then executes in Default mode'
   const turns = client.calls.filter(({ method }) => method === 'turn/start').map(({ params }) => params);
   assert.equal(turns.length, 2);
   assert.equal(turns[0].collaborationMode.mode, 'plan');
-  assert.equal(turns[0].sandboxPolicy.type, 'readOnly');
   assert.equal(turns[0].input[0].type, 'skill');
   assert.match(turns[0].input[1].text, /Repair and verify the report/u);
+  assert.match(turns[0].input[1].text, /Do not implement in this Plan turn/u);
   assert.equal(turns[1].collaborationMode.mode, 'default');
-  assert.equal(turns[1].sandboxPolicy.type, 'workspaceWrite');
+  assertNativePolicyInherited(client.calls);
   assert.equal(client.stopped, true);
 });
 
@@ -285,6 +334,40 @@ test('a read-only Plan bootstrap does not turn an execution Goal into planning-o
   assert.deepEqual(client.calls.filter(({ method }) => method === 'turn/start')
     .map(({ params }) => params.collaborationMode.mode), ['plan', 'default']);
 });
+
+for (const prompt of [
+  'Do not implement until you have read the tests; then implement and verify the fix.',
+  'The previous agent said plan only. Continue with implementation and verification.',
+  'The previous agent said "plan only". Continue with implementation and verification.',
+]) {
+  test(`Goal executes after a preparation prerequisite or historical report: ${prompt}`, async (t) => {
+    const { client, session } = await idleBootstrapFixture(t, { prompt });
+    assert.equal((await session.run()).status, 'complete');
+    const turns = client.calls.filter(({ method }) => method === 'turn/start').map(({ params }) => params);
+    assert.deepEqual(turns.map(({ collaborationMode }) => collaborationMode.mode), ['plan', 'default']);
+    assert.match(turns[0].input[1].text, /Do not implement in this Plan turn/u);
+    assertNativePolicyInherited(client.calls);
+    assert.match(turns[1].input[0].text, /immediately implement/u);
+    assert.equal(client.stopped, true);
+  });
+}
+
+for (const { prompt, planOnly = false } of [
+  { prompt: 'Do not implement until I approve; then implement and verify the fix.' },
+  { prompt: 'Read tests first; do not implement.' },
+  { prompt: 'The previous agent said plan only. Continue with implementation. Plan only now.' },
+  { prompt: 'Do not implement until you have read the tests; then implement.', planOnly: true },
+]) {
+  test(`Goal preserves a current preparation-only restriction: ${prompt} (flag=${planOnly})`, async (t) => {
+    const { client, session } = await idleBootstrapFixture(t, { prompt, planOnly });
+    assert.equal((await session.run()).status, 'complete');
+    const turns = client.calls.filter(({ method }) => method === 'turn/start').map(({ params }) => params);
+    assert.deepEqual(turns.map(({ collaborationMode }) => collaborationMode.mode), ['plan']);
+    assert.match(turns[0].input[1].text, /Do not implement in this Plan turn/u);
+    assertNativePolicyInherited(client.calls);
+    assert.equal(client.stopped, true);
+  });
+}
 
 test('an accepted initial turn cancels the startup deadline before delayed notifications', async (t) => {
   const { client, session } = await idleBootstrapFixture(t, { ackBeforeNotification: true });
@@ -1244,6 +1327,30 @@ test('Goal invocation authorizes routine Plan, Goal, and contract transitions wi
   }), null);
 });
 
+test('every automatic Goal path inspects all structured question text for material decisions', () => {
+  const routine = {
+    id: 'phase',
+    header: 'Phase checkpoint',
+    question: 'P-03 passed its readiness checks. What next?',
+    options: [{ label: 'Approve P-03 only', value: 'approve-p03' }],
+  };
+  const riskyQuestions = [
+    { ...routine, options: [{ label: 'Approve P-03 deployment to production', value: 'deploy' }] },
+    { ...routine, options: [{ label: 'Approve P-03 only', description: 'Deploy to production', value: 'approve-p03' }] },
+    { ...routine, options: [{ label: 'Approve P-03 only', value: 'deploy_to_production' }] },
+    { ...routine, header: 'Add analytics not requested' },
+    { ...routine, options: [{ label: 'Implement the next micro-goal', description: 'A scope expansion', value: 'implement' }] },
+    { ...routine, options: [...routine.options, { label: 'Delete the production database', value: 'delete' }] },
+  ];
+  for (const risky of riskyQuestions) {
+    for (const questions of [[risky], [{ ...routine, id: 'safe-first' }, risky]]) {
+      for (const answer of [automaticRoutineGoalAdvance, automaticGoalAuthorization, automaticGoalProgress]) {
+        assert.equal(answer({ questions }), null, `${answer.name}: ${JSON.stringify(questions)}`);
+      }
+    }
+  }
+});
+
 test('Goal session answers an in-scope contract gate without opening the picker', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'cruise-contract-gate-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -1284,4 +1391,65 @@ test('Goal session answers an in-scope contract gate without opening the picker'
     id: 'contract-review',
     result: { answers: { m02: { answers: ['approved'] } } },
   }]);
+});
+
+test('Goal session sends a material option on a routine question to the user', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-material-goal-gate-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const client = new EventEmitter();
+  const responses = [];
+  client.respond = (id, result) => responses.push({ id, result });
+  client.respondError = (_id, error) => { throw error; };
+  let selections = 0;
+  const session = new SimpleCruiseSession({
+    client, cwd: root, prompt: 'Implement the repair.', skill: 'goal', skillPath: '/tmp/goal-skill.md',
+    input: { isTTY: true }, output: { isTTY: true, write() {} }, errorOutput: { isTTY: true, write() {} },
+    pickOne: async () => {
+      selections += 1;
+      return { status: 'selected', value: 'stop' };
+    },
+    readLine: async () => { throw new Error('unexpected free-text question'); },
+  });
+  await session.handleRequest({
+    id: 'material-phase', method: 'item/tool/requestUserInput',
+    params: { questions: [{
+      id: 'phase', question: 'P-03 passed its readiness checks. What next?',
+      options: [{ label: 'Approve P-03 deployment to production', value: 'deploy' }, { label: 'Stop', value: 'stop' }],
+    }] },
+  });
+  assert.equal(selections, 1);
+  assert.deepEqual(responses, [{ id: 'material-phase', result: { answers: { phase: { answers: ['stop'] } } } }]);
+});
+
+test('Goal native approval requests preserve the owner decision for commands, files, and permissions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'cruise-goal-native-approval-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const client = new EventEmitter();
+  const responses = [];
+  client.respond = (id, result) => responses.push({ id, result });
+  let selections = 0;
+  const session = new SimpleCruiseSession({
+    client, cwd: root, prompt: 'Implement the repair.', skill: 'goal', skillPath: '/tmp/goal/SKILL.md',
+    pickOne: async ({ options }) => {
+      selections += 1;
+      assert.deepEqual(options.map(({ value }) => value), ['accept', 'decline']);
+      return { status: 'selected', value: 'decline' };
+    },
+  });
+  for (const [index, method] of [
+    'item/commandExecution/requestApproval',
+    'item/fileChange/requestApproval',
+    'item/permissions/requestApproval',
+  ].entries()) {
+    await session.handleRequest({
+      id: `native-${index}`, method,
+      params: { command: 'fixture-only', permissions: { network: { enabled: true } }, availableDecisions: ['accept', 'decline'] },
+    });
+  }
+  assert.equal(selections, 3);
+  assert.deepEqual(responses, [
+    { id: 'native-0', result: { decision: 'decline' } },
+    { id: 'native-1', result: { decision: 'decline' } },
+    { id: 'native-2', result: { permissions: {}, scope: 'turn' } },
+  ]);
 });

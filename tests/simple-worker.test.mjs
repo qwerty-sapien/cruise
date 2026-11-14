@@ -103,6 +103,15 @@ function upstreamFailure() {
   };
 }
 
+function assertNativePolicyInherited(requests) {
+  for (const { method, params } of requests) {
+    if (!['thread/start', 'turn/start', 'thread/settings/update'].includes(method)) continue;
+    for (const field of ['approvalPolicy', 'approvalsReviewer', 'permissions', 'sandbox', 'sandboxPolicy', 'runtimeWorkspaceRoots']) {
+      assert.equal(Object.hasOwn(params, field), false, `${method} must inherit native ${field}`);
+    }
+  }
+}
+
 test('a pre-effect upstream failure retries once without durable retry state', async () => {
   let count = 0;
   const result = await runSimpleWorker({
@@ -136,6 +145,7 @@ test('model selection is untouched without an explicit level', async () => {
   assert.equal(Object.hasOwn(thread, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'model'), false);
   assert.equal(Object.hasOwn(turn, 'effort'), false);
+  assertNativePolicyInherited(client.requests);
 });
 
 test('every explicit level overrides the worker with its exact model and effort', async () => {
@@ -174,7 +184,62 @@ test('every explicit level overrides the worker with its exact model and effort'
       cruise_level: String(level),
       cruise_agent_type: `cruise_l${level}`,
     });
+    assertNativePolicyInherited(client.requests);
   }
+});
+
+test('worker forwards native approval requests to its existing handler without changing the decision', async () => {
+  const nativeRequest = {
+    id: 'native-approval', method: 'item/commandExecution/requestApproval',
+    params: { command: 'fixture-only', availableDecisions: ['accept', 'decline'] },
+  };
+  const ownerDecision = { decision: 'decline' };
+  const handled = [];
+  let nativeResponse;
+  let client;
+  const result = await runSimpleWorker({
+    cwd: process.cwd(), task: 'Exercise a mock native approval.',
+    clientFactory({ onServerRequest }) {
+      client = new FakeWorkerClient([{ method: 'turn/completed', params: { turn: { status: 'completed' } } }]);
+      const request = client.request.bind(client);
+      client.request = async (method, params) => {
+        if (method === 'turn/start') nativeResponse = await onServerRequest(nativeRequest, client);
+        return request(method, params);
+      };
+      return client;
+    },
+    async onServerRequest(message, nativeClient) {
+      handled.push(message);
+      assert.equal(nativeClient, client);
+      return ownerDecision;
+    },
+  });
+  assert.deepEqual(handled, [nativeRequest]);
+  assert.equal(nativeResponse, ownerDecision);
+  assert.equal(result.effectsObserved, false);
+  assertNativePolicyInherited(client.requests);
+});
+
+test('worker preserves a native permission denial without retry or policy changes', async () => {
+  const denial = new Error('Native fixture permission denied');
+  let attempts = 0;
+  let stops = 0;
+  await assert.rejects(runSimpleWorker({
+    cwd: process.cwd(), task: 'Exercise a mock native denial.',
+    clientFactory() {
+      attempts += 1;
+      const client = new FakeWorkerClient([]);
+      client.request = async (method, params) => {
+        assert.equal(method, 'thread/start');
+        assertNativePolicyInherited([{ method, params }]);
+        throw denial;
+      };
+      client.stop = async () => { stops += 1; };
+      return client;
+    },
+  }), (error) => error.cause === denial && error.code === 'CRUISE_WORKER_STREAM_FAILURE');
+  assert.equal(attempts, 1);
+  assert.equal(stops, 1);
 });
 
 test('a stream failure after tool activity is reported, not silently duplicated or blocked', async () => {

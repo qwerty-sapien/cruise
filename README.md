@@ -26,8 +26,13 @@ credential, scope expansion, or host-required approval when one is genuinely
 needed. If the request explicitly says planning, research, or design only,
 Goal remains read-only and returns a repository-aware plan.
 The launcher also accepts `cruise goal --plan "<request>"`; Codex uses its
-read-only Plan collaboration mode and Claude uses its native plan permission
+Plan collaboration mode and Claude uses its native plan permission
 mode.
+
+Cruise inherits the host's approval policy, reviewer, sandbox, and runtime
+workspace roots. It adds no startup permission gate. Native approval requests
+and denials, repository instructions, and paid-service authorizations still
+apply.
 
 ## Advisory artifacts
 
@@ -287,12 +292,17 @@ directory, and resume command without guessing a filename.
 ```sh
 npm test
 npm run validate
+npm run test:robustness -- --seed 1729 --output .cruise/artifacts/robustness
 node --check scripts/cruise.mjs
 claude plugin validate .
 ```
 
 See `evals/README.md` for the paired live-host protocol and published pilot
 artifacts.
+
+See [the synthetic robustness evaluation](docs/robustness.md) for the
+session-derived corpus, adversarial mutations, failure replays, and coverage
+limits. `npm run validate` includes this evaluation after the unit tests.
 
 ## License
 

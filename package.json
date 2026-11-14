@@ -1,6 +1,6 @@
 {
   "name": "cruise-code",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "type": "module",
   "description": "Cruise plugins and terminal launcher for Codex and Claude Code",
   "main": "index.js",
@@ -42,8 +42,9 @@
     "skills/debug/"
   ],
   "scripts": {
-    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/agent-context.test.mjs tests/approval-io.test.mjs tests/non-git-assurance.test.mjs tests/package-boundary.test.mjs",
-    "validate": "npm test"
+    "test": "node --test tests/app-server-client.test.mjs tests/transport-watchdog.test.mjs tests/line-input.test.mjs tests/picker.test.mjs tests/origin-note.test.mjs tests/flight-plan.test.mjs tests/queue.test.mjs tests/supervisor.test.mjs tests/trace-locator.test.mjs tests/stop-supervisor.test.mjs tests/debug-skill.test.mjs tests/simple-worker.test.mjs tests/claude-cli.test.mjs tests/cli-simple.test.mjs tests/simple-session.test.mjs tests/agent-context.test.mjs tests/approval-io.test.mjs tests/non-git-assurance.test.mjs tests/package-boundary.test.mjs tests/robustness.test.mjs",
+    "validate": "npm test && npm run test:robustness -- --seed 1729 --output .cruise/artifacts/robustness",
+    "test:robustness": "node tests/robustness/run.mjs"
   },
   "engines": {
     "node": ">=20"

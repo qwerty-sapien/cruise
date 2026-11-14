@@ -36,7 +36,7 @@ const ROUTINE_GOAL_ADVANCE_OPTION = /^\s*(?:approve\s+(?:[ptm]-?\d+|phase\s*\d+|
 const PREPARATION_ONLY_GOAL_PROMPT = /(?<![\w-])(?:only\s+(?:plan|research|prepare|design)|(?:plan|research|prepare|design)\s+only|do\s+not\s+(?:implement|edit|write(?:\s+code)?|execute)|do\s+not\s+make\s+(?:code\s+)?changes|without\s+implementation)\b/iu;
 const GOAL_AUTHORIZATION_CONTEXT = /\b(?:plan(?:\s+and\s+goal)?|goal|cruise|contract|phase|micro[-\s]?goal|next\s+(?:step|phase|micro[-\s]?goal))\b/iu;
 const GOAL_AUTHORIZATION_OPTION = /^\s*(?:approve(?:\s+(?:both|the\s+(?:plan|goal|contract)|[a-z]+-?\d+\s+contract))?|start\s+cruise|continue|proceed|execute|implement)\b/iu;
-const HIGH_RISK_GOAL_AUTHORIZATION = /\b(?:credential|secret|password|token|authentication|login|payment|purchase|production|deploy|publish|release|delete|remove|reset|rewrite|force|sudo|sensitive|private\s+data)\b/iu;
+const HIGH_RISK_GOAL_AUTHORIZATION = /\b(?:credential|secret|password|token|authentication|login|payment|purchase|production|deploy(?:ment)?|publish|release|delete|remove|reset|rewrite|force|sudo|sensitive|private\s+data)\b/iu;
 const MATERIAL_GOAL_DECISION = /\b(?:not\s+requested|out(?:side)?\s+(?:the\s+)?scope|scope\s+(?:change|expansion)|which\s+(?:option|approach)|user\s+preference)\b/iu;
 
 const AUTONOMOUS_GOAL_INSTRUCTIONS = [
@@ -155,7 +155,36 @@ function optionLabel(option) {
 }
 
 function isPreparationOnlyGoalPrompt(prompt) {
-  return PREPARATION_ONLY_GOAL_PROMPT.test(String(prompt ?? ''));
+  const clauses = String(prompt ?? '').split(/[.!?;]\s*|\n+/u);
+  return clauses.some((clause, index) => {
+    const restriction = PREPARATION_ONLY_GOAL_PROMPT.exec(clause);
+    if (!restriction) return false;
+    // These are bounded English sequencing exceptions, not general intent
+    // understanding. Ambiguous restrictions remain preparation-only.
+    const nextExecutes = /^\s*(?:please\s+)?(?:(?:then|now)\s+)?(?:implement\b|(?:continue|proceed)\s+with\s+(?:the\s+)?implementation\b)/iu
+      .test(clauses[index + 1] ?? '');
+    if (!nextExecutes) return true;
+    const before = clause.slice(0, restriction.index);
+    const after = clause.slice(restriction.index + restriction[0].length);
+    const reportedByPreviousAgent = /^\s*(?:the\s+)?(?:previous|prior|earlier)\s+agent\s+(?:said|asked|requested|instructed)\s+(?:to\s+)?["'“‘]?\s*$/iu.test(before)
+      && /^[\s"'”’]*$/u.test(after);
+    const inspectionPrerequisite = /^\s*$/u.test(before)
+      && /^do\s+not\s+(?:implement|edit|write(?:\s+code)?|execute)$/iu.test(restriction[0])
+      && /^\s+(?:until|before)\s+(?:you\s+(?:have\s+)?)?(?:read|inspect|review)\s+(?:(?:the|relevant|existing|current)\s+)*(?:tests?|source(?:\s+code)?|code(?:base)?|docs?|documentation|repository)(?:\s+(?:first|carefully))?\s*$/iu.test(after);
+    return !reportedByPreviousAgent && !inspectionPrerequisite;
+  });
+}
+
+function goalQuestionRequiresHumanDecision(question) {
+  const options = Array.isArray(question?.options) ? question.options : [];
+  const visible = [
+    question?.header,
+    question?.question,
+    ...options.flatMap((option) => typeof option === 'string'
+      ? [option]
+      : [option?.label, option?.description, option?.value]),
+  ].filter((value) => value != null).join(' ').replace(/[_-]/gu, ' ');
+  return HIGH_RISK_GOAL_AUTHORIZATION.test(visible) || MATERIAL_GOAL_DECISION.test(visible);
 }
 
 /**
@@ -170,6 +199,7 @@ export function automaticRoutineGoalAdvance(params = {}) {
   const answers = {};
   for (const question of questions) {
     const options = Array.isArray(question?.options) ? question.options : [];
+    if (goalQuestionRequiresHumanDecision(question)) return null;
     if (!ROUTINE_GOAL_ADVANCE_QUESTION.test(String(question?.question ?? '').trim())) return null;
     const choice = options.find((option) => ROUTINE_GOAL_ADVANCE_OPTION.test(optionLabel(option)));
     const value = optionValue(choice);
@@ -200,8 +230,7 @@ export function automaticGoalAuthorization(params = {}) {
       typeof question?.id !== 'string' ||
       question.id.length === 0 ||
       !GOAL_AUTHORIZATION_CONTEXT.test(visible) ||
-      HIGH_RISK_GOAL_AUTHORIZATION.test(visible) ||
-      MATERIAL_GOAL_DECISION.test(visible)
+      goalQuestionRequiresHumanDecision(question)
     ) {
       return null;
     }
@@ -441,9 +470,6 @@ export class SimpleCruiseSession extends EventEmitter {
       if (this.skill === 'goal') this.errorOutput.write('Cruise: app-server started.\n');
       const started = await this.client.request('thread/start', {
         cwd: this.cwd,
-        runtimeWorkspaceRoots: [],
-        approvalPolicy: 'on-request',
-        sandbox: 'workspace-write',
         serviceName: 'cruise',
         ephemeral: false,
         developerInstructions: [
@@ -869,12 +895,7 @@ export class SimpleCruiseSession extends EventEmitter {
         developer_instructions: AUTONOMOUS_GOAL_INSTRUCTIONS,
       };
     }
-    return {
-      collaborationMode,
-      sandboxPolicy: mode === 'plan'
-        ? { type: 'readOnly' }
-        : { type: 'workspaceWrite', writableRoots: [this.cwd] },
-    };
+    return { collaborationMode };
   }
 
   async updateGoalMode(mode) {
@@ -882,7 +903,6 @@ export class SimpleCruiseSession extends EventEmitter {
     await this.client.request('thread/settings/update', {
       threadId: this.threadId,
       cwd: this.cwd,
-      approvalPolicy: 'on-request',
       ...settings,
     });
   }
@@ -899,11 +919,7 @@ export class SimpleCruiseSession extends EventEmitter {
         threadId: this.threadId,
         input,
         cwd: this.cwd,
-        runtimeWorkspaceRoots: [],
-        approvalPolicy: 'on-request',
-        ...(goalSettings ?? {
-          sandboxPolicy: { type: 'workspaceWrite', writableRoots: [this.cwd] },
-        }),
+        ...goalSettings,
       });
       if (this.pending === completion) {
         this.turnId = turn.turn.id;
@@ -1065,8 +1081,6 @@ export class SimpleCruiseSession extends EventEmitter {
         { type: 'text', text: `${this.prompt}\n\n${GOAL_BOOTSTRAP_INSTRUCTIONS}`, text_elements: [] },
       ],
       cwd: this.cwd,
-      runtimeWorkspaceRoots: [],
-      approvalPolicy: 'on-request',
       ...this.goalTurnSettings('plan'),
     });
     if (this.pending === completion && this.turnId === null && !this.nativeGoalTurnTimedOut && !this.interrupted) {
