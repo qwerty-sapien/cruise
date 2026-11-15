@@ -5,6 +5,8 @@ description: "Clarify a project with the user and compile it into an advisory qu
 
 # Cruise Build
 
+Use this skill in the current native conversation. Before starting a separate terminal session, read [native launch](../goal/references/native-launch.md).
+
 When delegating or continuing delegated work, read [native collaboration and context handoffs](../goal/references/agent-context.md). Use native peer messages to coordinate ownership and alignment. Never compact subagents; resume only the same agent/session’s latest checkpoint unless an explicit human instruction overrides this boundary. These standing context rules persist across requests.
 
 Build is the bowling setup for a whole project: clarify the vision once, inspect the repository, and decompose the work into a sequence of independently verifiable Goal runs. Do not implement the milestones in this conversation. Execution belongs to `cruise queue run` or an explicit Goal invocation.

@@ -5,6 +5,8 @@ description: "Diagnose evidenced software failures, vague or intermittent buggy 
 
 # Cruise Debug
 
+Use this skill in the current native conversation. Before starting a separate terminal session, read [native launch](../goal/references/native-launch.md).
+
 When delegating or continuing delegated work, read [native collaboration and context handoffs](../goal/references/agent-context.md). Use native peer messages to coordinate ownership and alignment. Never compact subagents; resume only the same agent/session’s latest checkpoint unless an explicit human instruction overrides this boundary. These standing context rules persist across requests.
 
 Determine the requested outcome and mutation authority first. If the user asks for diagnosis, an audit, quality-control findings, or bug tickets, remain read-only. If the user asks for a repair, implement the smallest justified causal fix and verify it. Use the host's native permissions and explain evidence directly to the user.

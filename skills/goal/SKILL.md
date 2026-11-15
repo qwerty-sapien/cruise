@@ -5,6 +5,8 @@ description: "Autonomously complete consequential or multi-step work: plan just 
 
 # Cruise Goal
 
+Use this skill in the current native conversation. Before starting a separate terminal session, read [native launch](references/native-launch.md).
+
 When delegating or continuing delegated work, read [native collaboration and context handoffs](references/agent-context.md). Use native peer messages to coordinate ownership and alignment. Never compact subagents; resume only the same agent/session’s latest checkpoint unless an explicit human instruction overrides this boundary. These standing context rules persist across requests.
 
 For finite planned features and consequential work, inspect the repository and make a proportionate plan. Ask only questions whose answers materially alter implementation and cannot be resolved from repository evidence. Treat an explicit `cruise goal` invocation as authorization to carry the requested work through to completion within the normal workspace and permission boundaries. That authorization includes routine planning and phase transitions; never require a copied approval phrase, digest acknowledgement, or an `--auto-approve` incantation. Respect an explicit request to only plan, research, or prepare; remain read-only and finish with a repository-aware plan. Otherwise, a plan launches implementation and is never the endpoint.

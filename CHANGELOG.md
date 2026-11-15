@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2 — 2026-11-15
+
+- Explain native in-conversation use and separate CLI sessions in every skill.
+- Document the historical research wrapper's extra OS restrictions, usable FIFO
+  logging, and the limits of carrying permissions or study isolation across sessions.
+
 ## 0.9.1 — 2026-11-14
 
 - Inherit native approval policy, reviewer, sandbox and runtime roots instead

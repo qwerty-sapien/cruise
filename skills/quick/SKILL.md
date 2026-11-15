@@ -5,6 +5,8 @@ description: "Make a small, understood repository change with focused verificati
 
 # Cruise Quick
 
+Use this skill in the current native conversation. Before starting a separate terminal session, read [native launch](../goal/references/native-launch.md).
+
 When delegating or continuing delegated work, read [native collaboration and context handoffs](../goal/references/agent-context.md). Use native peer messages to coordinate ownership and alignment. Never compact subagents; resume only the same agent/session’s latest checkpoint unless an explicit human instruction overrides this boundary. These standing context rules persist across requests.
 
 Inspect the relevant code, make the requested small change, and run proportionate verification. Ask only material questions and use the host's native approvals.

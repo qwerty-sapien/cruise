@@ -29,10 +29,20 @@ The launcher also accepts `cruise goal --plan "<request>"`; Codex uses its
 Plan collaboration mode and Claude uses its native plan permission
 mode.
 
-Cruise inherits the host's approval policy, reviewer, sandbox, and runtime
-workspace roots. It adds no startup permission gate. Native approval requests
-and denials, repository instructions, and paid-service authorizations still
-apply.
+In the current conversation, the skill uses that conversation's native
+permissions and tools. The optional CLI starts a separate native session using
+the selected host's configuration; Cruise sends no approval, sandbox, or
+workspace-root overrides. Temporary grants from another conversation are not
+guaranteed to transfer. Native approvals, repository instructions, and
+paid-service authorizations still apply.
+
+For a separate terminal session, run
+`cruise --codex goal -C /absolute/workspace "<task>"` directly, or choose
+`--claude`. Avoid adding an agent-authored `sandbox-exec` wrapper: the historical
+research launcher failed before Cruise started because its extra filesystem
+policy denied Node access to its logging descriptor. See
+[native launch](skills/goal/references/native-launch.md) for scripted logging
+and explicitly isolated studies.
 
 ## Advisory artifacts
 
@@ -75,7 +85,8 @@ checkout can copy ignored agent contexts, histories, and task artifacts too.
 extract that package into a separate runtime directory and point the local
 marketplace entry there. Keep the working checkout and its private contexts out
 of the installation source. Refresh with the native plugin installer after a
-runtime update; retain older runtime caches while another session uses them.
+runtime update; retain older runtime source directories while another session
+uses them. Native cache retention is controlled by the host installer.
 
 ## Native input and local context
 
