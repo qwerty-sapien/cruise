@@ -18,3 +18,13 @@ are required to read a different agent, session, or older checkpoint. Never
 request subagent compaction; checkpoint and resume with a fresh native context.
 For the main conversation, retrieve narrowly and minimize compaction while
 preserving the user's requirements and unfinished work.
+
+## Clean reinstall after patches
+
+After every Cruise patch, remove the current Cruise installation and reinstall
+it from a verified runtime-only package. Use the native plugin remove/add flow,
+replace the CLI from the clean package, and verify source/runtime/cache identity.
+Preserve native credentials, configuration, other conversations and older caches
+needed by active work. Never install the working checkout or its private files.
+Reinstalling is not execution evidence: rerun the reported failure under its
+actual constraints and retain the result and teardown evidence.
